@@ -72,7 +72,7 @@ def init_addons():
         name = repository.split("/")[1]
         path = os.path.join(SOURCES, name)
         if not os.path.isdir(os.path.join(SOURCES, name )):
-            os.system(f"git clone --depth=1 -b '{ODOO_VERSION}' git@github.com:{repository}.git {path}")
+            os.system(f"git clone -b '{ODOO_VERSION}' git@github.com:{repository}.git {path}")
         else:
             print(f"{repository} exists")
 
