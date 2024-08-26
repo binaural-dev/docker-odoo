@@ -100,4 +100,4 @@ networks:
     name: odoo-${ODOO_VERSION}
     ipam:
       config:
-        - subnet: 172.20.16.0/24
+        - subnet: 172.20.${ODOO_MINOR}.0/24
