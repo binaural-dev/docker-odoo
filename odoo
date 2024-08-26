@@ -60,7 +60,7 @@ def build_odoo(no_cache):
 
 
 def init_addons():
-    required_sources = ["odoo/enterprise", "binaural-dev/integra-addons"]
+    required_sources = ["odoo/enterprise", "binaural-dev/integra-addons", "binaural-dev/third-party-addons"]
     print("Clonando Repositorios")
     ODOO_VERSION = os.getenv("ODOO_VERSION")
     SOURCES = os.path.join(Path(__file__).resolve().parent, "src")
@@ -89,6 +89,13 @@ def restart_odoo():
     os.system("docker compose down")
     os.system("docker compose up -d")
 
+def psql(d):
+    print(d)
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    POSTGRES_USER = os.getenv("POSTGRES_USER")
+    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+    os.system(
+        f'docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d {d}')
 
 def main():
     # Cargar las variables de entorno
@@ -108,6 +115,9 @@ def main():
     build_parser = subparsers.add_parser("build", help="Construye Odoo")
     build_parser.add_argument("--no-cache", action="store_true", help="Construir sin usar caché")
 
+    psql_parser = subparsers.add_parser("psql", help="psql")
+    psql_parser.add_argument("-d", required=True, help="Database name")
+
     # Parsear los argumentos
     args = parser.parse_args()
 
@@ -124,6 +134,8 @@ def main():
         run_bash()
     elif args.action == "init":
         init_addons()
+    elif args.action == "psql":
+        psql(args.d)
 
 
 if __name__ == "__main__":
