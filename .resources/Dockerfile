@@ -1,0 +1,117 @@
+FROM ubuntu:jammy
+ENV LANG C.UTF-8
+USER root
+
+# Enable Odoo user and filestore
+RUN useradd -md /home/odoo -s /bin/false odoo \
+    && mkdir -p /var/lib/odoo \
+    && chown -R odoo:odoo /var/lib/odoo \
+    && sync
+
+# Install debian packages
+RUN set -x ; \
+    apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends apt-transport-https build-essential ca-certificates curl ffmpeg file flake8 fonts-freefont-ttf fonts-noto-cjk gawk gnupg gsfonts libldap2-dev libjpeg9-dev libsasl2-dev libxslt1-dev lsb-release npm ocrmypdf sed sudo unzip xfonts-75dpi zip zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+#python
+RUN set -x ; \
+    apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends watchdog curl gnupg2 python3 python3-dbfread python3-dev python3-gevent python3-pip python3-setuptools python3-wheel python3-markdown python3-mock python3-phonenumbers python3-websocket python3-google-auth libpq-dev lsb-release \
+               python3-asn1crypto python3-jwt publicsuffix python3-xmlsec python3-aiosmtpd \
+    && rm -rf /var/lib/apt/lists/*
+
+#wkhtmlox
+RUN curl -sSL https://nightly.odoo.com/deb/jammy/wkhtmltox_0.12.5-2.jammy_amd64.deb -o /tmp/wkhtml.deb \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb \
+    && rm -rf /var/lib/apt/lists/* \
+    && rm /tmp/wkhtml.deb
+
+#PSQL
+ADD https://raw.githubusercontent.com/odoo/odoo/16.0/debian/control /tmp/control.txt
+RUN curl -sSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /etc/apt/trusted.gpg.d/psql_client.asc \
+    && echo "deb http://apt.postgresql.org/pub/repos/apt/ `lsb_release -s -c`-pgdg main" > /etc/apt/sources.list.d/pgclient.list \
+    && apt-get update \
+    && sed -n '/^Depends:/,/^[A-Z]/p' /tmp/control.txt \
+        | awk '/^ [a-z]/ { gsub(/,/,"") ; gsub(" ", "") ; print $NF }' | sort -u \
+        | DEBIAN_FRONTEND=noninteractive xargs apt-get install -y -qq --no-install-recommends \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install nodejs
+# RUN curl -s https://deb.nodesource.com/gpgkey/nodesource.gpg.key | gpg --dearmor | tee /usr/share/keyrings/nodesource.gpg >/dev/null \
+#      && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x `lsb_release -c -s` main" > /etc/apt/sources.list.d/nodesource.list \
+#      && apt-get update \
+#      && apt-get install -y nodejs
+RUN npm install -g rtlcss@3.4.0 es-check@6.0.0 eslint@8.1.0
+
+#FlameGraph
+ADD https://raw.githubusercontent.com/brendangregg/FlameGraph/master/flamegraph.pl /usr/local/bin/flamegraph.pl
+RUN chmod +rx /usr/local/bin/flamegraph.pl
+
+ARG ODOO_VERSION
+ARG ODOO_RELEASE
+RUN curl -o odoo.deb -sSL http://nightly.odoo.com/16.0/nightly/deb/odoo_16.0.latest_all.deb \    
+    && apt-get update \
+    && apt-get -y install --no-install-recommends ./odoo.deb \
+    && rm -rf /var/lib/apt/lists/* odoo.deb
+
+# Docker 16: Migrated layer
+ADD https://raw.githubusercontent.com/odoo/odoo/16.0/requirements.txt /root/requirements.txt
+RUN python3 -m pip install --no-cache-dir setuptools wheel && \
+    python3 -m pip install --no-cache-dir -r /root/requirements.txt && \
+    python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1
+
+RUN python3 -m pip install --no-cache-dir watchdog
+
+ENV SOURCES /home/odoo/src
+ENV RESOURCES /home/odoo/.resources
+ENV CONFIG_DIR /home/odoo/.config
+ENV DATA_DIR /home/odoo/data
+ENV ODOO_RC=$CONFIG_DIR/odoo.conf
+
+RUN mkdir -p $RESOURCES && \
+    mkdir -p $CONFIG_DIR && \
+    chown -R odoo.odoo /home/odoo && \
+    sync
+
+# Default values of env variables used by scripts
+ENV ODOO_SERVER=odoo \
+    UNACCENT=True \
+    PROXY_MODE=True \
+    WITHOUT_DEMO=True \
+    WAIT_PG=true \
+    PGUSER=odoo \
+    PGPASSWORD=odoo \
+    PGHOST=db \
+    PGPORT=5432 \
+    ADMIN_PASSWORD=admin
+
+# Usefull aliases
+RUN echo "alias odoo-shell='odoo shell --shell-interface ipython --no-http --limit-memory-hard=0 --limit-memory-soft=0'" >> /home/odoo/.bashrc
+
+# Image building scripts
+COPY .resources/bin/* /usr/local/bin/
+COPY .resources/conf.d $RESOURCES/conf.d
+COPY .resources/entrypoint.d $RESOURCES/entrypoint.d
+COPY .resources/entrypoint.sh $RESOURCES/entrypoint.sh
+RUN    ln /usr/local/bin/direxec $RESOURCES/entrypoint \
+    && ln /usr/local/bin/direxec $RESOURCES/build \
+    && chown -R odoo.odoo $RESOURCES \
+    && chmod -R a+rx $RESOURCES/entrypoint* $RESOURCES/build* /usr/local/bin \
+    && sync
+
+RUN chown -R odoo.odoo $RESOURCES
+# Run build scripts
+RUN $RESOURCES/build && sync
+
+# Expose Odoo services
+EXPOSE 8069 8071 8072
+
+# Entrypoint
+WORKDIR "/home/odoo"
+USER odoo
+ENTRYPOINT ["/home/odoo/.resources/entrypoint.sh"]
+CMD ["odoo"]
+

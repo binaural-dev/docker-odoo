@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Obtener la ruta absoluta del archivo que se está ejecutando
+
+
+def run_bash():
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    print(f"docker exec -uroot -it {PROJECT_NAME} bash")
+    os.system(f"docker exec -uroot -it {PROJECT_NAME} bash")
+
+
+def build_odoo(no_cache):
+    ODOO_VERSION = os.getenv("ODOO_VERSION")
+    RESOURCES_DIR = "/.resources"
+    file_path = str(Path(__file__).resolve().parent)
+
+    if not os.path.exists(file_path + "/.env"):
+        print("Error #1: The file .env does not exist")
+        return
+
+    if not ODOO_VERSION:
+        print("Error #2: ODOO_VERSION is not defined")
+        return
+
+    try:
+        with open(file_path + RESOURCES_DIR + "/Dockerfile", "w") as Dockerfile:
+            dockerfile_path = (
+                file_path + RESOURCES_DIR + "/dockerfiles/" + ODOO_VERSION + "_Dockerfile"
+            )
+            dockerfile_template_path = file_path + RESOURCES_DIR + "/Dockerfile.template"
+            print(dockerfile_template_path)
+
+            if not os.path.exists(dockerfile_path):
+                raise BaseException(f"Error #3: Dockerfile for {ODOO_VERSION} does not exist")
+
+            if not os.path.exists(dockerfile_template_path):
+                raise BaseException(f"Error #3: Dockerfile.template does not exist")
+
+            with open(dockerfile_path, "r") as dockerfile_version:
+                Dockerfile.write(dockerfile_version.read())
+                Dockerfile.write("\n")  # Opcional: agregar un salto de línea entre los archivos
+
+            with open(dockerfile_template_path, "r") as dockerfile_template:
+                Dockerfile.write(dockerfile_template.read())
+                Dockerfile.write("\n")  # Opcional: agregar un salto de línea entre los archivos
+
+    except FileNotFoundError as e:
+        print(e)
+    if no_cache:
+        print("Construyendo Odoo sin caché...")
+        os.system("docker compose build --no-cache")
+    else:
+        print("Construyendo Odoo con caché...")
+        os.system("docker compose build")
+
+
+def init_addons():
+    required_sources = ["odoo/enterprise", "binaural-dev/integra-addons"]
+    print("Clonando Repositorios")
+    ODOO_VERSION = os.getenv("ODOO_VERSION")
+    SOURCES = os.path.join(Path(__file__).resolve().parent, "src")
+    ENTERPRISE = os.path.join(SOURCES, "enterprise")
+    INTEGRA = os.path.join(SOURCES, "integra-addons")
+    # THIRD = os.path.join(SOURCES,"third-party")
+
+    for repository in required_sources:
+        name = repository.split("/")[1]
+        path = os.path.join(SOURCES, name)
+        if not os.path.isdir(os.path.join(SOURCES, name )):
+            os.system(f"git clone --depth=1 -b '{ODOO_VERSION}' git@github.com:{repository}.git {path}")
+        else:
+            print(f"{repository} exists")
+
+def run_odoo():
+    print("Ejecutando Odoo...")
+    os.system("docker compose up -d")
+
+def stop_odoo():
+    print("Deteniendo Odoo...")
+    os.system("docker compose down")
+
+def restart_odoo():
+    print("Reiniciando Odoo...")
+    os.system("docker compose down")
+    os.system("docker compose up -d")
+
+
+def main():
+    # Cargar las variables de entorno
+    load_dotenv()
+
+    # Crear el parser
+    parser = argparse.ArgumentParser(description="Script para controlar Odoo.")
+
+    subparsers = parser.add_subparsers(dest="action", help="Acciones")
+    subparsers.add_parser("run", help="Ejecuta Odoo")
+    subparsers.add_parser("stop", help="Detiene Odoo")
+    subparsers.add_parser("restart", help="Reiniciar Odoo")
+    subparsers.add_parser("bash", help="Bash")
+    subparsers.add_parser("init", help="Clone repositories")
+
+    # Subparser para el comando "build"
+    build_parser = subparsers.add_parser("build", help="Construye Odoo")
+    build_parser.add_argument("--no-cache", action="store_true", help="Construir sin usar caché")
+
+    # Parsear los argumentos
+    args = parser.parse_args()
+
+    # Ejecutar la acción correspondiente
+    if args.action == "run":
+        run_odoo()
+    elif args.action == "stop":
+        stop_odoo()
+    elif args.action == "restart":
+        restart_odoo()
+    elif args.action == "build":
+        build_odoo(args.no_cache)
+    elif args.action == "bash":
+        run_bash()
+    elif args.action == "init":
+        init_addons()
+
+
+if __name__ == "__main__":
+    main()

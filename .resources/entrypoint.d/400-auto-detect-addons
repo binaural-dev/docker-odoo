@@ -1,0 +1,47 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import logging
+
+_logger = logging.getLogger(__name__)
+
+
+SOURCES = str(os.environ.get("SOURCES"))
+CUSTOM = str(os.path.join(SOURCES, "custom"))
+RESOURCES = str(os.environ.get("RESOURCES"))
+
+addons = []
+
+# Handle enterprise: use enterprise in custom or in src
+ENTERPRISE_PATH = os.path.join(SOURCES, "enterprise")
+if os.path.isdir(ENTERPRISE_PATH):
+    addons.insert(0, os.path.join(ENTERPRISE_PATH))
+
+INTEGRA_PATH = os.path.join(SOURCES, "integra-addons")
+if os.path.isdir(INTEGRA_PATH):
+    addons.insert(0, os.path.join(INTEGRA_PATH))
+
+THIRD_PATH = os.path.join(SOURCES, "third-party")
+if os.path.isdir(THIRD_PATH):
+    addons.insert(0, os.path.join(THIRD_PATH))
+
+# Project repositories
+repo_addons = []
+
+# Custom repositories, usually mounted for development
+if os.path.isdir(CUSTOM):
+    repo_addons += [
+        os.path.join(CUSTOM, d)
+        for d in sorted(os.listdir(CUSTOM))
+        if os.path.isdir(os.path.join(CUSTOM, d))
+    ]
+    print(repo_addons)
+
+# Repo addons are preprended, in case we want to overwrite odoo modules
+addons = repo_addons + addons
+
+# Overwrite 10-addons.conf
+_logger.debug("Updating addons_path.. %s" % addons)
+with open(os.path.join(RESOURCES, "conf.d", "10-addons.conf"), "w+") as file:
+    file.write("[options]\naddons_path = %s" % ",".join(addons))
