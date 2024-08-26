@@ -2,3 +2,4 @@
 src/enterprise
 src/integra-addons
 src/third-party
+.resources/Dockerfile
