@@ -48,6 +48,7 @@ services:
     volumes:
       - odoo-web:/var/lib/odoo
       - ./src:/home/odoo/src
+      - odoo_data:/home/odoo/data
     command: odoo -u binaural_accountant --dev=all
     labels:
       - traefik.enable=true
@@ -93,6 +94,7 @@ services:
 volumes:
   odoo-web:
   odoo-db:
+  odoo_data:
 
 networks:
   binaural:

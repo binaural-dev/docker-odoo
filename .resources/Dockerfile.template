@@ -8,6 +8,7 @@ ENV ODOO_RC=$CONFIG_DIR/odoo.conf
 
 RUN mkdir -p $RESOURCES && \
     mkdir -p $CONFIG_DIR && \
+    mkdir -p $DATA_DIR && \
     chown -R odoo.odoo /home/odoo && \
     sync
 
