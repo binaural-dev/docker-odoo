@@ -19,6 +19,7 @@ Ya cuando hayas configurado la version dentro del archivo .env, puedes proceder 
 Como lo son:
  - [Odoo Enterprise](https://github.com/odoo/enterprise)
  - [Integra Addons](https://github.com/binaural-dev/integra-addons)
+ - [Third Party Addons](https://github.com/binaural-dev/third-party-addons)
 
  Si no tienes acceso a estos repositorios comunicate con el equipo.
 
@@ -39,6 +40,7 @@ Como lo son:
         /repository-n
     integra-addons/
     enterprise/
+    third-party-addons/
 ```
 
 ### Inicio, Reinicio y Stop del Ambiente
@@ -55,13 +57,4 @@ Estos comandos son acortadores a los comandos naturales de docker compose. como 
 #### Donde configuro el addons_path?
 
 Al incluir un repositorio nuevo a la carpeta custom, este lo detectara automaticamente.
-
-#### Si el repositorio tiene de submodulo /integra-addons, debo clonarlo? 
-
-No debes clonar el repositorio de nuevo, puedes realizar un enlace simbolico que enlace el integra-addons ubicado en la ruta src/
-
-```bash
-ln -s integra-addons-path/ repositorio-n-path
-```
-
 
