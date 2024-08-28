@@ -1,6 +1,6 @@
 services:
   traefik:
-      container_name: traefik
+      container_name: ${PROJECT_NAME}_traefik
       image: traefik:v1.7.33-alpine
       command:
           - --api
