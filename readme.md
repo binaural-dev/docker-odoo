@@ -54,14 +54,19 @@ Estos comandos son acortadores a los comandos naturales de docker compose. como 
 
 ### Acceso al Ambiente
 
-El ambiente se posiciona en la url odoo.localhost, porque esta contiene la opcion de dbfilter,
+El ambiente se posiciona en  
+```bash
+url odoo.localhost
+```
+porque esta contiene la opcion de dbfilter,
 lo que nos permite filtrar las bases de datos por su dominio, es decir:
-
 En caso de no querer filtrarlo, comentar en el .env "DB_FILTER"
 
+```bash
 Base de datos "db": db.odoo.localhost
 Base de datos "prueba": prueba.odoo.localhost
 Base de datos "17": 17.odoo.localhost
+```
 
 ### FAQ
 
