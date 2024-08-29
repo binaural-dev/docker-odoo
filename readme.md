@@ -13,6 +13,7 @@ En este archivo se encuentra lo necesario para configurar tu entorno de Trabajo 
 Ya cuando hayas configurado la version dentro del archivo .env, puedes proceder a este comando, nos permitira clonar los repositorios necesarios para el desarrollo.
 
 ```bash
+sudo apt-get install python3-dotenv 
 ./odoo init
 ```
     
