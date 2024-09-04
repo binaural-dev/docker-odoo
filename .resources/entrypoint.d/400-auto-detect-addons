@@ -3,6 +3,7 @@
 
 import os
 import logging
+import subprocess
 
 _logger = logging.getLogger(__name__)
 
@@ -36,7 +37,21 @@ if os.path.isdir(CUSTOM):
         for d in sorted(os.listdir(CUSTOM))
         if os.path.isdir(os.path.join(CUSTOM, d))
     ]
-    print(repo_addons)
+
+    for d in sorted(os.listdir(CUSTOM)):
+        module_path = os.path.join(CUSTOM, d)
+        requirement_file = os.path.join(module_path, "requirements.txt")
+        if os.path.exists(requirement_file):
+            subprocess.check_call(
+                [
+                    "pip",
+                    "install",
+                    "--user",
+                    "--no-cache-dir",
+                    "-r",
+                    requirement_file,
+                ]
+            )
 
 # Repo addons are preprended, in case we want to overwrite odoo modules
 addons = repo_addons + addons
