@@ -4,6 +4,14 @@
 
 Para Empezar a utilizar el espacio de Trabajo, debes realizar diversos comandos, los cuales te ire exiplcando cuando usar cada uno (Porque lo puedes seguir usando fuera de la instalacion)
 
+### Requerimientos
+
+Instalar dotenv
+
+```bash
+sudo apt-get install python3-dotenv 
+```
+
 ### Configurar el archivo .env
 
 En este archivo se encuentra lo necesario para configurar tu entorno de Trabajo con Odoo. 
