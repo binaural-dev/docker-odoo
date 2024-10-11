@@ -1,0 +1,75 @@
+services:
+  db:
+    image: postgres:${POSTGRES_IMG_VERSION}
+    container_name: ${PROJECT_NAME}_db
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - odoo-db:/var/lib/postgresql/data/pgdata
+    networks:
+      - binaural
+  odoo:
+    container_name: ${PROJECT_NAME}
+    build:
+        context: .
+        dockerfile: ./.resources/Dockerfile
+    depends_on:
+      - db
+    ports:
+      - "${PORT_SERVICE_HOST_ODOO}:${PORT_SERVICE_CONTAINER_ODOO}"
+    volumes:
+      - odoo-web:/var/lib/odoo
+      - ./src:/home/odoo/src
+      - odoo_data:/home/odoo/data
+    command: odoo -u binaural_accountant --dev=all
+    labels:
+      - traefik.enable=true
+      - traefik.frontend.port=8069
+      - traefik.frontend.rule=HostRegexp:$DOMAIN,{subdomain:[a-z0-9-_]+}.$DOMAIN
+      # - traefik.frontend.priority=10
+      # - traefik.longpolling.port=8072
+      # - traefik.longpolling.frontend.rule=HostRegexp:$DOMAIN,{subdomain:[a-z0-9-_]+}.$DOMAIN;PathPrefix:/longpolling/
+      - traefik.backend.loadbalancer.stickiness=true
+      - traefik.backend.loadbalancer.method=drr
+      # traefik.frontend.redirect.regex: $strTraefikRedirectRegex
+      # traefik.frontend.redirect.replacement: $strTraefikRedirectReplacement
+    environment:
+      CUSTOM_CONFIG: |-
+        [options]
+      CUSTOM_REQUIREMTNS: |-
+        # custom pip librearies
+      CUSTOM_ENTRYPOINT: |-
+        #!/bin/bash
+        # pip install --user --no-cache-dir -e /home/odoo/custom/odoo
+        # pip install --user --no-cache-dir pyopenssl
+      SMTP_SERVER: mailhog
+      SMTP_PORT: 1025
+      DBFILTER: ${DBFILTER}
+      SERVER_WIDE_MODULES: ${SERVER_WIDE_MODULES}
+      MAX_CRON_THREADS: ${MAX_CRON_THREADS}
+      WORKERS: ${WORKERS}
+      LIST_DB: ${LIST_DB}
+      WITHOUT_DEMO: ${WITHOUT_DEMO}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      PROXY_MODE: ${PROXY_MODE}
+      SERVER_MODE: ${SERVER_MODE}
+      AEROO_DOCS_HOST: ${AEROO_DOCS_HOST}
+      LIMIT_TIME_REAL_CRON: ${LIMIT_TIME_REAL_CRON}
+      LIMIT_TIME_REAL: ${LIMIT_TIME_REAL}
+      UNACCENT: ${UNACCENT}
+      LOG_LEVEL: info
+    networks:
+      binaural:
+
+volumes:
+  odoo-web:
+  odoo-db:
+  odoo_data:
+
+networks:
+  binaural:
+    external: false
+    name: odoo-${ODOO_VERSION}
