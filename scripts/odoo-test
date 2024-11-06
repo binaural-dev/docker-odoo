@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 @click.command()
 @click.argument("args", nargs=-1)
-def run_command(d,l, args):
+def run_command(args):
     load_dotenv()
     PROJECT_NAME = os.getenv("PROJECT_NAME","")
     database = "testing"
