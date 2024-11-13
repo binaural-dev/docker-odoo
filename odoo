@@ -60,7 +60,7 @@ def build_odoo(no_cache):
 
 
 def init_addons():
-    required_sources = ["binaural-dev/enterprise", "binaural-dev/integra-addons", "binaural-dev/third-party-addons"]
+    required_sources = ["miguel-binaural/enterprise"]
     print("Clonando Repositorios")
     ODOO_VERSION = os.getenv("ODOO_VERSION")
     SOURCES = os.path.join(Path(__file__).resolve().parent, "src")
