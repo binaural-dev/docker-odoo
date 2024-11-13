@@ -38,6 +38,8 @@ services:
         ipv4_address: 172.20.${ODOO_MINOR}.10
   odoo:
     container_name: ${PROJECT_NAME}
+    ports:
+      - ${PORT_SERVICE_HOST_ODOO}:${PORT_SERVICE_CONTAINER_ODOO}
     build:
         context: .
         dockerfile: ./.resources/Dockerfile
