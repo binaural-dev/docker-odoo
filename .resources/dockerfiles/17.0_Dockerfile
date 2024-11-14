@@ -38,7 +38,7 @@ RUN npm install --force -g rtlcss@3.4.0 es-check@6.0.0 eslint@8.1.0 prettier@2.7
 
 ADD https://raw.githubusercontent.com/odoo/odoo/17.0/debian/control /tmp/control.txt
 RUN curl -sSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /etc/apt/trusted.gpg.d/psql_client.asc \
-    && echo "deb http://apt.postgresql.org/pub/repos/apt/ `lsb_release -s -c`-pgdg main" > /etc/apt/sources.list.d/pgclient.list \
+    && echo "deb https://apt-archive.postgresql.org/pub/repos/apt stretch-pgdg main" > /etc/apt/sources.list.d/pgclient.list \
     && apt-get update \
     && sed -n '/^Depends:/,/^[A-Z]/p' /tmp/control.txt \
         | awk '/^ [a-z]/ { gsub(/,/,"") ; gsub(" ", "") ; print $NF }' | sort -u \
