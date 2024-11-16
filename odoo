@@ -2,10 +2,91 @@
 
 import argparse
 import os
+import subprocess
 from dotenv import load_dotenv
 from pathlib import Path
+import time
 
-# Obtener la ruta absoluta del archivo que se está ejecutando
+
+def sync(repo_name, branch, show=False):
+    path = str(Path(__file__).resolve().parent)
+    src_path = path + "/src/"
+    repo_path = src_path + "custom/" + repo_name
+    if not os.path.isdir(repo_path):
+        print("No se encuentra el repositorio solicitado!")
+        return
+    os.chdir(repo_path)
+
+    stdout = subprocess.DEVNULL
+    stderr = subprocess.STDOUT
+
+    if show:
+        stdout = None
+        stderr = None
+    print("\r %s: Guardando cambios actuales... " % (repo_name), end=" " * 50)
+    value = subprocess.run(["git", "status"], capture_output=True)
+    values_lines = value.stdout.decode().split("\n")
+    branch_now = values_lines[0].replace("On branch ", "")
+
+    submodules = ["integra-addons", "third-party-addons"]
+    print("\r %s: Cambiando a %s                           " % (repo_name, branch), end=" " * 50)
+    subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
+    subprocess.run(["git", "checkout", branch], stdout=stdout, stderr=stderr)
+    subprocess.run(["git", "pull"], stdout=stdout, stderr=stderr)
+    print("\r %s: Actualizando %s                          " % (repo_name, branch), end=" " * 50)
+    for submodule in submodules:
+        subprocess.run(["git", "reset", "HEAD", "--", submodule], stdout=stdout, stderr=stderr)
+        subprocess.run(
+            ["git", "-C", submodule, "stash", "--include-untracked"], stdout=stdout, stderr=stderr
+        )
+        subprocess.run(
+            ["git", "submodule", "update", "--init", "--force", "--", submodule],
+            stdout=stdout,
+            stderr=stderr,
+        )
+        print("\r %s: Obteniendo submodulos de %s                     " % (repo_name, branch), end=" " * 50)
+
+    print("")
+    for submodule in submodules:
+        if not show:
+            print("\r %s Sincronizando... " % (submodule), end="")
+        commit = ""
+        try:
+            with open(repo_path + "/.git/modules/" + submodule + "/HEAD", "r") as Modules:
+                line = Modules.readlines()[0]
+                if line.startswith("ref:"):
+                    commit = line.split("/")[2].replace("\n", "")
+                else:
+                    commit = line.replace("\n", "")
+
+            if not commit:
+                continue
+            submodule_path = src_path + submodule
+            os.chdir(submodule_path)
+            subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
+            subprocess.run(["git", "fetch"], stdout=stdout, stderr=stderr)
+            response = subprocess.run(["git", "checkout", commit], capture_output=True)
+            success = response.stderr.decode()
+
+            if commit[:8] not in success and commit[:7] not in success:
+                print(commit.encode())
+                print(success.encode())
+                print("ERROR")
+                raise Exception("Error")
+
+            if not show:
+                print("\r %s ( %s ) Sincronizado ✅" % (submodule, commit), end=" " * 30)
+        except Exception as a:
+            print(a)
+            if not show:
+                print("\r %s ( %s ) Sincronizado Fallido ❌" % (submodule, commit), end=" " * 30)
+
+        if not show:
+            print("")
+
+    os.chdir(repo_path)
+    subprocess.run(["git", "checkout", branch_now], stdout=stdout, stderr=stderr)
+    subprocess.run(["git", "stash", "pop"], stdout=stdout, stderr=stderr)
 
 
 def run_bash():
@@ -71,18 +152,21 @@ def init_addons():
     for repository in required_sources:
         name = repository.split("/")[1]
         path = os.path.join(SOURCES, name)
-        if not os.path.isdir(os.path.join(SOURCES, name )):
+        if not os.path.isdir(os.path.join(SOURCES, name)):
             os.system(f"git clone -b '{ODOO_VERSION}' git@github.com:{repository}.git {path}")
         else:
             print(f"{repository} exists")
+
 
 def run_odoo():
     print("Ejecutando Odoo...")
     os.system("docker compose up -d")
 
+
 def stop_odoo():
     print("Deteniendo Odoo...")
     os.system("docker compose down")
+
 
 def restart_odoo():
     print("Reiniciando Odoo...")
@@ -95,7 +179,9 @@ def psql(d):
     POSTGRES_USER = os.getenv("POSTGRES_USER")
     POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
     os.system(
-        f'docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d {d}')
+        f"docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d {d}"
+    )
+
 
 def main():
     # Cargar las variables de entorno
@@ -118,6 +204,11 @@ def main():
     psql_parser = subparsers.add_parser("psql", help="psql")
     psql_parser.add_argument("-d", required=True, help="Database name")
 
+    sync_parser = subparsers.add_parser("sync", help="Sync Submodules")
+    sync_parser.add_argument("-r", required=True, help="Repository Name")
+    sync_parser.add_argument("-b", required=True, help="Repository Name")
+    sync_parser.add_argument("--v", action="store_true", default=False, help="Git log")
+
     # Parsear los argumentos
     args = parser.parse_args()
 
@@ -136,6 +227,8 @@ def main():
         init_addons()
     elif args.action == "psql":
         psql(args.d)
+    elif args.action == "sync":
+        sync(args.r, args.b, show=args.v)
 
 
 if __name__ == "__main__":

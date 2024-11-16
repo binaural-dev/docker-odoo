@@ -49,7 +49,9 @@ services:
       - odoo-web:/var/lib/odoo
       - ./src:/home/odoo/src
       - odoo_data:/home/odoo/data
-    command: odoo -u binaural_accountant --dev=all
+      - py3:/usr/local/lib/
+      - py:/usr/lib/
+    command: odoo --dev=all
     labels:
       - traefik.enable=true
       - traefik.frontend.port=8069
@@ -95,6 +97,8 @@ volumes:
   odoo-web:
   odoo-db:
   odoo_data:
+  py3:
+  py:
 
 networks:
   binaural:
