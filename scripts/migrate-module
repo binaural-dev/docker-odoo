@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+
+import os
+import click
+from dotenv import load_dotenv
+
+
+@click.command()
+@click.option("-d", required=True, help="Database name")
+@click.option("-i", required=True, help="Module to migrate")
+@click.option("-c", required=True, help="Container name")
+def run_command(d, i, c):
+    load_dotenv()
+    os.system(f"docker exec -uroot -it {c} odoo -i {i} -d {d} --load=base,web,views_migration_17 --stop-after-init --without-demo=1")
+
+if __name__ == "__main__":
+    run_command()
