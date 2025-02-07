@@ -1,21 +1,21 @@
 services:
   traefik:
-      container_name: ${PROJECT_NAME}_traefik
-      image: traefik:v1.7.33-alpine
-      command:
-          - --api
-          - --docker
-          - --docker.domain=localhost
-          - --docker.exposedbydefault=false
-      labels:
-          - traefik.enable=true
-          - traefik.port=8080
-          - traefik.frontend.rule=Host:traefik.localhost
-      volumes:
-          - /var/run/docker.sock:/var/run/docker.sock:ro
-      restart: unless-stopped
-      # para que funcione la solución *.localhost
-      network_mode: "host"
+    container_name: ${PROJECT_NAME}_traefik
+    image: traefik:v1.7.33-alpine
+    command:
+      - --api
+      - --docker
+      - --docker.domain=localhost
+      - --docker.exposedbydefault=false
+    labels:
+      - traefik.enable=true
+      - traefik.port=8080
+      - traefik.frontend.rule=Host:traefik.localhost
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+    # para que funcione la solución *.localhost
+    network_mode: "host"
   db:
     image: postgres:${POSTGRES_IMG_VERSION}
     container_name: ${PROJECT_NAME}_db
@@ -26,6 +26,19 @@ services:
       - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
       - odoo-db:/var/lib/postgresql/data/pgdata
+    networks:
+      - binaural
+  pgadmin:
+    container_name: ${PROJECT_NAME}_pgadmin_container
+    image: dpage/pgadmin4
+    ports:
+      - "${PG_ADMIN_HOST_PORT}:${PG_ADMIN_SERVICE_CONTAINER_PORT}"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: binaural.ca@gmail.com
+      PGADMIN_DEFAULT_PASSWORD: odoo
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    volumes:
+      - odoo-pgadmin:/root/.pgadmin
     networks:
       - binaural
   dns:
@@ -39,8 +52,8 @@ services:
   odoo:
     container_name: ${PROJECT_NAME}
     build:
-        context: .
-        dockerfile: ./.resources/Dockerfile
+      context: .
+      dockerfile: ./.resources/Dockerfile
     depends_on:
       - db
       - dns
@@ -99,6 +112,7 @@ volumes:
   odoo_data:
   py3:
   py:
+  odoo-pgadmin:
 
 networks:
   binaural:
