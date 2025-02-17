@@ -1,5 +1,8 @@
 # Binaural Workspace
 
+Este repo te permitira ejecutar en ambientes de desarrollo todos los proyectos que necesites echar a andar en Odoo. Aca podrás levantar ambientes de prueba con linux y mac (no estoy claro si se ha probado en Wintendo,
+quiza funcione)
+
 ## Instalación
 
 Para Empezar a utilizar el espacio de Trabajo, debes realizar diversos comandos, los cuales te ire exiplcando cuando usar cada uno (Porque lo puedes seguir usando fuera de la instalacion)
@@ -18,22 +21,22 @@ En este archivo se encuentra lo necesario para configurar tu entorno de Trabajo 
 
 ### Clonar los Repositorios Necesarios
 
-Ya cuando hayas configurado la version dentro del archivo .env, puedes proceder a este comando, nos permitira clonar los repositorios necesarios para el desarrollo.
+Cuando hayas configurado la version dentro del archivo .env, puedes ejecutar el siguiente comando, el cual permitira clonar los repositorios necesarios para el desarrollo.
 
 ```bash
 ./odoo init
 ```
     
-Como lo son:
- - [Odoo Enterprise](https://github.com/odoo/enterprise)
- - [Integra Addons](https://github.com/binaural-dev/integra-addons)
- - [Third Party Addons](https://github.com/binaural-dev/third-party-addons)
+Los repo en cuestion son:
+ - [Odoo Enterprise](https://github.com/odoo/enterprise) (necesitas ser partner odoo para tener acceso a este repo)
+ - [Integra Addons](https://github.com/binaural-dev/integra-addons) (aplica solo para los devs de binaural)
+ - [Third Party Addons](https://github.com/binaural-dev/third-party-addons) (aplica solo para los devs de binaural)
 
- Si no tienes acceso a estos repositorios comunicate con el equipo.
+ Si no tienes acceso a estos repositorios comunicate con nuestro devops.
 
  ### Buildear el Dockerfile
 
- Inicialmente no existe el Dockerflie, ya que se require que se llene Informacion dentro del .env asi como la version, este comando nos generara el Dockerfile ideal para utilizarlo en nuestro entorno de trabajo.
+ Inicialmente no existe el archivo Dockerflie, ya que se require que se llene Informacion dentro del .env asi como la version, este comando generará el Dockerfile ideal para utilizarlo en nuestro entorno de trabajo.
 
  ```bash
 ./odoo build
@@ -43,9 +46,9 @@ Como lo son:
 ```bash
 - src /
     custom/
-        /repository-1
-        /repository-2
-        /repository-n
+        /repository-1 (un proyecto)
+        /repository-2 (otro proyecto)
+        /repository-n (otro proyecto mas)
     integra-addons/
     enterprise/
     third-party-addons/
@@ -81,4 +84,10 @@ Base de datos "17": 17.odoo.localhost
 #### Donde configuro el addons_path?
 
 Al incluir un repositorio nuevo a la carpeta custom, este lo detectara automaticamente.
+
+#### Que es todo esto que hablan aca?
+
+Para poder entender el funcionamiento te recomendamos que te des una pasada por shell de linux, docker, traefik y obviamente odoo.
+
+Cualquier duda puedes preguntar al equipo, en caso que no seas del equipo de devs de binaural puedes usar los issues (cumpliendo con el codigo de conducta establecido)
 
