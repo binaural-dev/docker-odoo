@@ -209,8 +209,8 @@ def main():
     psql_parser.add_argument("-d", required=True, help="Database name")
 
     sync_parser = subparsers.add_parser("sync", help="Sync Submodules")
-    sync_parser.add_argument("-r", required=True, help="Repository Name")
-    sync_parser.add_argument("-b", required=True, help="Repository Name")
+    sync_parser.add_argument("r", help="Repository")
+    sync_parser.add_argument("b", help="Branch")
     sync_parser.add_argument("--v", action="store_true", default=False, help="Git log")
 
     # Parsear los argumentos

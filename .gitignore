@@ -4,3 +4,4 @@ src/integra-addons
 src/third-party-addons
 src/custom/*
 .resources/Dockerfile
+**/.vscode/
