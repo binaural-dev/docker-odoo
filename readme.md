@@ -1,42 +1,66 @@
 # Binaural Workspace
 
-Este repo te permitira ejecutar en ambientes de desarrollo todos los proyectos que necesites echar a andar en Odoo. Aca podrás levantar ambientes de prueba con linux y mac (no estoy claro si se ha probado en Wintendo,
-quiza funcione)
+Binaural Workspace es un entorno de desarrollo diseñado para facilitar la ejecución y configuración de proyectos en Odoo. Con este repositorio, podrás levantar ambientes de desarrollo en Linux y macOS (AMD y ARM).
+
+En cuanto a Windows, no se ha probado oficialmente, pero puede ser compatible utilizando WSL2 con Docker. Se recomienda verificar su funcionamiento en tu entorno antes de usarlo en producción.
 
 ## Instalación
 
-Para Empezar a utilizar el espacio de Trabajo, debes realizar diversos comandos, los cuales te ire exiplcando cuando usar cada uno (Porque lo puedes seguir usando fuera de la instalacion)
+Para comenzar a utilizar el espacio de trabajo, sigue los pasos a continuación.
+
+
+### Clonar el repositorio:
+
+```bash
+git clone git@github.com:binaural-dev/docker-odoo.git
+```
+
+Accede al directorio:
+```bash
+cd docker-odoo
+```
 
 ### Requerimientos
 
-Instalar dotenv
+Instalar dotenv:
 
 ```bash
-sudo apt-get install python3-dotenv 
+sudo apt-get install python3-dotenv
 ```
+
+Esto es necesario para trabajar con el archivo de configuración .env, que almacenará todas las variables del entorno necesarias.
 
 ### Configurar el archivo .env
 
-En este archivo se encuentra lo necesario para configurar tu entorno de Trabajo con Odoo. 
+El archivo .env contiene las configuraciones para tu espacio de trabajo en Odoo. Deberás configurarlo antes de continuar. Puedes encontrar un archivo de ejemplo en el repositorio, el cual deberás modificar de acuerdo a tu entorno.
 
-### Clonar los Repositorios Necesarios
+Para trabajar con la configuración por defecto, puedes ejecutar el siguiente comando para crear el .env
 
-Cuando hayas configurado la version dentro del archivo .env, puedes ejecutar el siguiente comando, el cual permitira clonar los repositorios necesarios para el desarrollo.
+```bash
+cp .env_example .env
+```
 
+> El .env_example está creado para levantar la versión 16.0 de Odoo. En caso de requerir una versión diferente, puedes cambiar el archivo .env actualizandos las referencias de 16.0 a 17.0.
+
+### Clonar los Repositorios Necesarios (solo para miembros de Binaural)
+
+Binaural trabaja con módulos alojados en distintos repositorios privados. En caso de que no formes parte de la organización, aún podrás levantar el ambiente sin problemas.
+
+Clonar repositorios:
 ```bash
 ./odoo init
 ```
-    
+
 Los repo en cuestion son:
- - [Odoo Enterprise](https://github.com/odoo/enterprise) (necesitas ser partner odoo para tener acceso a este repo)
+ - [Odoo Enterprise](https://github.com/odoo/enterprise) (necesitas ser partner odoo para tener acceso a este repositorio)
  - [Integra Addons](https://github.com/binaural-dev/integra-addons) (aplica solo para los devs de binaural)
  - [Third Party Addons](https://github.com/binaural-dev/third-party-addons) (aplica solo para los devs de binaural)
 
- Si no tienes acceso a estos repositorios comunicate con nuestro devops.
+ Si no tienes acceso a estos repositorios comunicate con nuestro equipo de DevOps.
 
- ### Buildear el Dockerfile
+### Construcción del Dockerfile
 
- Inicialmente no existe el archivo Dockerflie, ya que se require que se llene Informacion dentro del .env asi como la version, este comando generará el Dockerfile ideal para utilizarlo en nuestro entorno de trabajo.
+El archivo de Dockerfile se construye a partir de las configuraciones de tu archivo .env (por ello es importante especificar la versión de Odoo a utilizar en dicho archivo).
 
  ```bash
 ./odoo build
@@ -45,18 +69,39 @@ Los repo en cuestion son:
 
 ```bash
 - src /
-    custom/
-        /repository-1 (un proyecto)
-        /repository-2 (otro proyecto)
-        /repository-n (otro proyecto mas)
+    custom/ (submodules de git)
+        /repository-1 (repositorio/proyecto)
+        /repository-2 (otro repositorio/proyecto)
+        /repository-n (otro repositorio/proyecto más)
     integra-addons/
-    enterprise/
-    third-party-addons/
+        /module-01
+        /module-02
+    enterprise/ (módulos enterprise de Odoo)
+        /module-01
+        /module-02
+    third-party-addons/ (módulos de terceros)
+        /module-01
+        /module-02
 ```
 
-### Inicio, Reinicio y Stop del Ambiente
+En este entorno, los módulos de Odoo se organizan mediante submódulos de Git, lo que proporciona mayor flexibilidad y facilita la gestión del código.
 
-Estos comandos son acortadores a los comandos naturales de docker compose. como up y down.
+La estructura ha sido diseñada para el flujo de trabajo de Binaural; sin embargo, el entorno funcionará sin problemas incluso si algunos módulos no están disponibles.
+
+> Para más información sobre los módulos de binaural, puedes visitar [Odoo Venezuela](https://github.com/binaural-dev/odoo-venezuela)
+
+> En caso de que no formes parte de la organización, no contarás con los repositorios de integra-addons, enterprise y third-party-addons. En ese caso, puedes desarrollar tus propios módulos en el directorio `custom`.
+
+Si tienes deseas agregar o desarrollar algún módulo para tu ambiente, puedes hacerlo de dos formas:
+
+- Agregar el módulo en third-party-addons
+- Agregar un repositorio en custom
+
+Para agregar un repositorio en custom, ubícate en docker-odoo/src/custom/ y ejecuta `git clone repositorio-que-contiene-tus-módulos.git`
+
+### Inicio, Reinicio y Detención del Ambiente
+
+Estos comandos son acortadores a los comandos naturales de `docker-compose`, tales como `up` y `down`.
 ```bash
 ./odoo run
 ./odoo restart
@@ -65,29 +110,35 @@ Estos comandos son acortadores a los comandos naturales de docker compose. como 
 
 ### Acceso al Ambiente
 
-El ambiente se posiciona en  
-```bash
-url odoo.localhost
-```
-porque esta contiene la opcion de dbfilter,
-lo que nos permite filtrar las bases de datos por su dominio, es decir:
-En caso de no querer filtrarlo, comentar en el .env "DB_FILTER"
+El acceso a Odoo dependerá de la configuración establecida en el archivo .env.
 
+- Opción 1: Acceso con Filtro de Base de Datos.
+
+Si la variable DB_FILTER está activa en el .env, cada base de datos tendrá su propio subdominio (filtrado por el nombre de la base de datos). Esto permite acceder a distintas bases sin necesidad de seleccionarlas manualmente al ingresar al ambiente.
+
+Ejemplo de acceso con DB_FILTER activo:
 ```bash
-Base de datos "db": db.odoo.localhost
-Base de datos "prueba": prueba.odoo.localhost
-Base de datos "17": 17.odoo.localhost
+Base de datos "db"     →  db.odoo.localhost
+Base de datos "prueba" →  prueba.odoo.localhost
+Base de datos "17"     →  17.odoo.localhost
+```
+
+- Opción 2: Acceso General sin Filtro
+
+Si no deseas utilizar el filtrado por dominio, simplemente comenta o elimina la variable DB_FILTER en el .env.
+
+Ejemplo de acceso con DB_FILTER desactivado:
+```bash
+http://localhost:<PUERTO>
 ```
 
 ### FAQ
 
-#### Donde configuro el addons_path?
+#### ¿Cómo configurar addons_path?
 
-Al incluir un repositorio nuevo a la carpeta custom, este lo detectara automaticamente.
+Cada vez que añades un nuevo repositorio a la carpeta custom, este será automáticamente detectado por el entorno.
 
-#### Que es todo esto que hablan aca?
+#### ¿Qué es todo esto?
+Para entender completamente el funcionamiento del entorno, te recomendamos familiarizarte con los comandos de la terminal de Linux, Docker, Traefik y, por supuesto, Odoo.
 
-Para poder entender el funcionamiento te recomendamos que te des una pasada por shell de linux, docker, traefik y obviamente odoo.
-
-Cualquier duda puedes preguntar al equipo, en caso que no seas del equipo de devs de binaural puedes usar los issues (cumpliendo con el codigo de conducta establecido)
-
+Si tienes alguna pregunta, no dudes en contactar con el equipo. Si no eres parte del equipo de desarrollo de Binaural, por favor utiliza los Issues en GitHub (siguiendo el código de conducta establecido).
