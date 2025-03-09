@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 def run_command(d, args):
     load_dotenv()
     PROJECT_NAME = os.getenv("PROJECT_NAME")
-    os.system(f"docker exec -it {PROJECT_NAME} odoo -d {d} -u {' '.join(args)}")
+    os.system(f"docker exec -it {PROJECT_NAME} odoo -d {d} -u {' '.join(args)} --stop-after-init")
 
 if __name__ == "__main__":
     run_command()
