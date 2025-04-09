@@ -63,7 +63,7 @@ RUN curl -o odoo.deb -sSL http://nightly.odoo.com/17.0/nightly/deb/odoo_17.0.lat
 RUN ARCH=$(dpkg --print-architecture) && \
     if [ "$ARCH" = "amd64" ]; then \
         echo "Installing Google Chrome for AMD64"; \
-        curl -sSL https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_123.0.6312.58-1_amd64.deb -o /tmp/chrome.deb; \
+        curl -sSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb; \
         apt-get update && \
         apt-get -y install --no-install-recommends /tmp/chrome.deb; \
     elif [ "$ARCH" = "arm64" ]; then \
