@@ -59,6 +59,23 @@ RUN curl -o odoo.deb -sSL http://nightly.odoo.com/18.0/nightly/deb/odoo_18.0.lat
     && apt-get -y install --no-install-recommends ./odoo.deb \
     && rm -rf /var/lib/apt/lists/* odoo.deb
 
+# Install chrome with values {"chrome_version": "123.0.6312.58-1"}
+RUN ARCH=$(dpkg --print-architecture) && \
+    if [ "$ARCH" = "amd64" ]; then \
+        echo "Installing Google Chrome for AMD64"; \
+        curl -sSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb; \
+        apt-get update && \
+        apt-get -y install --no-install-recommends /tmp/chrome.deb; \
+    elif [ "$ARCH" = "arm64" ]; then \
+        echo "Installing Chromium for ARM64"; \
+        apt-get update && \
+        apt-get -y install --no-install-recommends chromium-browser; \
+    else \
+        echo "Unsupported architecture: $ARCH"; \
+        exit 1; \
+    fi && \
+    rm -rf /var/lib/apt/lists/* /tmp/chrome.deb
+
 # Install pip packages
 RUN python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==0.4.7 pandas
 
