@@ -5,7 +5,6 @@ import os
 import subprocess
 from dotenv import load_dotenv
 from pathlib import Path
-import time
 
 
 def sync(repo_name, branch, show=False):
@@ -120,7 +119,7 @@ def build_odoo(no_cache):
                 raise BaseException(f"Error #3: Dockerfile for {ODOO_VERSION} does not exist")
 
             if not os.path.exists(dockerfile_template_path):
-                raise BaseException(f"Error #3: Dockerfile.template does not exist")
+                raise BaseException("Error #3: Dockerfile.template does not exist")
 
             with open(dockerfile_path, "r") as dockerfile_version:
                 Dockerfile.write(dockerfile_version.read())
@@ -149,9 +148,6 @@ def init_addons():
     print("Clonando Repositorios")
     ODOO_VERSION = os.getenv("ODOO_VERSION")
     SOURCES = os.path.join(Path(__file__).resolve().parent, "src")
-    ENTERPRISE = os.path.join(SOURCES, "enterprise")
-    INTEGRA = os.path.join(SOURCES, "integra-addons")
-    # THIRD = os.path.join(SOURCES,"third-party")
 
     for repository in required_sources:
         name = repository.split("/")[1]
