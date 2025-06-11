@@ -9,13 +9,18 @@ from dotenv import load_dotenv
 @click.argument("args", nargs=-1)
 def run_command(args):
     load_dotenv()
-    PROJECT_NAME = os.getenv("PROJECT_NAME","")
+    PROJECT_NAME = os.getenv("PROJECT_NAME", "")
     database = "testing"
     container = "docker exec -uodoo -it " + PROJECT_NAME
     test_tags = "/binaural_accountant"
 
-    modules = ["l10n_ve","binaural_rate","account","binaural_accountant"] 
-    os.system(f"{container} odoo --test-tags {test_tags} -d {database} -i {','.join(modules)} --without-demo=True --stop-after-init -c /home/odoo/.config/odoo.conf")
+    modules = ["l10n_ve", "binaural_rate", "account", "binaural_accountant"]
+    modules_str = ','.join(modules)
+    command = (
+        f"{container} odoo --test-tags {test_tags} -d {database} -i {modules_str} "
+        "--without-demo=True --stop-after-init -c /home/odoo/.config/odoo.conf"
+    )
+    os.system(command)
 
 
 if __name__ == "__main__":
