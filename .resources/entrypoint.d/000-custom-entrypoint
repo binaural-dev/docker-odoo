@@ -1,0 +1,12 @@
+#!/bin/bash
+set -e
+
+if [ -n "$CUSTOM_ENTRYPOINT" ]; then
+    echo "Running custom entrypoint script..." >&2
+    tmp_file="$RESOURCES/xxx-custom-entrypoint.sh"
+    printf '%s\n' "$CUSTOM_ENTRYPOINT" > "$tmp_file"
+    chmod +x "$tmp_file"
+    "$tmp_file"
+    rm "$tmp_file"
+fi
+
