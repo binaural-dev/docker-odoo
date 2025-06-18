@@ -1,6 +1,7 @@
 FROM ubuntu:jammy
 ENV LANG C.UTF-8
 USER root
+ARG USERNAME=odoo
 
 # Enable Odoo user and filestore
 RUN useradd -md /home/odoo -s /bin/false odoo \

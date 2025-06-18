@@ -85,7 +85,7 @@ services:
     environment:
       CUSTOM_CONFIG: |-
         [options]
-      CUSTOM_REQUIREMTNS: |-
+      CUSTOM_REQUIREMENTS: |-
         # custom pip librearies
       CUSTOM_ENTRYPOINT: |-
         #!/bin/bash
