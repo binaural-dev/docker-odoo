@@ -132,6 +132,12 @@ Ejemplo de acceso con DB_FILTER desactivado:
 http://localhost:<PUERTO>
 ```
 
+### Scripts útiles
+
+En la carpeta [`scripts`](scripts/) encontrarás herramientas para realizar
+distintas tareas de administración. Revisa la
+[documentación de scripts](scripts/README.md) para conocer cada comando.
+
 ### FAQ
 
 #### ¿Cómo configurar addons_path?
