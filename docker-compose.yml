@@ -70,6 +70,7 @@ services:
       - odoo_data:/home/odoo/data
       - py3:/usr/local/lib/
       - py:/usr/lib/
+      - ./src/custom:/home/docker-odoo/src/custom:rw
     command: odoo --dev=all
     labels:
       - traefik.enable=true
