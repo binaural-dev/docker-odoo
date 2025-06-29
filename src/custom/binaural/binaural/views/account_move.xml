@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+
+        <record id="account_move_form_inherit" model="ir.ui.view">
+            <field name="name">account.move.form.inherit.binaural</field>
+            <field name="model">account.move</field>
+            <field name="inherit_id" ref="account.view_move_form"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='ref']/.." position="after">
+                    <group>
+                        <field name="tax_classification" string="Tax Classification"/>
+                    </group>
+                </xpath>
+            </field>
+        </record>
+
+        <record id="account_move_inherit_tree_inherit" model="ir.ui.view">
+            <field name="name">account.move.tree.inherit.binaural</field>
+            <field name="model">account.move</field>
+            <field name="inherit_id" ref="account.view_invoice_tree"/>
+            <field name="arch" type="xml">
+                <xpath expr="//tree//field[last()]" position="after">
+                    <field name="tax_classification" string="Tax Classification"/>
+                </xpath>
+            </field>
+        </record>
+
+        <record id="view_account_move_search_inherit" model="ir.ui.view">
+            <field name="name">account.move.search.inherit</field>
+            <field name="model">account.move</field>
+            <field name="inherit_id" ref="account.view_account_invoice_filter"/>
+            <field name="arch" type="xml">
+                <search>
+                    <filter name="tax_classification" string="Tax Classification">
+                        <field name="tax_classification" widget="selection"/>
+                    </filter>
+                    <group expand="1" string="Group By">
+                        <filter string="Tax Classification" name="group_by_tax_classification"
+                                domain="[]" context="{'group_by':'tax_classification'}"/>
+                    </group>
+                </search>
+            </field>
+        </record>
+
+        <!--<record id="account_move_inherit_act_window" model="ir.actions.act_window">
+            <field name="name">ModelTitle</field>
+            <field name="type">ir.actions.act_window</field>
+            <field name="res_model">ProjectName.account_move_inherit</field>
+            <field name="view_type">form</field>
+            <field name="view_mode">tree,form</field>
+            <field name="help" type="html">
+                <p class="oe_view_nocontent_create">
+                    There is no examples click here to add new ModelTitle.
+                </p>
+            </field>
+        </record>
+
+        <menuitem name="ModelTitle" id="account_move_inherit_menu" parent="your_root_menu" action="account_move_inherit_act_window"/>-->
+
+    </data>
+</odoo>

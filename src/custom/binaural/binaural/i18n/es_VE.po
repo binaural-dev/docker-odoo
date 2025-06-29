@@ -1,0 +1,36 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* binaural
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 17.0-20250624\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-06-29 11:20+0000\n"
+"PO-Revision-Date: 2025-06-29 11:20+0000\n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: \n"
+"Plural-Forms: \n"
+
+#. module: binaural
+#: model_terms:ir.ui.view,arch_db:binaural.view_account_move_search_inherit
+msgid "Group By"
+msgstr "Agrupar por"
+
+#. module: binaural
+#: model:ir.model,name:binaural.model_account_move
+msgid "Journal Entry"
+msgstr "Asiento contable"
+
+#. module: binaural
+#: model:ir.model.fields,field_description:binaural.field_account_bank_statement_line__tax_classification
+#: model:ir.model.fields,field_description:binaural.field_account_move__tax_classification
+#: model:ir.model.fields,field_description:binaural.field_account_payment__tax_classification
+#: model_terms:ir.ui.view,arch_db:binaural.account_move_form_inherit
+#: model_terms:ir.ui.view,arch_db:binaural.account_move_inherit_tree_inherit
+#: model_terms:ir.ui.view,arch_db:binaural.view_account_move_search_inherit
+msgid "Tax Classification"
+msgstr "Clasificación Fiscal"
