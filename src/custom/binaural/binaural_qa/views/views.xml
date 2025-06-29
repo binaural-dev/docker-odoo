@@ -1,0 +1,60 @@
+<odoo>
+  <data>
+    <!-- explicit list view definition -->
+<!--
+    <record model="ir.ui.view" id="binaural_qa.list">
+      <field name="name">binaural_qa list</field>
+      <field name="model">binaural_qa.binaural_qa</field>
+      <field name="arch" type="xml">
+        <tree>
+          <field name="name"/>
+          <field name="value"/>
+          <field name="value2"/>
+        </tree>
+      </field>
+    </record>
+-->
+
+    <!-- actions opening views on models -->
+<!--
+    <record model="ir.actions.act_window" id="binaural_qa.action_window">
+      <field name="name">binaural_qa window</field>
+      <field name="res_model">binaural_qa.binaural_qa</field>
+      <field name="view_mode">tree,form</field>
+    </record>
+-->
+
+    <!-- server action to the one above -->
+<!--
+    <record model="ir.actions.server" id="binaural_qa.action_server">
+      <field name="name">binaural_qa server</field>
+      <field name="model_id" ref="model_binaural_qa_binaural_qa"/>
+      <field name="state">code</field>
+      <field name="code">
+        action = {
+          "type": "ir.actions.act_window",
+          "view_mode": "tree,form",
+          "res_model": model._name,
+        }
+      </field>
+    </record>
+-->
+
+    <!-- Top menu item -->
+<!--
+    <menuitem name="binaural_qa" id="binaural_qa.menu_root"/>
+-->
+    <!-- menu categories -->
+<!--
+    <menuitem name="Menu 1" id="binaural_qa.menu_1" parent="binaural_qa.menu_root"/>
+    <menuitem name="Menu 2" id="binaural_qa.menu_2" parent="binaural_qa.menu_root"/>
+-->
+    <!-- actions -->
+<!--
+    <menuitem name="List" id="binaural_qa.menu_1_list" parent="binaural_qa.menu_1"
+              action="binaural_qa.action_window"/>
+    <menuitem name="Server to list" id="binaural_qa" parent="binaural_qa.menu_2"
+              action="binaural_qa.action_server"/>
+-->
+  </data>
+</odoo>

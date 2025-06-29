@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="quality_check_wizard_form_view" model="ir.ui.view">
+        <field name="name">quality.check.wizard.form</field>
+        <field name="model">quality.check.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Check Validation">
+                <sheet>
+                    <group>
+                        <field name="picking_id" string="Transfer to validate"/>
+                        <field name="status" widget="radio"/>
+                        <field name="reason"
+                               required="status == 'rejected'"
+                               invisible="status != 'rejected'"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button string="Process" name="process_quality_check" type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

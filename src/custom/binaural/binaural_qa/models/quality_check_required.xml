@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_company_form_inherit_quality_check" model="ir.ui.view">
+        <field name="name">res.company.form.inherit.quality.check</field>
+        <field name="model">res.company</field>
+        <field name="inherit_id" ref="base.view_company_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='currency_id']" position="after">
+                <group string="Control de Calidad de Inventario">
+                    <field name="quality_check_required"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+</odoo>
