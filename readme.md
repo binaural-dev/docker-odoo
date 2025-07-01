@@ -148,3 +148,17 @@ Cada vez que añades un nuevo repositorio a la carpeta custom, este será autom�
 Para entender completamente el funcionamiento del entorno, te recomendamos familiarizarte con los comandos de la terminal de Linux, Docker, Traefik y, por supuesto, Odoo.
 
 Si tienes alguna pregunta, no dudes en contactar con el equipo. Si no eres parte del equipo de desarrollo de Binaural, por favor utiliza los Issues en GitHub (siguiendo el código de conducta establecido).
+
+### Ejecución de pruebas
+
+Una vez construido el entorno con `./odoo build` y en ejecución con `./odoo run`, las pruebas automáticas pueden ejecutarse en una base de datos temporal (por ejemplo `testing`). El nombre del contenedor está definido por la variable `PROJECT_NAME` en el `.env`.
+
+```bash
+docker exec -u odoo -it ${PROJECT_NAME} odoo -d testing -i <tu_modulo> --test-enable --without-demo=true --stop-after-init -c /home/odoo/.config/odoo.conf
+```
+
+Reemplaza `<tu_modulo>` con el módulo que hayas desarrollado para la prueba.
+
+### Ejercicios propuestos
+
+En el directorio `issues/` se incluyen ejemplos de funcionalidades de prueba para candidatos. Cada archivo describe la meta, los criterios de aceptación y las pruebas requeridas. Selecciona uno de ellos y desarrolla la solución siguiendo las pautas indicadas.
