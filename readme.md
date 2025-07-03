@@ -78,7 +78,7 @@ La sección marcada como "PARÁMETROS QUE NO SE SUELEN CAMBIAR" agrupa opciones 
 - `ODOO_UPGRADE_PATH` señala la ruta local del repositorio `odoo-upgrade` para desarrollo.
 - `SERVER_WIDE_MODULES` permite cargar módulos globales en todas las bases.
 
-### Clonar los Repositorios Necesarios (solo para miembros de Binaural)
+### Clonar los Repositorios Necesarios
 
 Binaural trabaja con módulos alojados en distintos repositorios privados. En caso de que no formes parte de la organización, aún podrás levantar el ambiente sin problemas.
 
