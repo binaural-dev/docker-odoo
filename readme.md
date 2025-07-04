@@ -42,7 +42,43 @@ cp .env_example .env
 
 > El .env_example está creado para levantar la versión 16.0 de Odoo. En caso de requerir una versión diferente, puedes cambiar el archivo .env actualizandos las referencias de 16.0 a 17.0.
 
-### Clonar los Repositorios Necesarios (solo para miembros de Binaural)
+### Descripción de los campos de `.env_example`
+
+El archivo de ejemplo agrupa sus variables en distintas secciones. Al comienzo se encuentran los parámetros que se utilizan al construir la imagen y al levantar los contenedores con Docker Compose. Luego aparecen opciones para definir el comportamiento de Odoo (equivalentes al `odoo.conf`) y ajustes relacionados con Traefik y el filtrado de bases de datos.
+
+**Parámetros para Docker y Docker Compose**
+
+- `PROJECT_NAME` define el prefijo para los nombres de los contenedores.
+- `PORT_SERVICE_HOST_ODOO` y `PORT_SERVICE_CONTAINER_ODOO` indican el puerto de Odoo en tu máquina y dentro del contenedor.
+- `ODOO_RELEASE`, `ODOO_VERSION` y `ODOO_MINOR` se usan para generar el Dockerfile correspondiente y organizar la red interna.
+- `POSTGRES_IMG_VERSION`, `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PASSWORD` determinan la versión y credenciales del contenedor de PostgreSQL.
+- `PG_ADMIN_HOST_PORT` y `PG_ADMIN_SERVICE_CONTAINER_PORT` exponen la interfaz de pgAdmin.
+- `PGDATABASE` es la base utilizada por defecto por los scripts.
+- `RESET_PASSWORD` sirve como contraseña temporal para el script `odoo-pw`.
+- `ENV_TYPE` indica si el entorno es de un miembro de Binaural (`binaural`) o de un colaborador externo (`external`). Según este valor el comando `./odoo init` clonará los repositorios privados o solo los públicos.
+
+**Dominio y Traefik**
+
+- `DOMAIN` define el dominio comodín que usa Traefik para enrutar hacia Odoo.
+- `TRAEFIK_FRONTEND_PRIORITY` establece la prioridad de la regla de enrutamiento.
+- `TRAEFIK_HOST_PORT` y `TRAEFIK_SERVICE_CONTAINER_PORT` permiten exponer el panel de Traefik si se desea.
+- `DBFILTER` (comentado por defecto) puede activarse para que cada base de datos sea accesible mediante su propio subdominio.
+
+**Parámetros de `odoo.conf`**
+
+La sección marcada como "PARÁMETROS QUE NO SE SUELEN CAMBIAR" agrupa opciones que Odoo lee desde su archivo de configuración:
+
+- `MAX_CRON_THREADS`, `WORKERS` y `LIST_DB` controlan hilos de cron, número de workers y visibilidad de la lista de bases de datos.
+- `WITHOUT_DEMO` permite omitir los datos de demostración.
+- `ADMIN_PASSWORD` define la contraseña del usuario administrador al iniciar la base.
+- `PROXY_MODE` y `SERVER_MODE` ajustan el comportamiento cuando se ejecuta detrás de un proxy y el modo de servidor.
+- `AEROO_DOCS_HOST` indica la ruta al servicio de reportes Aeroo.
+- `LIMIT_TIME_REAL_CRON` y `LIMIT_TIME_REAL` configuran los límites de tiempo de Odoo.
+- `UNACCENT` habilita la extensión `unaccent` en PostgreSQL si está disponible.
+- `ODOO_UPGRADE_PATH` señala la ruta local del repositorio `odoo-upgrade` para desarrollo.
+- `SERVER_WIDE_MODULES` permite cargar módulos globales en todas las bases.
+
+### Clonar los Repositorios Necesarios
 
 Binaural trabaja con módulos alojados en distintos repositorios privados. En caso de que no formes parte de la organización, aún podrás levantar el ambiente sin problemas.
 
