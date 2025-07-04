@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_picking_form_inherit_quality_check" model="ir.ui.view">
+        <field name="name">stock.picking.form.inherit.quality.check</field>
+        <field name="model">stock.picking</field>
+        <field name="inherit_id" ref="stock.view_picking_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='move_type']" position="after">
+                <field name="quality_check_required" invisible="1"/>
+
+                <group invisible="not quality_check_required">
+                    <field name="quality_check_state" widget="badge"/>
+                    <field name="quality_check_user_id" invisible="quality_check_state == 'pending'"/>
+                    <field name="quality_check_date" invisible="quality_check_state == 'pending'"/>
+                    <field name="quality_check_reason" invisible="quality_check_state != 'rejected'"/>
+                </group>
+            </xpath>
+
+            <xpath expr="//button[@name='button_validate']" position="attributes">
+                <attribute name="invisible">state in ('draft', 'done', 'cancel')</attribute>
+                <attribute name="readonly">quality_check_required and quality_check_state == 'pending'</attribute>
+            </xpath>
+
+            <xpath expr="//header/field[@name='state']" position="attributes">
+                <attribute name="decoration-warning">quality_check_required and quality_check_state == 'pending'</attribute>
+            </xpath>
+
+            </field>
+    </record>
+</odoo>
