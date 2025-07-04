@@ -5,7 +5,6 @@ import os
 import subprocess
 from dotenv import load_dotenv
 from pathlib import Path
-import time
 
 
 def sync(repo_name, branch, show=False):
@@ -147,7 +146,7 @@ def build_odoo(no_cache):
                 )
 
             if not os.path.exists(dockerfile_template_path):
-                raise BaseException(f"Error #3: Dockerfile.template does not exist")
+                raise BaseException("Error #3: Dockerfile.template does not exist")
 
             with open(dockerfile_path, "r") as dockerfile_version:
                 Dockerfile.write(dockerfile_version.read())
