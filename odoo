@@ -177,6 +177,7 @@ def init_addons():
             "binaural-dev/enterprise",
             "binaural-dev/integra-addons",
             "binaural-dev/third-party-addons",
+            "binaural-dev/odoo-venezuela",
         ],
         "external": ["binaural-dev/odoo-venezuela"],
     }
