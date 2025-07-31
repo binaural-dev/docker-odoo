@@ -66,6 +66,7 @@ services:
       - traefik
     volumes:
       - odoo-web:/var/lib/odoo
+      - ./_bincli_fork:/home/odoo/bincli_fork
       - ./src:/home/odoo/src
       - odoo_data:/home/odoo/data
       - py3:/usr/local/lib/
