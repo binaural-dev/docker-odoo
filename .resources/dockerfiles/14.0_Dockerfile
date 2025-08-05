@@ -10,7 +10,7 @@ RUN useradd -md /home/odoo -s /bin/false odoo \
 
 # Install dependencies and wkhtmltopdf
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         dirmngr \
@@ -48,13 +48,23 @@ RUN echo 'deb http://apt.postgresql.org/pub/repos/apt/ bullseye-pgdg main' > /et
     && gpgconf --kill all \
     && rm -rf "$GNUPGHOME" \
     && apt-get update \
-    && apt-get install --no-install-recommends -y postgresql-client \
+    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y postgresql-client \
     && rm -f /etc/apt/sources.list.d/pgdg.list \
     && rm -rf /var/lib/apt/lists/*
 
 # Install rtlcss and Python packages
 RUN npm install -g rtlcss \
-    && pip3 install num2words xlwt xlrd openpyxl pytest-odoo pandas wheel html2text
+    && python3 -m pip install --no-cache-dir \
+        num2words \
+        xlwt \
+        xlrd \
+        openpyxl \
+        pytest-odoo \
+        pandas \
+        wheel \
+        html2text \
+        bcrypt \
+        cairosvg
 
 # Install Odoo
 ARG ODOO_VERSION
