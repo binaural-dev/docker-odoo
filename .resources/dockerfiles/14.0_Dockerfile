@@ -54,12 +54,12 @@ RUN echo 'deb http://apt.postgresql.org/pub/repos/apt/ bullseye-pgdg main' > /et
 
 # Install rtlcss and Python packages
 RUN npm install -g rtlcss \
-    && pip3 install num2words xlwt xlrd openpyxl pytest-odoo pandas wheel html2text bcrypt cairosvg
+    && pip3 install num2words xlwt xlrd openpyxl pytest-odoo pandas wheel html2text
 
 # Install Odoo
 ARG ODOO_VERSION
 ARG ODOO_RELEASE
-RUN curl -o odoo.deb -sSL http://nightly.odoo.com/14.0/nightly/deb/odoo_14.0.${ODOO_RELEASE}_all.deb \
+RUN curl -o odoo.deb -sSL http://nightly.odoo.com/${ODOO_VERSION}/nightly/deb/odoo_${ODOO_VERSION}.${ODOO_RELEASE}_all.deb \
     && apt-get update \
     && apt-get -y install --no-install-recommends ./odoo.deb \
     && rm -rf /var/lib/apt/lists/* odoo.deb
