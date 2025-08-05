@@ -100,9 +100,13 @@ Los repo en cuestion son:
 
 El archivo de Dockerfile se construye a partir de las configuraciones de tu archivo .env (por ello es importante especificar la versión de Odoo a utilizar en dicho archivo).
 
- ```bash
+```bash
 ./odoo build
 ```
+Este comando genera `./.resources/Dockerfile` y luego ejecuta `docker compose build`. Si intentas ejecutar
+`docker compose build` sin haber corrido previamente `./odoo build`, obtendrás un error de "Dockerfile not found"
+porque el Dockerfile dinámico aún no existe.
+
 ### Estructura de la carpeta a utilizar
 
 ```bash
