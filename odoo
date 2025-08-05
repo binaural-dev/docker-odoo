@@ -3,7 +3,12 @@
 import argparse
 import os
 import subprocess
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    raise SystemExit(
+        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
+    )
 from pathlib import Path
 import time
 

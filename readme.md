@@ -105,7 +105,8 @@ El archivo de Dockerfile se construye a partir de las configuraciones de tu arch
 ```
 Este comando genera `./.resources/Dockerfile` y luego ejecuta `docker compose build`. Si intentas ejecutar
 `docker compose build` sin haber corrido previamente `./odoo build`, obtendrás un error de "Dockerfile not found"
-porque el Dockerfile dinámico aún no existe.
+porque el Dockerfile dinámico aún no existe. Si `./odoo build` muestra `ModuleNotFoundError: No module named 'dotenv'`,
+instala la dependencia con `sudo apt-get install python3-dotenv` o `pip install python-dotenv`.
 
 ### Estructura de la carpeta a utilizar
 
