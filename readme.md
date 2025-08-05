@@ -2,6 +2,8 @@
 
 Binaural Workspace es un entorno de desarrollo diseñado para facilitar la ejecución y configuración de proyectos en Odoo. Con este repositorio, podrás levantar ambientes de desarrollo en Linux y macOS (AMD y ARM).
 
+Es compatible con las versiones 14.0, 16.0, 17.0 y 18.0 de Odoo, permitiéndote elegir la que mejor se adapte a tu proyecto.
+
 En cuanto a Windows, no se ha probado oficialmente, pero puede ser compatible utilizando WSL2 con Docker. Se recomienda verificar su funcionamiento en tu entorno antes de usarlo en producción.
 
 ## Instalación
@@ -40,7 +42,7 @@ Para trabajar con la configuración por defecto, puedes ejecutar el siguiente co
 cp .env_example .env
 ```
 
-> El .env_example está creado para levantar la versión 16.0 de Odoo. En caso de requerir una versión diferente, puedes cambiar el archivo .env actualizandos las referencias de 16.0 a 17.0.
+> El `.env_example` está creado para levantar la versión 16.0 de Odoo. Si necesitas otra versión (como 14.0, 17.0 o 18.0), actualiza el archivo `.env` reemplazando las referencias por la versión deseada.
 
 ### Descripción de los campos de `.env_example`
 
