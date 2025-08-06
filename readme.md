@@ -107,6 +107,7 @@ Este comando genera `./.resources/Dockerfile` y luego ejecuta `docker compose bu
 `docker compose build` sin haber corrido previamente `./odoo build`, obtendrás un error de "Dockerfile not found"
 porque el Dockerfile dinámico aún no existe. Si `./odoo build` muestra `ModuleNotFoundError: No module named 'dotenv'`,
 instala la dependencia con `sudo apt-get install python3-dotenv` o `pip install python-dotenv`.
+Si la descarga del paquete de Odoo devuelve un `403 Forbidden`, verifica que tengas acceso a `nightly.odoo.com` y que el valor de `ODOO_RELEASE` apunte a un build disponible.
 
 ### Estructura de la carpeta a utilizar
 
