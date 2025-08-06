@@ -53,6 +53,7 @@ El archivo de ejemplo agrupa sus variables en distintas secciones. Al comienzo s
 - `PROJECT_NAME` define el prefijo para los nombres de los contenedores.
 - `PORT_SERVICE_HOST_ODOO` y `PORT_SERVICE_CONTAINER_ODOO` indican el puerto de Odoo en tu máquina y dentro del contenedor.
 - `ODOO_RELEASE`, `ODOO_VERSION` y `ODOO_MINOR` se usan para generar el Dockerfile correspondiente y organizar la red interna.
+- `ODOO_SHA` permite verificar opcionalmente la integridad del paquete `.deb` descargado.
 - `POSTGRES_IMG_VERSION`, `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PASSWORD` determinan la versión y credenciales del contenedor de PostgreSQL.
 - `PG_ADMIN_HOST_PORT` y `PG_ADMIN_SERVICE_CONTAINER_PORT` exponen la interfaz de pgAdmin.
 - `PGDATABASE` es la base utilizada por defecto por los scripts.

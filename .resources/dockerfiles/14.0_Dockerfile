@@ -1,4 +1,4 @@
-FROM debian:bullseye-slim
+FROM debian:buster-slim
 ENV LANG C.UTF-8
 USER root
 
@@ -32,8 +32,6 @@ RUN apt-get update && \
         python3-watchdog \
         python3-xlrd \
         python3-xlwt \
-        python3-dev \
-        python3-pandas \
         xz-utils \
     && curl -o wkhtmltox.deb -sSL https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.5/wkhtmltox_0.12.5-1.buster_amd64.deb \
     && echo 'ea8277df4297afc507c61122f3c349af142f31e5 wkhtmltox.deb' | sha1sum -c - \
@@ -41,7 +39,7 @@ RUN apt-get update && \
     && rm -rf /var/lib/apt/lists/* wkhtmltox.deb
 
 # install latest postgresql-client
-RUN echo 'deb http://apt.postgresql.org/pub/repos/apt/ bullseye-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
+RUN echo 'deb http://apt.postgresql.org/pub/repos/apt/ buster-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
     && GNUPGHOME="$(mktemp -d)" \
     && gpg --batch --keyserver keyserver.ubuntu.com --recv-keys B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8 \
     && gpg --batch --armor --export B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8 > /etc/apt/trusted.gpg.d/pgdg.gpg.asc \
@@ -69,7 +67,10 @@ RUN npm install -g rtlcss \
 # Install Odoo
 ARG ODOO_VERSION
 ARG ODOO_RELEASE
+ARG ODOO_SHA
 RUN curl -fL -o odoo.deb https://nightly.odoo.com/${ODOO_VERSION}/nightly/deb/odoo_${ODOO_VERSION}.${ODOO_RELEASE}_all.deb \
+    && if [ -n "$ODOO_SHA" ]; then echo "$ODOO_SHA odoo.deb" | sha1sum -c -; fi \
     && apt-get update \
     && apt-get -y install --no-install-recommends ./odoo.deb \
+    && ln -sf /dev/stdout /var/log/odoo/odoo-server.log \
     && rm -rf /var/lib/apt/lists/* odoo.deb
