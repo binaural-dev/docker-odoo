@@ -183,6 +183,32 @@ En la carpeta [`scripts`](scripts/) encontrarás herramientas para realizar
 distintas tareas de administración. Revisa la
 [documentación de scripts](scripts/README.md) para conocer cada comando.
 
+
+### Compatibilidad de versiones de PostgreSQL para restauración de backups
+
+**IMPORTANTE:**  
+Para restaurar un backup (.dump) de PostgreSQL, la versión del contenedor debe ser igual o superior a la versión con la que se generó el dump.  
+Si restauras un .dump generado con PostgreSQL 16 en un contenedor con PostgreSQL 14, obtendrás errores como `pg_restore: error: unsupported version (1.16) in file header`.
+
+- Ajusta la variable `POSTGRES_IMG_VERSION` en tu `.env` a la versión correcta (por ejemplo, `16`).
+- Si no sabes la versión, puedes inspeccionar el dump con `head -n 5 archivo.dump` o pedir al responsable del backup la versión exacta.
+- Para máxima compatibilidad, pide siempre el backup en formato SQL plano (.sql), que puede restaurarse en versiones iguales o superiores.
+
+Consulta la documentación de scripts para más detalles sobre restauración.
+
+
+### Compatibilidad de versiones de PostgreSQL para restauración de backups
+
+**IMPORTANTE:**  
+Para restaurar un backup (.dump) de PostgreSQL, la versión del contenedor debe ser igual o superior a la versión con la que se generó el dump.  
+Si restauras un .dump generado con PostgreSQL 16 en un contenedor con PostgreSQL 14, obtendrás errores como `pg_restore: error: unsupported version (1.16) in file header`.
+
+- Ajusta la variable `POSTGRES_IMG_VERSION` en tu `.env` a la versión correcta (por ejemplo, `16`).
+- Si no sabes la versión, puedes inspeccionar el dump con `head -n 5 archivo.dump` o pedir al responsable del backup la versión exacta.
+- Para máxima compatibilidad, pide siempre el backup en formato SQL plano (.sql), que puede restaurarse en versiones iguales o superiores.
+
+Consulta la documentación de scripts para más detalles sobre restauración.
+
 ### FAQ
 
 #### ¿Cómo configurar addons_path?
