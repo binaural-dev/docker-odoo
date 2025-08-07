@@ -8,69 +8,64 @@ RUN useradd -md /home/odoo -s /bin/false odoo \
     && chown -R odoo:odoo /var/lib/odoo \
     && sync
 
-# Install dependencies and wkhtmltopdf
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        dirmngr \
-        fonts-noto-cjk \
-        gnupg \
-        libssl-dev \
-        node-less \
-        npm \
-        python3-num2words \
-        python3-pdfminer \
-        python3-pip \
-        python3-phonenumbers \
-        python3-pyldap \
-        python3-qrcode \
-        python3-renderpm \
-        python3-setuptools \
-        python3-slugify \
-        python3-vobject \
-        python3-watchdog \
-        python3-xlrd \
-        python3-xlwt \
-        xz-utils \
-    && curl -fL -o wkhtmltox.deb https://github.com/wkhtmltopdf/wkhtmltopdf/releases/download/0.12.5/wkhtmltox_0.12.5-1.buster_amd64.deb \
-    && echo 'ea8277df4297afc507c61122f3c349af142f31e5 wkhtmltox.deb' | sha1sum -c - \
-    && apt-get install -y --no-install-recommends ./wkhtmltox.deb \
-    && rm -rf /var/lib/apt/lists/* wkhtmltox.deb
-
-# install latest postgresql-client
-RUN echo 'deb http://apt.postgresql.org/pub/repos/apt/ bullseye-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
-    && GNUPGHOME="$(mktemp -d)" \
-    && gpg --batch --keyserver keyserver.ubuntu.com --recv-keys B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8 \
-    && gpg --batch --armor --export B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8 > /etc/apt/trusted.gpg.d/pgdg.gpg.asc \
-    && gpgconf --kill all \
-    && rm -rf "$GNUPGHOME" \
-    && apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y postgresql-client \
-    && rm -f /etc/apt/sources.list.d/pgdg.list \
+# Install debian packages
+RUN set -x ; \
+    apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git apt-transport-https build-essential ca-certificates curl ffmpeg file flake8 fonts-freefont-ttf fonts-noto-cjk gawk gnupg gsfonts libldap2-dev libjpeg9-dev libsasl2-dev libxslt1-dev lsb-release npm ocrmypdf sed sudo unzip xfonts-75dpi zip zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install rtlcss and Python packages
-RUN npm install -g rtlcss \
-    && python3 -m pip install --no-cache-dir \
-        num2words \
-        xlwt \
-        xlrd \
-        openpyxl \
-        pytest-odoo \
-        pandas \
-        wheel \
-        html2text \
-        bcrypt \
-        cairosvg
+#python
+RUN set -x ; \
+    apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends watchdog curl gnupg2 python3 python3-dbfread python3-dev python3-gevent python3-pip python3-setuptools python3-wheel python3-markdown python3-mock python3-phonenumbers python3-websocket python3-google-auth libpq-dev lsb-release \
+               python3-asn1crypto python3-jwt publicsuffix python3-xmlsec python3-aiosmtpd \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Odoo
+#wkhtmltox
+RUN if [ "$(uname -m)" = "x86_64" ]; then \
+        echo "Installing package for AMD64"; \
+        curl -sSL https://nightly.odoo.com/deb/jammy/wkhtmltox_0.12.5-2.jammy_amd64.deb -o /tmp/wkhtml.deb; \
+        apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
+    elif [ "$(uname -m)" = "arm64" ]; then \
+        echo "Installing package for ARM64"; \
+        curl -sSL https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_arm64.deb -o /tmp/wkhtml.deb; \
+        apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
+    else \
+        echo "Architecture not supported for wkhtmltox or unknown"; \
+    fi; \
+        rm -rf /var/lib/apt/lists/* /tmp/wkhtml.deb
+
+#PSQL
+ADD https://raw.githubusercontent.com/odoo/odoo/14.0/debian/control /tmp/control.txt
+RUN curl -sSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /etc/apt/trusted.gpg.d/psql_client.asc \
+    && echo "deb http://apt.postgresql.org/pub/repos/apt/ jammy-pgdg main" > /etc/apt/sources.list.d/pgclient.list \
+    && apt-get update \
+    && sed -n '/^Depends:/,/^[A-Z]/p' /tmp/control.txt \
+        | awk '/^ [a-z]/ { gsub(/,/,"") ; gsub(" ", "") ; print $NF }' | sort -u \
+        | DEBIAN_FRONTEND=noninteractive xargs apt-get install -y -qq --no-install-recommends \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install nodejs (remove previous nodejs/libnode-dev to avoid conflicts)
+RUN apt-get remove -y nodejs libnode-dev || true \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -s https://deb.nodesource.com/gpgkey/nodesource.gpg.key | gpg --dearmor | tee /usr/share/keyrings/nodesource.gpg >/dev/null \
+    && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x `lsb_release -c -s` main" > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update \
+    && apt-get install -y nodejs
+
+# RUN npm install
+RUN npm install --force -g rtlcss@3.4.0 es-check@6.0.0 eslint@8.1.0 prettier@2.7.1 eslint-config-prettier@8.5.0 eslint-plugin-prettier@4.2.1
+
 ARG ODOO_VERSION
 ARG ODOO_RELEASE
-ARG ODOO_SHA
-RUN curl -fL -o odoo.deb https://nightly.odoo.com/${ODOO_VERSION}/nightly/deb/odoo_${ODOO_VERSION}.${ODOO_RELEASE}_all.deb \
-    && if [ -n "$ODOO_SHA" ]; then echo "$ODOO_SHA odoo.deb" | sha1sum -c -; fi \
+RUN curl -o odoo.deb -sSL http://nightly.odoo.com/14.0/nightly/deb/odoo_14.0.latest_all.deb \
     && apt-get update \
     && apt-get -y install --no-install-recommends ./odoo.deb \
-    && ln -sf /dev/stdout /var/log/odoo/odoo-server.log \
     && rm -rf /var/lib/apt/lists/* odoo.deb
+
+# Docker 14: Migrated layer
+ADD https://raw.githubusercontent.com/odoo/odoo/14.0/requirements.txt /root/requirements.txt
+RUN python3 -m pip install --no-cache-dir setuptools wheel pandas && \
+    python3 -m pip install --no-cache-dir -r /root/requirements.txt && \
+    python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1
