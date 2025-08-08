@@ -24,7 +24,7 @@ RUN set -x ; \
 #wkhtmltox
 RUN if [ "$(uname -m)" = "x86_64" ]; then \
         echo "Installing package for AMD64"; \
-        curl -sSL https://nightly.odoo.com/deb/jammy/wkhtmltox_0.12.5-2.jammy_amd64.deb -o /tmp/wkhtml.deb; \
+        curl -fsSL https://nightly.odoo.com/deb/jammy/wkhtmltox_0.12.5-2.jammy_amd64.deb -o /tmp/wkhtml.deb; \
         apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
     elif [ "$(uname -m)" = "arm64" ]; then \
         echo "Installing package for ARM64"; \
