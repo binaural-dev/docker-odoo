@@ -28,7 +28,11 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
         apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
     elif [ "$(uname -m)" = "arm64" ]; then \
         echo "Installing package for ARM64"; \
-        curl -sSL https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_arm64.deb -o /tmp/wkhtml.deb; \
+        curl -fsSL https://nightly.odoo.com/deb/jammy/wkhtmltox_0.12.5-2.jammy_amd64.deb -o /tmp/wkhtml.deb; \
+        apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
+    elif [ "$(uname -m)" = "arm64" ]; then \
+        echo "Installing package for ARM64"; \
+        curl -fsSL https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_arm64.deb -o /tmp/wkhtml.deb; \
         apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
     else \
         echo "Architecture not supported for wkhtmltox or unknown"; \
