@@ -1,4 +1,4 @@
-RUN python3 -m pip3 install --no-cache-dir \
+RUN python3 -m pip install --no-cache-dir \
     watchdog \
     pandas \
     bravado_core \
