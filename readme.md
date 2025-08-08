@@ -135,13 +135,53 @@ Si tienes deseas agregar o desarrollar algún módulo para tu ambiente, puedes h
 
 Para agregar un repositorio en custom, ubícate en docker-odoo/src/custom/ y ejecuta `git clone repositorio-que-contiene-tus-módulos.git`
 
-### Inicio, Reinicio y Detención del Ambiente
 
-Estos comandos son acortadores a los comandos naturales de `docker-compose`, tales como `up` y `down`.
+### Comandos disponibles en el script `odoo`
+
+El script principal `./odoo` permite gestionar el entorno de Odoo de forma sencilla. Los comandos disponibles son:
+
+| Comando         | Descripción                                                                                 |
+|-----------------|--------------------------------------------------------------------------------------------|
+| `run`           | Levanta los contenedores de Odoo en segundo plano (`docker compose up -d`).                |
+| `stop`          | Detiene los contenedores de Odoo (`docker compose down`).                                  |
+| `restart`       | Reinicia los contenedores de Odoo.                                                         |
+| `build`         | Construye la imagen de Odoo según la configuración del `.env`. Usa `--no-cache` si deseas forzar la reconstrucción sin caché. |
+| `bash`          | Abre una terminal bash dentro del contenedor de Odoo como root.                            |
+| `init`          | Clona los repositorios necesarios en la carpeta `src/` según el tipo de entorno.           |
+| `psql -d <db>`  | Abre una terminal psql conectada a la base de datos `<db>` del contenedor de Odoo.         |
+| `sync <repo> <branch> [--v]` | Sincroniza un repositorio y sus submódulos con la rama indicada. Usa `--v` para ver la salida de git. |
+| `logs`          | Muestra los últimos 10 logs de todos los servicios en tiempo real (`docker compose logs --tail 10 -f`). |
+
+Ejemplos de uso:
 ```bash
+# Levantar Odoo
 ./odoo run
-./odoo restart
+
+# Detener Odoo
 ./odoo stop
+
+# Reiniciar Odoo
+./odoo restart
+
+# Construir la imagen (con o sin caché)
+./odoo build
+./odoo build --no-cache
+
+# Ver logs en tiempo real
+./odoo logs
+
+# Bash dentro del contenedor
+./odoo bash
+
+# Clonar repositorios necesarios
+./odoo init
+
+# Acceso a psql
+./odoo psql -d <nombre_db>
+
+# Sincronizar un repositorio custom y sus submódulos
+./odoo sync <repo> <branch>
+./odoo sync <repo> <branch> --v
 ```
 
 ### Acceso al Ambiente
