@@ -217,6 +217,10 @@ def restart_odoo():
     os.system("docker compose down")
     os.system("docker compose up -d")
 
+def show_logs():
+    print("Mostrando logs de Odoo (últimos 10, en tiempo real)...")
+    os.system("docker compose logs --tail 10 -f")
+
 
 def psql(d):
     print(d)
@@ -241,6 +245,9 @@ def main():
     subparsers.add_parser("restart", help="Reiniciar Odoo")
     subparsers.add_parser("bash", help="Bash")
     subparsers.add_parser("init", help="Clone repositories")
+
+    # Subparser para el comando "logs"
+    subparsers.add_parser("logs", help="Muestra los últimos 10 logs en tiempo real")
 
     # Subparser para el comando "build"
     build_parser = subparsers.add_parser("build", help="Construye Odoo")
@@ -276,6 +283,9 @@ def main():
         psql(args.d)
     elif args.action == "sync":
         sync(args.r, args.b, show=args.v)
+
+    elif args.action == "logs":
+        show_logs()
 
 
 if __name__ == "__main__":
