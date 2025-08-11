@@ -1,4 +1,16 @@
-RUN python3 -m pip install --no-cache-dir watchdog xmltodict pandas bravado_core swagger_spec_validator jsonschema==3.2.0 pdf2image xmltodict git+https://github.com/binaural-dev/python-sdk.git cryptography==35.0.0 watchdog
+RUN python3 -m pip install --no-cache-dir \
+    watchdog \
+    pandas \
+    bravado_core \
+    swagger_spec_validator \
+    jsonschema==3.2.0 \
+    pdf2image \
+    xmltodict \
+    git+https://github.com/binaural-dev/python-sdk.git \
+    cryptography==35.0.0 \
+    html2text \
+    bcrypt \
+    cairosvg
 
 ENV SOURCES /home/odoo/src
 ENV RESOURCES /home/odoo/.resources
@@ -13,6 +25,7 @@ RUN mkdir -p $RESOURCES && \
     sync
 
 # Default values of env variables used by scripts
+# IMPORTANTE: No agregar líneas ENV vacías. Si necesitas agregar más variables, hazlo aquí, todas en una sola instrucción ENV.
 ENV ODOO_SERVER=odoo \
     UNACCENT=True \
     PROXY_MODE=True \

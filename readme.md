@@ -2,6 +2,8 @@
 
 Binaural Workspace es un entorno de desarrollo diseñado para facilitar la ejecución y configuración de proyectos en Odoo. Con este repositorio, podrás levantar ambientes de desarrollo en Linux y macOS (AMD y ARM).
 
+Es compatible con las versiones 14.0, 16.0, 17.0 y 18.0 de Odoo, permitiéndote elegir la que mejor se adapte a tu proyecto.
+
 En cuanto a Windows, no se ha probado oficialmente, pero puede ser compatible utilizando WSL2 con Docker. Se recomienda verificar su funcionamiento en tu entorno antes de usarlo en producción.
 
 ## Instalación
@@ -40,7 +42,7 @@ Para trabajar con la configuración por defecto, puedes ejecutar el siguiente co
 cp .env_example .env
 ```
 
-> El .env_example está creado para levantar la versión 16.0 de Odoo. En caso de requerir una versión diferente, puedes cambiar el archivo .env actualizandos las referencias de 16.0 a 17.0.
+> El `.env_example` está creado para levantar la versión 16.0 de Odoo. Si necesitas otra versión (como 14.0, 17.0 o 18.0), actualiza el archivo `.env` reemplazando las referencias por la versión deseada.
 
 ### Descripción de los campos de `.env_example`
 
@@ -51,6 +53,7 @@ El archivo de ejemplo agrupa sus variables en distintas secciones. Al comienzo s
 - `PROJECT_NAME` define el prefijo para los nombres de los contenedores.
 - `PORT_SERVICE_HOST_ODOO` y `PORT_SERVICE_CONTAINER_ODOO` indican el puerto de Odoo en tu máquina y dentro del contenedor.
 - `ODOO_RELEASE`, `ODOO_VERSION` y `ODOO_MINOR` se usan para generar el Dockerfile correspondiente y organizar la red interna.
+- `ODOO_SHA` permite verificar opcionalmente la integridad del paquete `.deb` descargado.
 - `POSTGRES_IMG_VERSION`, `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PASSWORD` determinan la versión y credenciales del contenedor de PostgreSQL.
 - `PG_ADMIN_HOST_PORT` y `PG_ADMIN_SERVICE_CONTAINER_PORT` exponen la interfaz de pgAdmin.
 - `PGDATABASE` es la base utilizada por defecto por los scripts.
@@ -98,9 +101,15 @@ Los repo en cuestion son:
 
 El archivo de Dockerfile se construye a partir de las configuraciones de tu archivo .env (por ello es importante especificar la versión de Odoo a utilizar en dicho archivo).
 
- ```bash
+```bash
 ./odoo build
 ```
+Este comando genera `./.resources/Dockerfile` y luego ejecuta `docker compose build`. Si intentas ejecutar
+`docker compose build` sin haber corrido previamente `./odoo build`, obtendrás un error de "Dockerfile not found"
+porque el Dockerfile dinámico aún no existe. Si `./odoo build` muestra `ModuleNotFoundError: No module named 'dotenv'`,
+instala la dependencia con `sudo apt-get install python3-dotenv` o `pip install python-dotenv`.
+Si la descarga del paquete de Odoo devuelve un `403 Forbidden`, verifica que tengas acceso a `nightly.odoo.com` y que el valor de `ODOO_RELEASE` apunte a un build disponible.
+
 ### Estructura de la carpeta a utilizar
 
 ```bash
@@ -213,6 +222,32 @@ http://localhost:<PUERTO>
 En la carpeta [`scripts`](scripts/) encontrarás herramientas para realizar
 distintas tareas de administración. Revisa la
 [documentación de scripts](scripts/README.md) para conocer cada comando.
+
+
+### Compatibilidad de versiones de PostgreSQL para restauración de backups
+
+**IMPORTANTE:**  
+Para restaurar un backup (.dump) de PostgreSQL, la versión del contenedor debe ser igual o superior a la versión con la que se generó el dump.  
+Si restauras un .dump generado con PostgreSQL 16 en un contenedor con PostgreSQL 14, obtendrás errores como `pg_restore: error: unsupported version (1.16) in file header`.
+
+- Ajusta la variable `POSTGRES_IMG_VERSION` en tu `.env` a la versión correcta (por ejemplo, `16`).
+- Si no sabes la versión, puedes inspeccionar el dump con `head -n 5 archivo.dump` o pedir al responsable del backup la versión exacta.
+- Para máxima compatibilidad, pide siempre el backup en formato SQL plano (.sql), que puede restaurarse en versiones iguales o superiores.
+
+Consulta la documentación de scripts para más detalles sobre restauración.
+
+
+### Compatibilidad de versiones de PostgreSQL para restauración de backups
+
+**IMPORTANTE:**  
+Para restaurar un backup (.dump) de PostgreSQL, la versión del contenedor debe ser igual o superior a la versión con la que se generó el dump.  
+Si restauras un .dump generado con PostgreSQL 16 en un contenedor con PostgreSQL 14, obtendrás errores como `pg_restore: error: unsupported version (1.16) in file header`.
+
+- Ajusta la variable `POSTGRES_IMG_VERSION` en tu `.env` a la versión correcta (por ejemplo, `16`).
+- Si no sabes la versión, puedes inspeccionar el dump con `head -n 5 archivo.dump` o pedir al responsable del backup la versión exacta.
+- Para máxima compatibilidad, pide siempre el backup en formato SQL plano (.sql), que puede restaurarse en versiones iguales o superiores.
+
+Consulta la documentación de scripts para más detalles sobre restauración.
 
 ### FAQ
 
