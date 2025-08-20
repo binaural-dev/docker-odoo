@@ -259,3 +259,6 @@ Cada vez que añades un nuevo repositorio a la carpeta custom, este será autom�
 Para entender completamente el funcionamiento del entorno, te recomendamos familiarizarte con los comandos de la terminal de Linux, Docker, Traefik y, por supuesto, Odoo.
 
 Si tienes alguna pregunta, no dudes en contactar con el equipo. Si no eres parte del equipo de desarrollo de Binaural, por favor utiliza los Issues en GitHub (siguiendo el código de conducta establecido).
+
+
+1#x2QMy@1Nlz

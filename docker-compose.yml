@@ -11,15 +11,12 @@ services:
       - traefik.enable=true
       - traefik.port=8080
       - traefik.frontend.rule=Host:traefik.localhost
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
-    # para que funcione la solución *.localhost
-    # network_mode: "host"
     ports:
       - "${TRAEFIK_HOST_PORT}:${TRAEFIK_SERVICE_CONTAINER_PORT}"
     networks:
       - binaural
+
   db:
     image: postgres:${POSTGRES_IMG_VERSION}
     container_name: ${PROJECT_NAME}_db
@@ -32,6 +29,7 @@ services:
       - odoo-db:/var/lib/postgresql/data/pgdata
     networks:
       - binaural
+
   pgadmin:
     container_name: ${PROJECT_NAME}_pgadmin_container
     image: dpage/pgadmin4
@@ -45,6 +43,7 @@ services:
       - odoo-pgadmin:/root/.pgadmin
     networks:
       - binaural
+
   dns:
     image: cytopia/bind:alpine-0.30
     environment:
@@ -53,11 +52,12 @@ services:
     networks:
       binaural:
         ipv4_address: 172.20.${ODOO_MINOR}.10
+
   odoo:
     container_name: ${PROJECT_NAME}
     build:
       context: .
-      dockerfile: ./.resources/Dockerfile
+      dockerfile: ./.resources/Dockerfile # Usa una imagen preconstruida
     ports:
       - "${PORT_SERVICE_HOST_ODOO}:${PORT_SERVICE_CONTAINER_ODOO}"
     depends_on:
@@ -66,8 +66,8 @@ services:
       - traefik
     volumes:
       - odoo-web:/var/lib/odoo
-      - ./_bincli_fork:/home/odoo/bincli_fork
-      - ./src:/home/odoo/src
+      - odoo-bincli:/home/odoo/bincli_fork
+      - odoo-src:/home/odoo/src
       - odoo_data:/home/odoo/data
       - py3:/usr/local/lib/
       - py:/usr/lib/
@@ -76,13 +76,8 @@ services:
       - traefik.enable=true
       - traefik.frontend.port=8069
       - traefik.frontend.rule=HostRegexp:$DOMAIN,{subdomain:[a-z0-9-_]+}.$DOMAIN
-      # - traefik.frontend.priority=10
-      # - traefik.longpolling.port=8072
-      # - traefik.longpolling.frontend.rule=HostRegexp:$DOMAIN,{subdomain:[a-z0-9-_]+}.$DOMAIN;PathPrefix:/longpolling/
       - traefik.backend.loadbalancer.stickiness=true
       - traefik.backend.loadbalancer.method=drr
-      # traefik.frontend.redirect.regex: $strTraefikRedirectRegex
-      # traefik.frontend.redirect.replacement: $strTraefikRedirectReplacement
     environment:
       CUSTOM_CONFIG: |-
         [options]
@@ -90,8 +85,6 @@ services:
         # custom pip librearies
       CUSTOM_ENTRYPOINT: |-
         #!/bin/bash
-        # pip install --user --no-cache-dir -e /home/odoo/custom/odoo
-        # pip install --user --no-cache-dir pyopenssl
       SMTP_SERVER: mailhog
       SMTP_PORT: 1025
       DBFILTER: ${DBFILTER}
@@ -111,7 +104,7 @@ services:
     dns:
       - 172.20.${ODOO_MINOR}.10
     networks:
-      binaural:
+      - binaural
 
 volumes:
   odoo-web:
@@ -120,6 +113,8 @@ volumes:
   py3:
   py:
   odoo-pgadmin:
+  odoo-bincli:
+  odoo-src:
 
 networks:
   binaural:

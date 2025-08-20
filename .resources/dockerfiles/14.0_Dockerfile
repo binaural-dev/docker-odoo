@@ -2,6 +2,9 @@ FROM debian:bullseye-slim
 ENV LANG C.UTF-8
 USER root
 
+COPY ./_bincli_fork /home/odoo/bincli_fork
+COPY ./src /home/odoo/src
+
 # Enable Odoo user and filestore
 RUN useradd -md /home/odoo -s /bin/false odoo \
     && mkdir -p /var/lib/odoo \
