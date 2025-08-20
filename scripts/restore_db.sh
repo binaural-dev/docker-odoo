@@ -27,77 +27,127 @@ unzip_file(){
     echo "Preparando backup... ${file_compress}"
     mkdir -p backup_tmp
     # Detecta el tipo de archivo y extrae según corresponda
-    case "${file_compress}" in
-        *.zip)
-            unzip "${file_compress}" -d backup_tmp
-            # Busca dump.sql dentro del zip
-            if [ -f backup_tmp/dump.sql ]; then
-                SQLFILE="dump.sql"
-            else
-                SQLFILE=$(ls backup_tmp/*.sql 2>/dev/null | head -n1 | xargs -n1 basename)
-                # Si no hay .sql, busca .dump
-                if [ -z "$SQLFILE" ]; then
-                    SQLFILE=$(ls backup_tmp/*.dump 2>/dev/null | head -n1 | xargs -n1 basename)
-                fi
-            fi
-            ;;
-        *.gz)
-            cp "${file_compress}" backup_tmp/
-            gunzip -c "${file_compress}" > backup_tmp/dump.sql
-            SQLFILE="dump.sql"
-            ;;
-        *.sql)
-            cp "${file_compress}" backup_tmp/dump.sql
-            SQLFILE="dump.sql"
-            ;;
-        *.dump)
-            cp "${file_compress}" backup_tmp/dump.dump
-            SQLFILE="dump.dump"
-            ;;
-        *)
-            echo "Tipo de archivo de backup no soportado: ${file_compress}"
+    #!/bin/bash
+
+    # Script para restaurar una base de datos Odoo desde archivos .sql, .zip (dump.sql + filestore), o .dump (pg_dump custom)
+    # Uso: restore_db.sh -b <db_container> -d <db_name> -f <archivo> [-o <odoo_container>]
+    # Ejemplo: ./restore_db.sh -b odoo-db -d example_bp_db -f /ruta/backup.dump
+
+    while getopts :b:d:f:o:h flag
+    do
+        case "${flag}" in
+            b) database_container=${OPTARG};;
+            d) database_name=${OPTARG};;
+            f) backup_file=${OPTARG};;
+            o) odoo_container=${OPTARG};;
+            h)
+                usage
+                exit 0
+                ;;
+            :)
+                echo "Error: -${OPTARG} requiere un argumento."
+                usage
+                exit 1
+                ;;
+            *)
+                usage
+                exit 1
+                ;;
+        esac
+    done
+
+    usage() {
+        echo "\nUso: $0 -b <db_container> -d <db_name> -f <archivo> [-o <odoo_container>]"
+        echo "\nArgumentos:"
+        echo "  -b    Nombre del contenedor Docker de Postgres"
+        echo "  -d    Nombre de la base de datos a restaurar"
+        echo "  -f    Ruta al archivo de backup (.sql, .zip, .dump)"
+        echo "  -o    (Opcional) Contenedor de Odoo para restaurar filestore"
+        echo "  -h    Mostrar esta ayuda"
+        echo "\nEjemplo: $0 -b odoo-db -d example_bp_db -f /ruta/backup.dump"
+    }
+
+    if [ -z "$database_container" ] || [ -z "$database_name" ] || [ -z "$backup_file" ]; then
+        echo "\nFaltan argumentos requeridos."
+        usage
+        exit 1
+    fi
+
+    create_database() {
+        echo "\nCreando base de datos '${database_name}' en el contenedor '${database_container}'..."
+        docker exec -i "$database_container" psql -U odoo postgres -c "DROP DATABASE IF EXISTS \"$database_name\";"
+        docker exec -i "$database_container" psql -U odoo postgres -c "\
+    CREATE DATABASE \"$database_name\" \
+        WITH OWNER = odoo \
+        TEMPLATE = template0 \
+        ENCODING = 'UTF8' \
+        LC_COLLATE = 'C' \
+        LC_CTYPE = 'en_US.UTF-8' \
+        LOCALE_PROVIDER = 'libc' \
+        TABLESPACE = pg_default \
+        CONNECTION LIMIT = -1 \
+        IS_TEMPLATE = False;"
+        echo "Base de datos creada."
+    }
+
+    restore_sql() {
+        echo "\nRestaurando backup .sql en '${database_name}'..."
+        cat "$backup_file" | docker exec -i "$database_container" psql -U odoo "$database_name"
+        echo "Restauración completada."
+    }
+
+    restore_dump() {
+        echo "\nRestaurando backup .dump en '${database_name}'..."
+        cat "$backup_file" | docker exec -i "$database_container" pg_restore --verbose --clean --no-acl --no-owner -U odoo -d "$database_name"
+        echo "Restauración completada."
+    }
+
+    restore_zip() {
+        echo "\nDescomprimiendo backup zip..."
+        mkdir -p backup_tmp
+        unzip -o "$backup_file" -d backup_tmp
+        if [ ! -f backup_tmp/dump.sql ]; then
+            echo "No se encontró dump.sql en el zip. Abortando."
+            rm -rf backup_tmp
             exit 1
-            ;;
-    esac
-    echo "Backup preparado: backup_tmp/${SQLFILE}"
-}
+        fi
+        echo "\nRestaurando dump.sql en '${database_name}'..."
+        cat backup_tmp/dump.sql | docker exec -i "$database_container" psql -U odoo "$database_name"
+        if [ -n "$odoo_container" ] && [ -d backup_tmp/filestore ]; then
+            echo "\nRestaurando filestore en contenedor Odoo..."
+            docker exec -u odoo -i "$odoo_container" mkdir -p /var/lib/odoo/filestore
+            docker exec -u odoo -i "$odoo_container" mkdir -p /var/lib/odoo/filestore/"$database_name"
+            docker cp backup_tmp/filestore/. "$odoo_container":/var/lib/odoo/filestore/"$database_name"
+            echo "Filestore restaurado."
+        fi
+        rm -rf backup_tmp
+        echo "Backup zip restaurado."
+    }
 
-load_database(){  
-    echo "Verificando si la base de datos '${database_name}' existe..."
-    cd backup_tmp
-    exists=$(docker exec -i ${database_container} psql -U odoo -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='${database_name}';")
-    if [ "$exists" = "1" ]; then
-        echo "La base de datos '${database_name}' ya existe. Terminando conexiones y eliminando para restaurar..."
-        docker exec -i ${database_container} psql -U odoo -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${database_name}' AND pid <> pg_backend_pid();"
-        docker exec -i ${database_container} psql -U odoo -d postgres -c "DROP DATABASE IF EXISTS ${database_name};"
-    fi
-    echo "Creando base de datos '${database_name}'..."
-    docker exec -i ${database_container} psql -U odoo -d postgres -c "CREATE DATABASE ${database_name};"
-    echo "Restaurando backup en '${database_name}'..."
-    if [ "${SQLFILE##*.}" = "dump" ]; then
-        docker cp "${SQLFILE}" ${database_container}:/tmp/${SQLFILE}
-        docker exec -i ${database_container} pg_restore -U odoo -d ${database_name} /tmp/${SQLFILE}
-        docker exec -i ${database_container} rm /tmp/${SQLFILE}
-    else
-        cat "${SQLFILE}" | docker exec -i ${database_container} psql -U odoo ${database_name}
-    fi
-    echo "Base de datos creada y restaurada."
-    cd ..
-}
+    main() {
+        create_database
+        ext="${backup_file##*.}"
+        case "$ext" in
+            sql)
+                restore_sql
+                ;;
+            dump|pg_dump)
+                restore_dump
+                ;;
+            zip)
+                restore_zip
+                ;;
+            *)
+                echo "\nTipo de archivo no soportado: $ext"
+                exit 1
+                ;;
+        esac
+        echo "\nRecuerda actualizar los módulos de Odoo si es necesario:"
+        echo "  sudo docker exec -it <odoo_container> odoo -d $database_name -u base --stop-after-init"
+        echo "\nRestauración finalizada."
+    }
 
-load_filestore(){
-    if [ -d backup_tmp/filestore ]; then
-        echo "Copiando filestore..."
-        # Contar archivos en el filestore
-        file_count=$(find backup_tmp/filestore -type f | wc -l)
-        echo "Cantidad de archivos en filestore: $file_count"
-        # Consultar cantidad de adjuntos en la base de datos restaurada
-        attachment_count=$(docker exec -i ${database_container} psql -U odoo -d ${database_name} -t -c "SELECT count(*) FROM ir_attachment;" | grep -Eo '^[ 0-9]+$' | tr -d ' ')
-        echo "Cantidad de registros en ir_attachment: $attachment_count"
-        echo "ADVERTENCIA: Si la cantidad de archivos y registros difiere mucho, el filestore podría estar incompleto. No se puede verificar integridad total."
-        docker exec -u odoo -i ${odoo_container} mkdir -p /var/lib/odoo/filestore/${database_name}
-        docker cp backup_tmp/filestore/. ${odoo_container}:/var/lib/odoo/filestore/${database_name}
-        echo "Filestore copiado."
+    main
     else
         echo "No se encontró filestore. Saltando."
     fi
