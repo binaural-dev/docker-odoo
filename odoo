@@ -119,6 +119,30 @@ def run_bash():
     os.system(f"docker exec -uroot -it {PROJECT_NAME} bash")
 
 
+def _overwrite_template_file(template_path, output_path):
+    """
+    Overwrites the template file with the provided replacements.
+    """
+    try:
+        if not os.path.exists(template_path):
+            raise BaseException(
+                f"Error #3: template_path: {template_path} does not exist"
+            )
+            
+        if not os.path.exists(output_path):
+            raise BaseException(
+                f"Error #3: output_path: {output_path} does not exist"
+            )
+
+        with open(template_path, "r") as template_file:
+            content = template_file.read()
+
+        with open(output_path, "w") as output_file:
+            output_file.write(content)
+
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+
 def build_odoo(no_cache):
     ODOO_VERSION = os.getenv("ODOO_VERSION")
     RESOURCES_DIR = "/.resources"
@@ -133,47 +157,47 @@ def build_odoo(no_cache):
         return
 
     try:
-        with open(file_path + RESOURCES_DIR + "/Dockerfile", "w") as Dockerfile:
-            dockerfile_path = (
-                file_path
-                + RESOURCES_DIR
-                + "/dockerfiles/"
-                + ODOO_VERSION
-                + "_Dockerfile"
-            )
-            dockerfile_template_path = (
-                file_path + RESOURCES_DIR + "/Dockerfile.template"
-            )
+        print()
+        print("Retrieving requirement.txt With Right Version...")
 
-            if not os.path.exists(dockerfile_path):
-                raise BaseException(
-                    f"Error #3: Dockerfile for {ODOO_VERSION} does not exist"
-                )
+        python_requirement_version_path = (file_path + RESOURCES_DIR + "/requirements/" + ODOO_VERSION + "_requirements.txt")
 
-            if not os.path.exists(dockerfile_template_path):
-                raise BaseException(f"Error #3: Dockerfile.template does not exist")
+        python_requirement_path = (file_path + RESOURCES_DIR + "/requirements.txt")
 
-            with open(dockerfile_path, "r") as dockerfile_version:
-                Dockerfile.write(dockerfile_version.read())
-                Dockerfile.write(
-                    "\n"
-                )  # Opcional: agregar un salto de línea entre los archivos
+        _overwrite_template_file(
+            python_requirement_version_path, python_requirement_path
+        )
 
-            with open(dockerfile_template_path, "r") as dockerfile_template:
-                Dockerfile.write(dockerfile_template.read())
-                Dockerfile.write(
-                    "\n"
-                )  # Opcional: agregar un salto de línea entre los archivos
+        print("Requirements.txt overwritten with version-specific requirements.")
+        print()
+        print()
+        
+        print("Retrieving Dockerfile Odoo With Right Version...")
 
-    except FileNotFoundError as e:
-        print(e)
-    if no_cache:
-        print("Construyendo Odoo sin caché...")
-        os.system("docker compose build --no-cache")
-    else:
+        # Overwrite the Dockerfile with the version-specific Dockerfile and the template
+        dockerfile_version_path = (file_path + RESOURCES_DIR + "/dockerfiles/" + ODOO_VERSION + "_Dockerfile")
+
+        dockerfile_path = (file_path + RESOURCES_DIR + "/Dockerfile")
+
+        _overwrite_template_file(
+            dockerfile_version_path, dockerfile_path
+        )
+        
+        print("Dockerfile overwritten with version-specific Dockerfile.")
+        print()
+        print()
+        
+        if no_cache:
+            print("Construyendo Odoo sin caché...")
+            os.system("docker compose build --no-cache")
+            return True
+
         print("Construyendo Odoo con caché...")
         os.system("docker compose build")
 
+        return True
+    except Exception as e:
+        print(e)
 
 def init_addons():
     required_sources = {

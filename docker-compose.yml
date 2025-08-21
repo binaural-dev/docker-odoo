@@ -67,7 +67,7 @@ services:
     volumes:
       - odoo-web:/var/lib/odoo
       - odoo-bincli:/home/odoo/bincli_fork
-      - odoo-src:/home/odoo/src
+      - ./src:/home/odoo/src
       - odoo_data:/home/odoo/data
       - py3:/usr/local/lib/
       - py:/usr/lib/
@@ -114,7 +114,7 @@ volumes:
   py:
   odoo-pgadmin:
   odoo-bincli:
-  odoo-src:
+  # odoo-src:
 
 networks:
   binaural:

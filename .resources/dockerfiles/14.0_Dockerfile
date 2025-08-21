@@ -1,9 +1,10 @@
+##### 14.0_Dockerfile #####
 FROM debian:bullseye-slim
 ENV LANG C.UTF-8
 USER root
 
 COPY ./_bincli_fork /home/odoo/bincli_fork
-COPY ./src /home/odoo/src
+# COPY ./src /home/odoo/src
 
 # Enable Odoo user and filestore
 RUN useradd -md /home/odoo -s /bin/false odoo \
@@ -72,7 +73,78 @@ RUN curl -o odoo.deb -sSL http://nightly.odoo.com/14.0/nightly/deb/odoo_14.0.lat
     && rm -rf /var/lib/apt/lists/* odoo.deb
 
 # Docker 14: Migrated layer
-ADD https://raw.githubusercontent.com/odoo/odoo/14.0/requirements.txt /root/requirements.txt
+# COPY https://raw.githubusercontent.com/odoo/odoo/14.0/requirements.txt /root/requirements.txt
+COPY ./.resources/requirements.txt /root/requirements.txt
 RUN python3 -m pip install --no-cache-dir setuptools wheel pandas && \
     python3 -m pip install --no-cache-dir -r /root/requirements.txt && \
     python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1
+
+################################# Dockerfile.template ####################################
+
+RUN python3 -m pip install --no-cache-dir \
+    watchdog \
+    pandas \
+    bravado_core \
+    swagger_spec_validator \
+    jsonschema==3.2.0 \
+    pdf2image \
+    xmltodict \
+    git+https://github.com/binaural-dev/python-sdk.git \
+    cryptography==35.0.0 \
+    html2text \
+    bcrypt \
+    cairosvg
+
+ENV SOURCES /home/odoo/src
+ENV RESOURCES /home/odoo/.resources
+ENV CONFIG_DIR /home/odoo/.config
+ENV DATA_DIR /home/odoo/data
+ENV ODOO_RC=$CONFIG_DIR/odoo.conf
+
+RUN mkdir -p $RESOURCES && \
+    mkdir -p $CONFIG_DIR && \
+    mkdir -p $DATA_DIR && \
+    chown -R odoo.odoo /home/odoo && \
+    sync
+
+# Default values of env variables used by scripts
+# IMPORTANTE: No agregar líneas ENV vacías. Si necesitas agregar más variables, hazlo aquí, todas en una sola instrucción ENV.
+ENV ODOO_SERVER=odoo \
+    UNACCENT=True \
+    PROXY_MODE=True \
+    WITHOUT_DEMO=True \
+    WAIT_PG=true \
+    PGUSER=odoo \
+    PGPASSWORD=odoo \
+    PGHOST=db \
+    PGPORT=5432 \
+    ADMIN_PASSWORD=admin
+
+# Usefull aliases
+RUN echo "alias odoo-shell='odoo shell --shell-interface ipython --no-http --limit-memory-hard=0 --limit-memory-soft=0'" >> /home/odoo/.bashrc
+
+# Image building scripts
+COPY .resources/bin/* /usr/local/bin/
+COPY .resources/conf.d $RESOURCES/conf.d
+COPY .resources/entrypoint.d $RESOURCES/entrypoint.d
+COPY .resources/entrypoint.sh $RESOURCES/entrypoint.sh
+RUN    ln /usr/local/bin/direxec $RESOURCES/entrypoint \
+    && ln /usr/local/bin/direxec $RESOURCES/build \
+    && chown -R odoo.odoo $RESOURCES \
+    && chmod -R a+rx $RESOURCES/entrypoint* $RESOURCES/build* /usr/local/bin \
+    && sync
+
+RUN chown -R odoo.odoo $RESOURCES
+# Run build scripts
+RUN $RESOURCES/build && sync
+
+# Expose Odoo services
+EXPOSE 8069 8071 8072
+
+# Entrypoint
+WORKDIR "/home/odoo"
+USER odoo
+ENTRYPOINT ["/home/odoo/.resources/entrypoint.sh"]
+CMD ["odoo"]
+
+################################# Dockerfile.template ####################################
