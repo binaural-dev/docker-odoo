@@ -30,17 +30,28 @@ done
 # ✅ Verificación de argumentos obligatorios
 if [[ -z "$ODOO_CONTAINER" || -z "$TEST_TAGS" || -z "$MODULES" || -z "$DB_NAME" ]]; then
   echo "❌ Faltan argumentos obligatorios."
-  echo "Uso: ./run_coverage.sh --odoo_container=... --test_tags=... --modules=... --db_name=..."
+  echo "Uso: ./run_coverage.sh --odoo_container=... --modules=... --db_name=... --test_tags=..."
   exit 1
 fi
 
 # 🧠 Construir rutas para --source
 IFS=',' read -ra MOD_ARRAY <<< "$MODULES"
+
 SOURCE_PATHS=""
-for mod in "${MOD_ARRAY[@]}"; do
-  SOURCE_PATHS+="/home/odoo/src/custom/$mod,"
+MODULE_NAMES=""
+
+for mod_path in "${MOD_ARRAY[@]}"; do
+  SOURCE_PATHS+="/home/odoo/src/$mod_path,"
+  
+  # Extraer el nombre del módulo (último segmento del path)
+  mod_name=$(basename "$mod_path")
+  MODULE_NAMES+="$mod_name,"
 done
-SOURCE_PATHS=${SOURCE_PATHS::-1}  # Eliminar última coma
+
+# Eliminar la última coma de ambas variables
+SOURCE_PATHS=${SOURCE_PATHS::-1}
+MODULE_NAMES=${MODULE_NAMES::-1}
+COVERAGERC_PATH=/home/odoo/.coveragerc
 
 echo "✅ Rutas de origen para coverage: $SOURCE_PATHS"
 echo ""
@@ -53,30 +64,37 @@ echo "
     Ejemplo: --modules=devops-secure-test-integra-a/tests_module_cicd,binaural/tests_module_cicd
 
 
-    3. El comando va a ejecutar el script habitual para ejecutar las pruebas: 
+    Argumentos:
+     * --odoo_container: $ODOO_CONTAINER
+     * --test_tags: $TEST_TAGS
+     * --source: $SOURCE_PATHS
+     * --db_name: $DB_NAME
 
-    odoo --test-tags="" -i MODULES --without-demo=True --stop-after-init -d 
-
-    Junto el comando para analizar la cobertura de código:
-
-    coverage run y coverage report -m
+     rcfile=$COVERAGERC_PATH
+     source=$SOURCE_PATHS
+     MODULE_NAMES=$MODULE_NAMES
+    
 "
+
 
 # 🚀 Ejecutar Coverage dentro del contenedor
 docker exec -u root -it "$ODOO_CONTAINER" bash -c "
   pip3 install coverage >/dev/null 2>&1 &&
-  coverage erase &&
-  coverage run --source=$SOURCE_PATHS /usr/bin/odoo \
-    --test-tags=$TEST_TAGS \
-    -i $MODULES \
+  python3 -m coverage erase &&
+  python3 -m coverage run --rcfile=$COVERAGERC_PATH --source=$SOURCE_PATHS /usr/bin/odoo \
     --without-demo=True \
     --stop-after-init \
     -d $DB_NAME \
+    -i $MODULE_NAMES \
+    --test-tags=$TEST_TAGS \
     --log-level=test \
     --log-handler=odoo.tests:DEBUG \
-    -p 9999 &&
-  coverage report -m
+    -p 9999
 "
+echo ""
+echo "🚀 Observa el reporte:"
+echo ""
+docker exec -u root -it "$ODOO_CONTAINER" bash -c "python3 -m coverage report -m"
 
 echo ""
 echo ""

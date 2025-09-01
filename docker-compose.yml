@@ -67,6 +67,7 @@ services:
     volumes:
       - odoo-web:/var/lib/odoo
       - ./src:/home/odoo/src
+      - ./.resources/.coveragerc:/home/odoo/.coveragerc
       - odoo_data:/home/odoo/data
       - py3:/usr/local/lib/
       - py:/usr/lib/
