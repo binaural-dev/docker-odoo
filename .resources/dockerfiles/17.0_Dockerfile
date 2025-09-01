@@ -77,7 +77,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
     rm -rf /var/lib/apt/lists/* /tmp/chrome.deb
 
 # Install pip packages
-RUN python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==0.4.7 pandas
+RUN python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==0.4.7 pandas coverage
 
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/17.0/requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
