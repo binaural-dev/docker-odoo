@@ -3,7 +3,12 @@
 import argparse
 import os
 import subprocess
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    raise SystemExit(
+        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
+    )
 from pathlib import Path
 import time
 
@@ -29,22 +34,36 @@ def sync(repo_name, branch, show=False):
     branch_now = values_lines[0].replace("On branch ", "")
 
     submodules = ["integra-addons", "third-party-addons"]
-    print("\r %s: Cambiando a %s                           " % (repo_name, branch), end=" " * 50)
+    print(
+        "\r %s: Cambiando a %s                           " % (repo_name, branch),
+        end=" " * 50,
+    )
     subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
     subprocess.run(["git", "checkout", branch], stdout=stdout, stderr=stderr)
     subprocess.run(["git", "pull"], stdout=stdout, stderr=stderr)
-    print("\r %s: Actualizando %s                          " % (repo_name, branch), end=" " * 50)
+    print(
+        "\r %s: Actualizando %s                          " % (repo_name, branch),
+        end=" " * 50,
+    )
     for submodule in submodules:
-        subprocess.run(["git", "reset", "HEAD", "--", submodule], stdout=stdout, stderr=stderr)
         subprocess.run(
-            ["git", "-C", submodule, "stash", "--include-untracked"], stdout=stdout, stderr=stderr
+            ["git", "reset", "HEAD", "--", submodule], stdout=stdout, stderr=stderr
+        )
+        subprocess.run(
+            ["git", "-C", submodule, "stash", "--include-untracked"],
+            stdout=stdout,
+            stderr=stderr,
         )
         subprocess.run(
             ["git", "submodule", "update", "--init", "--force", "--", submodule],
             stdout=stdout,
             stderr=stderr,
         )
-        print("\r %s: Obteniendo submodulos de %s                     " % (repo_name, branch), end=" " * 50)
+        print(
+            "\r %s: Obteniendo submodulos de %s                     "
+            % (repo_name, branch),
+            end=" " * 50,
+        )
 
     print("")
     for submodule in submodules:
@@ -52,7 +71,9 @@ def sync(repo_name, branch, show=False):
             print("\r %s Sincronizando... " % (submodule), end="")
         commit = ""
         try:
-            with open(repo_path + "/.git/modules/" + submodule + "/HEAD", "r") as Modules:
+            with open(
+                repo_path + "/.git/modules/" + submodule + "/HEAD", "r"
+            ) as Modules:
                 line = Modules.readlines()[0]
                 if line.startswith("ref:"):
                     commit = line.split("/")[2].replace("\n", "")
@@ -79,7 +100,10 @@ def sync(repo_name, branch, show=False):
         except Exception as a:
             print(a)
             if not show:
-                print("\r %s ( %s ) Sincronizado Fallido ❌" % (submodule, commit), end=" " * 30)
+                print(
+                    "\r %s ( %s ) Sincronizado Fallido ❌" % (submodule, commit),
+                    end=" " * 30,
+                )
 
         if not show:
             print("")
@@ -111,24 +135,35 @@ def build_odoo(no_cache):
     try:
         with open(file_path + RESOURCES_DIR + "/Dockerfile", "w") as Dockerfile:
             dockerfile_path = (
-                file_path + RESOURCES_DIR + "/dockerfiles/" + ODOO_VERSION + "_Dockerfile"
+                file_path
+                + RESOURCES_DIR
+                + "/dockerfiles/"
+                + ODOO_VERSION
+                + "_Dockerfile"
             )
-            dockerfile_template_path = file_path + RESOURCES_DIR + "/Dockerfile.template"
-            print(dockerfile_template_path)
+            dockerfile_template_path = (
+                file_path + RESOURCES_DIR + "/Dockerfile.template"
+            )
 
             if not os.path.exists(dockerfile_path):
-                raise BaseException(f"Error #3: Dockerfile for {ODOO_VERSION} does not exist")
+                raise BaseException(
+                    f"Error #3: Dockerfile for {ODOO_VERSION} does not exist"
+                )
 
             if not os.path.exists(dockerfile_template_path):
                 raise BaseException(f"Error #3: Dockerfile.template does not exist")
 
             with open(dockerfile_path, "r") as dockerfile_version:
                 Dockerfile.write(dockerfile_version.read())
-                Dockerfile.write("\n")  # Opcional: agregar un salto de línea entre los archivos
+                Dockerfile.write(
+                    "\n"
+                )  # Opcional: agregar un salto de línea entre los archivos
 
             with open(dockerfile_template_path, "r") as dockerfile_template:
                 Dockerfile.write(dockerfile_template.read())
-                Dockerfile.write("\n")  # Opcional: agregar un salto de línea entre los archivos
+                Dockerfile.write(
+                    "\n"
+                )  # Opcional: agregar un salto de línea entre los archivos
 
     except FileNotFoundError as e:
         print(e)
@@ -141,23 +176,28 @@ def build_odoo(no_cache):
 
 
 def init_addons():
-    required_sources = [
-        "binaural-dev/enterprise",
-        "binaural-dev/integra-addons",
-        "binaural-dev/third-party-addons",
-    ]
+    required_sources = {
+        "binaural": [
+            "binaural-dev/enterprise",
+            "binaural-dev/integra-addons",
+            "binaural-dev/third-party-addons",
+            "binaural-dev/odoo-venezuela",
+        ],
+        "external": ["binaural-dev/odoo-venezuela"],
+        "enterprise": ["binaural-dev/enterprise"],
+    }
+    ENV_TYPE = os.getenv("ENV_TYPE")
     print("Clonando Repositorios")
     ODOO_VERSION = os.getenv("ODOO_VERSION")
     SOURCES = os.path.join(Path(__file__).resolve().parent, "src")
-    ENTERPRISE = os.path.join(SOURCES, "enterprise")
-    INTEGRA = os.path.join(SOURCES, "integra-addons")
-    # THIRD = os.path.join(SOURCES,"third-party")
 
-    for repository in required_sources:
+    for repository in required_sources[ENV_TYPE]:
         name = repository.split("/")[1]
         path = os.path.join(SOURCES, name)
         if not os.path.isdir(os.path.join(SOURCES, name)):
-            os.system(f"git clone -b '{ODOO_VERSION}' git@github.com:{repository}.git {path}")
+            os.system(
+                f"git clone -b '{ODOO_VERSION}' git@github.com:{repository}.git {path}"
+            )
         else:
             print(f"{repository} exists")
 
@@ -176,6 +216,11 @@ def restart_odoo():
     print("Reiniciando Odoo...")
     os.system("docker compose down")
     os.system("docker compose up -d")
+
+def show_logs():
+    print("Mostrando logs de Odoo (últimos 10, en tiempo real)...")
+    os.system("docker compose logs --tail 10 -f")
+
 
 def psql(d):
     print(d)
@@ -201,9 +246,14 @@ def main():
     subparsers.add_parser("bash", help="Bash")
     subparsers.add_parser("init", help="Clone repositories")
 
+    # Subparser para el comando "logs"
+    subparsers.add_parser("logs", help="Muestra los últimos 10 logs en tiempo real")
+
     # Subparser para el comando "build"
     build_parser = subparsers.add_parser("build", help="Construye Odoo")
-    build_parser.add_argument("--no-cache", action="store_true", help="Construir sin usar caché")
+    build_parser.add_argument(
+        "--no-cache", action="store_true", help="Construir sin usar caché"
+    )
 
     psql_parser = subparsers.add_parser("psql", help="psql")
     psql_parser.add_argument("-d", required=True, help="Database name")
@@ -233,6 +283,9 @@ def main():
         psql(args.d)
     elif args.action == "sync":
         sync(args.r, args.b, show=args.v)
+
+    elif args.action == "logs":
+        show_logs()
 
 
 if __name__ == "__main__":

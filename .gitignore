@@ -1,6 +1,7 @@
 .env
 src/enterprise
 src/integra-addons
+src/odoo-venezuela
 src/third-party-addons
 src/custom/*
 .resources/Dockerfile
