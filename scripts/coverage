@@ -21,7 +21,7 @@ for arg in "$@"; do
       ;;
     *)
       echo "❌ Argumento desconocido: $arg"
-      echo "Uso: ./run_coverage.sh --odoo_container=... --test_tags=... --modules=... --db_name=..."
+      echo "Uso: ./coverage --odoo_container=... --test_tags=... --modules=... --db_name=..."
       exit 1
       ;;
   esac
@@ -30,7 +30,7 @@ done
 # ✅ Verificación de argumentos obligatorios
 if [[ -z "$ODOO_CONTAINER" || -z "$TEST_TAGS" || -z "$MODULES" || -z "$DB_NAME" ]]; then
   echo "❌ Faltan argumentos obligatorios."
-  echo "Uso: ./run_coverage.sh --odoo_container=... --modules=... --db_name=... --test_tags=..."
+  echo "Uso: ./coverage --odoo_container=... --modules=... --db_name=... --test_tags=..."
   exit 1
 fi
 
