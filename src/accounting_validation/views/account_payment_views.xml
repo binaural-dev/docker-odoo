@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_account_payment_form_inherit" model="ir.ui.view">
+        <field name="name">account.payment.form.inherit.validation</field>
+        <field name="model">account.payment</field>
+        <field name="inherit_id" ref="account.view_account_payment_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='payment_type']" position="after">
+                <field name="finance_validation" readonly="1"/>
+            </xpath>
+            <xpath expr="//header" position="inside">
+                <button name="action_validate_finance"
+                        string="Validar Finanzas"
+                        type="object"
+                        class="btn-primary"
+                        invisible="finance_validation"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
