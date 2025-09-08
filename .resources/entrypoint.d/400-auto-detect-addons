@@ -27,6 +27,11 @@ THIRD_PATH = os.path.join(SOURCES, "third-party-addons")
 if os.path.isdir(THIRD_PATH):
     addons.insert(0, os.path.join(THIRD_PATH))
 
+# Odoo Venezuela public modules
+VENEZUELA_PATH = os.path.join(SOURCES, "odoo-venezuela")
+if os.path.isdir(VENEZUELA_PATH):
+    addons.insert(0, os.path.join(VENEZUELA_PATH))
+
 # Project repositories
 repo_addons = []
 
