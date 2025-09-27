@@ -33,7 +33,10 @@ def sync(repo_name, branch, show=False):
     values_lines = value.stdout.decode().split("\n")
     branch_now = values_lines[0].replace("On branch ", "")
 
-    submodules = ["integra-addons", "third-party-addons"]
+    submodules = ["integra-addons", "third-party-addons", "odoo-venezuela"]
+    submodule_gitmodules_map = {
+        "odoo-venezuela": "homo-addons"
+    }
     print(
         "\r %s: Cambiando a %s                           " % (repo_name, branch),
         end=" " * 50,
@@ -70,9 +73,10 @@ def sync(repo_name, branch, show=False):
         if not show:
             print("\r %s Sincronizando... " % (submodule), end="")
         commit = ""
+        submodule_internal = submodule_gitmodules_map.get(submodule, submodule)
         try:
             with open(
-                repo_path + "/.git/modules/" + submodule + "/HEAD", "r"
+                repo_path + "/.git/modules/" + submodule_internal + "/HEAD", "r"
             ) as Modules:
                 line = Modules.readlines()[0]
                 if line.startswith("ref:"):
