@@ -176,7 +176,7 @@ def build_odoo(no_cache):
 
 
 def init_addons():
-    ORG_NAME = os.getenv("ORG_NAME")
+    ORG_NAME = os.getenv("ORG_NAME") or "binaural-dev"
     required_sources = {
         "binaural": [
             f"{ORG_NAME}/enterprise",
