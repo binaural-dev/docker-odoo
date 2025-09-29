@@ -34,6 +34,9 @@ def sync(repo_name, branch, show=False):
     branch_now = values_lines[0].replace("On branch ", "")
 
     submodules = ["integra-addons", "third-party-addons", "odoo-venezuela"]
+    # Mapping from submodule names to their corresponding internal Git module directory names.
+    # This is necessary when the submodule's directory name in .gitmodules differs from the name used in the codebase.
+    # For example, "odoo-venezuela" is referred to as "homo-addons" in the .gitmodules file.
     submodule_gitmodules_map = {
         "odoo-venezuela": "homo-addons"
     }
