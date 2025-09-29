@@ -11,7 +11,11 @@ from dotenv import load_dotenv
 @click.option("-c", required=True, help="Container name")
 def run_command(d, i, c):
     load_dotenv()
-    os.system(f"docker exec -uroot -it {c} odoo -i {i} -d {d} --load=base,web,views_migration_17 --stop-after-init --without-demo=1")
+    command = (
+        f"docker exec -uroot -it {c} odoo -i {i} -d {d} "
+        "--load=base,web,views_migration_17 --stop-after-init --without-demo=1"
+    )
+    os.system(command)
 
 if __name__ == "__main__":
     run_command()
