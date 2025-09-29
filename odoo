@@ -183,15 +183,16 @@ def build_odoo(no_cache):
 
 
 def init_addons():
+    ORG_NAME = os.getenv("ORG_NAME") or "binaural-dev"
     required_sources = {
         "binaural": [
-            "binaural-dev/enterprise",
-            "binaural-dev/integra-addons",
-            "binaural-dev/third-party-addons",
-            "binaural-dev/odoo-venezuela",
+            f"{ORG_NAME}/enterprise",
+            f"{ORG_NAME}/integra-addons",
+            f"{ORG_NAME}/third-party-addons",
+            f"{ORG_NAME}/odoo-venezuela",
         ],
-        "external": ["binaural-dev/odoo-venezuela"],
-        "enterprise": ["binaural-dev/enterprise"],
+        "external": [f"{ORG_NAME}/odoo-venezuela"],
+        "enterprise": [f"{ORG_NAME}/enterprise"],
     }
     ENV_TYPE = os.getenv("ENV_TYPE")
     print("Clonando Repositorios")
