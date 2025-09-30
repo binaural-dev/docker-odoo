@@ -9,14 +9,14 @@ from dotenv import load_dotenv
 @click.option("-d")
 @click.option("-l", default="admin", help="User login")
 @click.argument("args", nargs=-1)
-def run_command(d, login, args):
+def run_command(d, l, args):
     load_dotenv()
     PROJECT_NAME = os.getenv("PROJECT_NAME")
     POSTGRES_USER = os.getenv("POSTGRES_USER")
     POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
     RESET_PASSWORD = os.getenv("RESET_PASSWORD")
     password = f"'{RESET_PASSWORD}'"
-    login_quoted = f"'{login}'"
+    login_quoted = f"'{l}'"
     command = (
         f"docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} "
         f"psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d {d} -c "
