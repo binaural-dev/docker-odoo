@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 @click.option("-d")
 @click.option("-l", default="admin")
 @click.argument("args", nargs=-1)
-def run_command(d,l, args):
+def run_command(d, l, args):
     load_dotenv()
     PROJECT_NAME = os.getenv("PROJECT_NAME")
     POSTGRES_USER = os.getenv("POSTGRES_USER")
