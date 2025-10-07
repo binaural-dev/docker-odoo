@@ -10,7 +10,6 @@ except ModuleNotFoundError:
         "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
     )
 from pathlib import Path
-import time
 
 
 def sync(repo_name, branch, show=False):
@@ -33,7 +32,13 @@ def sync(repo_name, branch, show=False):
     values_lines = value.stdout.decode().split("\n")
     branch_now = values_lines[0].replace("On branch ", "")
 
-    submodules = ["integra-addons", "third-party-addons"]
+    submodules = ["integra-addons", "third-party-addons", "odoo-venezuela"]
+    # Mapping from submodule names to their corresponding internal Git module directory names.
+    # This is necessary when the submodule's directory name in .gitmodules differs from the name used in the codebase.
+    # For example, "odoo-venezuela" is referred to as "homo-addons" in the .gitmodules file.
+    submodule_gitmodules_map = {
+        "odoo-venezuela": "homo-addons"
+    }
     print(
         "\r %s: Cambiando a %s                           " % (repo_name, branch),
         end=" " * 50,
@@ -70,9 +75,10 @@ def sync(repo_name, branch, show=False):
         if not show:
             print("\r %s Sincronizando... " % (submodule), end="")
         commit = ""
+        submodule_internal = submodule_gitmodules_map.get(submodule, submodule)
         try:
             with open(
-                repo_path + "/.git/modules/" + submodule + "/HEAD", "r"
+                repo_path + "/.git/modules/" + submodule_internal + "/HEAD", "r"
             ) as Modules:
                 line = Modules.readlines()[0]
                 if line.startswith("ref:"):
@@ -151,7 +157,7 @@ def build_odoo(no_cache):
                 )
 
             if not os.path.exists(dockerfile_template_path):
-                raise BaseException(f"Error #3: Dockerfile.template does not exist")
+                raise BaseException("Error #3: Dockerfile.template does not exist")
 
             with open(dockerfile_path, "r") as dockerfile_version:
                 Dockerfile.write(dockerfile_version.read())
@@ -176,15 +182,16 @@ def build_odoo(no_cache):
 
 
 def init_addons():
+    ORG_NAME = os.getenv("ORG_NAME") or "binaural-dev"
     required_sources = {
         "binaural": [
-            "binaural-dev/enterprise",
-            "binaural-dev/integra-addons",
-            "binaural-dev/third-party-addons",
-            "binaural-dev/odoo-venezuela",
+            f"{ORG_NAME}/enterprise",
+            f"{ORG_NAME}/integra-addons",
+            f"{ORG_NAME}/third-party-addons",
+            f"{ORG_NAME}/odoo-venezuela",
         ],
-        "external": ["binaural-dev/odoo-venezuela"],
-        "enterprise": ["binaural-dev/enterprise"],
+        "external": [f"{ORG_NAME}/odoo-venezuela"],
+        "enterprise": [f"{ORG_NAME}/enterprise"],
     }
     ENV_TYPE = os.getenv("ENV_TYPE")
     print("Clonando Repositorios")
