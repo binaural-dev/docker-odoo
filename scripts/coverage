@@ -1,0 +1,105 @@
+#!/bin/bash
+
+# 🛡️ Validación y parsing de argumentos
+for arg in "$@"; do
+  case $arg in
+    --odoo_container=*)
+      ODOO_CONTAINER="${arg#*=}"
+      shift
+      ;;
+    --test_tags=*)
+      TEST_TAGS="${arg#*=}"
+      shift
+      ;;
+    --modules=*)
+      MODULES="${arg#*=}"
+      shift
+      ;;
+    --db_name=*)
+      DB_NAME="${arg#*=}"
+      shift
+      ;;
+    *)
+      echo "❌ Argumento desconocido: $arg"
+      echo "Uso: ./coverage --odoo_container=... --test_tags=... --modules=... --db_name=..."
+      exit 1
+      ;;
+  esac
+done
+
+# ✅ Verificación de argumentos obligatorios
+if [[ -z "$ODOO_CONTAINER" || -z "$TEST_TAGS" || -z "$MODULES" || -z "$DB_NAME" ]]; then
+  echo "❌ Faltan argumentos obligatorios."
+  echo "Uso: ./coverage --odoo_container=... --modules=... --db_name=... --test_tags=..."
+  exit 1
+fi
+
+# 🧠 Construir rutas para --source
+IFS=',' read -ra MOD_ARRAY <<< "$MODULES"
+
+SOURCE_PATHS=""
+MODULE_NAMES=""
+
+for mod_path in "${MOD_ARRAY[@]}"; do
+  SOURCE_PATHS+="/home/odoo/src/$mod_path,"
+  
+  # Extraer el nombre del módulo (último segmento del path)
+  mod_name=$(basename "$mod_path")
+  MODULE_NAMES+="$mod_name,"
+done
+
+# Eliminar la última coma de ambas variables
+SOURCE_PATHS=${SOURCE_PATHS::-1}
+MODULE_NAMES=${MODULE_NAMES::-1}
+COVERAGERC_PATH=/home/odoo/.coveragerc
+
+echo "✅ Rutas de origen para coverage: $SOURCE_PATHS"
+echo ""
+
+echo "
+    1. Sino sabes el nombre del contenedor, puedes encontrarlo ejecutando 'docker ps' en tu terminal. Recuerda que debe ser el que tenga en la columna service la palabra "Odoo".
+    2. Asegúrate de que el contenedor esté en ejecución antes de ejecutar este script.
+    3. En el argumento --modules recuerda colocar el nombre de la carpeta del proyecto seguido del nombre del modulo, puedes agregar mas de un directorio separado por coma.
+
+    Ejemplo: --modules=devops-secure-test-integra-a/tests_module_cicd,binaural/tests_module_cicd
+
+
+    Argumentos:
+     * --odoo_container: $ODOO_CONTAINER
+     * --test_tags: $TEST_TAGS
+     * --source: $SOURCE_PATHS
+     * --db_name: $DB_NAME
+
+     rcfile=$COVERAGERC_PATH
+     source=$SOURCE_PATHS
+     MODULE_NAMES=$MODULE_NAMES
+    
+"
+
+
+# 🚀 Ejecutar Coverage dentro del contenedor
+docker exec -u root -it "$ODOO_CONTAINER" bash -c "
+  pip3 install coverage >/dev/null 2>&1 &&
+  python3 -m coverage erase &&
+  python3 -m coverage run --rcfile=$COVERAGERC_PATH --source=$SOURCE_PATHS /usr/bin/odoo \
+    --without-demo=True \
+    --stop-after-init \
+    -d $DB_NAME \
+    -i $MODULE_NAMES \
+    --test-tags=$TEST_TAGS \
+    --log-level=test \
+    --log-handler=odoo.tests:DEBUG \
+    -p 9999
+"
+echo ""
+echo "🚀 Observa el reporte:"
+echo ""
+docker exec -u root -it "$ODOO_CONTAINER" bash -c "python3 -m coverage report -m"
+
+echo ""
+echo ""
+echo ""
+echo '✅ Los resultados del reporte están listos. Ahora manualmente ve a la tarea relacionada he ingresa el valor total del porcentaje de cobertura.'
+echo ""
+echo ""
+echo ""

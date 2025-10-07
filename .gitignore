@@ -4,5 +4,6 @@ src/integra-addons
 src/odoo-venezuela
 src/third-party-addons
 src/custom/*
+src/ext_*
 .resources/Dockerfile
 **/.vscode/
