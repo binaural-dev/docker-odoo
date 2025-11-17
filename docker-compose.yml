@@ -71,7 +71,7 @@ services:
       - odoo_data:/home/odoo/data
       - py3:/usr/local/lib/
       - py:/usr/lib/
-    command: odoo --dev=all
+    command: odoo server --dev=all
     labels:
       - traefik.enable=true
       - traefik.frontend.port=8069
