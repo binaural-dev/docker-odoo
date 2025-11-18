@@ -21,7 +21,11 @@ services:
     networks:
       - binaural
   db:
-    image: postgres:${POSTGRES_IMG_VERSION}
+    build:
+      context: .
+      dockerfile: ./.resources/db.Dockerfile
+      args:
+        POSTGRES_IMG_VERSION: ${POSTGRES_IMG_VERSION}
     container_name: ${PROJECT_NAME}_db
     environment:
       - POSTGRES_DB=${POSTGRES_DB}
