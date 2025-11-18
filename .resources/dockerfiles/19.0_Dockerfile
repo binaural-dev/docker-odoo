@@ -99,8 +99,14 @@ RUN python3 -m pip install watchdog --break-system-packages
 
 RUN python3 -m pip install pyinotify --break-system-packages
 
+RUN python3 -m pip install pandas --break-system-packages
+
 RUN /usr/bin/python3 -m pip install watchdog --break-system-packages
 
 RUN /usr/bin/python3 -m pip install pyinotify --break-system-packages
+
+RUN /usr/bin/python3 -m pip install pandas --break-system-packages
+
+RUN apt update && apt install -y python3-pandas
 
 ENV PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH
