@@ -1,7 +1,7 @@
 services:
   traefik:
     container_name: ${PROJECT_NAME}_traefik
-    image: traefik:v2.10
+    image: traefik:latest
     command:
       - "--api.insecure=true"
       - "--providers.docker=true"
@@ -33,7 +33,7 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
-      - odoo-db:/var/lib/postgresql/data/pgdata
+      - odoo-db:/var/lib/postgresql/data
     networks:
       - binaural
   pgadmin:
