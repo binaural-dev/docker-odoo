@@ -32,6 +32,11 @@ VENEZUELA_PATH = os.path.join(SOURCES, "odoo-venezuela")
 if os.path.isdir(VENEZUELA_PATH):
     addons.insert(0, os.path.join(VENEZUELA_PATH))
 
+for d in sorted(os.listdir(SOURCES)):
+    ext_path = os.path.join(SOURCES, d)
+    if os.path.isdir(ext_path) and d.startswith("ext_"):
+        addons.insert(0, ext_path)
+
 # Project repositories
 repo_addons = []
 
@@ -51,7 +56,7 @@ if os.path.isdir(CUSTOM):
                 [
                     "pip",
                     "install",
-                    "--user",
+                    # "--user",
                     "--no-cache-dir",
                     "-r",
                     requirement_file,

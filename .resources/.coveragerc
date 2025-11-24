@@ -1,0 +1,18 @@
+[run]
+branch = True
+
+[report]
+omit =
+    */__init__.py
+    */__manifest__.py
+    */tests/*
+    */test/*
+exclude_lines =
+    ^\s*"""[^"]*"""$
+    ^\s*'''[^']*'''$
+    pragma: no cover
+    if __name__ == "__main__":
+    raise NotImplementedError
+    except Exception as e:
+    def __repr__
+    def __str__
