@@ -13,42 +13,13 @@ services:
       - traefik.frontend.rule=Host:traefik.localhost
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    restart: unless-stopped
     # para que funcione la solución *.localhost
     # network_mode: "host"
     ports:
       - "${TRAEFIK_HOST_PORT}:${TRAEFIK_SERVICE_CONTAINER_PORT}"
     networks:
       - binaural
-  db:
-    build:
-      context: .
-      dockerfile: ./.resources/db.Dockerfile
-      args:
-        POSTGRES_IMG_VERSION: ${POSTGRES_IMG_VERSION}
-    container_name: ${PROJECT_NAME}_db
-    environment:
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - PGDATA=/var/lib/postgresql/data/pgdata
-    volumes:
-      - odoo-db:/var/lib/postgresql/data
-    networks:
-      - binaural
-  pgadmin:
-    container_name: ${PROJECT_NAME}_pgadmin_container
-    image: dpage/pgadmin4
-    ports:
-      - "${PG_ADMIN_HOST_PORT}:${PG_ADMIN_SERVICE_CONTAINER_PORT}"
-    environment:
-      PGADMIN_DEFAULT_EMAIL: binaural.ca@gmail.com
-      PGADMIN_DEFAULT_PASSWORD: odoo
-      PGADMIN_CONFIG_SERVER_MODE: "False"
-    volumes:
-      - odoo-pgadmin:/root/.pgadmin
-    networks:
-      - binaural
+    restart: always
   dns:
     image: cytopia/bind:alpine-0.30
     environment:
@@ -57,6 +28,7 @@ services:
     networks:
       binaural:
         ipv4_address: 172.20.${ODOO_MINOR}.10
+    restart: always
   odoo:
     container_name: ${PROJECT_NAME}
     build:
@@ -65,7 +37,6 @@ services:
     ports:
       - "${PORT_SERVICE_HOST_ODOO}:${PORT_SERVICE_CONTAINER_ODOO}"
     depends_on:
-      - db
       - dns
       - traefik
     volumes:
@@ -116,10 +87,10 @@ services:
       - 172.20.${ODOO_MINOR}.10
     networks:
       binaural:
+    restart: always
 
 volumes:
   odoo-web:
-  odoo-db:
   odoo_data:
   py3:
   py:
