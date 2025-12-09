@@ -1,6 +1,5 @@
 services:
   traefik:
-    container_name: ${PROJECT_NAME}_traefik
     image: traefik:latest
     command:
       - "--api.insecure=true"
@@ -16,27 +15,41 @@ services:
     # para que funcione la solución *.localhost
     # network_mode: "host"
     ports:
-      - "${TRAEFIK_HOST_PORT}:${TRAEFIK_SERVICE_CONTAINER_PORT}"
+      - "90:8080"
     networks:
       - binaural
     restart: always
   dns:
     image: cytopia/bind:alpine-0.30
     environment:
-      DNS_A: "*.odoo.localhost=172.20.${ODOO_MINOR}.1"
+      DNS_A: "*.odoo.localhost=172.20.18.1"
       DNS_FORWARDER: 127.0.0.11
     networks:
       binaural:
-        ipv4_address: 172.20.${ODOO_MINOR}.10
+        ipv4_address: 172.20.18.10
+    restart: always
+  db:
+    image: local_db:16.0
+    environment:
+      - POSTGRES_DB=postgres
+      - POSTGRES_PASSWORD=odoo
+      - POSTGRES_USER=odoo
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - odoo-db:/var/lib/postgresql/data
+    networks:
+      - binaural
+    deploy:
+      placement:
+        constraints:
+          - node.labels.role == leader_node
     restart: always
   odoo:
-    container_name: ${PROJECT_NAME}
-    build:
-      context: .
-      dockerfile: ./.resources/Dockerfile
+    image: local_odoo:18.0
     ports:
-      - "${PORT_SERVICE_HOST_ODOO}:${PORT_SERVICE_CONTAINER_ODOO}"
+      - "80:8069"
     depends_on:
+      - db
       - dns
       - traefik
     volumes:
@@ -69,27 +82,32 @@ services:
         # pip install --user --no-cache-dir pyopenssl
       SMTP_SERVER: mailhog
       SMTP_PORT: 1025
-      DBFILTER: ${DBFILTER}
-      SERVER_WIDE_MODULES: ${SERVER_WIDE_MODULES}
-      MAX_CRON_THREADS: ${MAX_CRON_THREADS}
-      WORKERS: ${WORKERS}
-      LIST_DB: ${LIST_DB}
-      WITHOUT_DEMO: ${WITHOUT_DEMO}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      PROXY_MODE: ${PROXY_MODE}
-      SERVER_MODE: ${SERVER_MODE}
-      AEROO_DOCS_HOST: ${AEROO_DOCS_HOST}
-      LIMIT_TIME_REAL_CRON: ${LIMIT_TIME_REAL_CRON}
-      LIMIT_TIME_REAL: ${LIMIT_TIME_REAL}
-      UNACCENT: ${UNACCENT}
+      DBFILTER:
+      SERVER_WIDE_MODULES:
+      MAX_CRON_THREADS: 0
+      WORKERS: 0
+      LIST_DB: 1
+      WITHOUT_DEMO: 0
+      ADMIN_PASSWORD: admin
+      PROXY_MODE: 1
+      SERVER_MODE: test
+      AEROO_DOCS_HOST: aeroo
+      LIMIT_TIME_REAL_CRON: 0
+      LIMIT_TIME_REAL: 999999999999
+      UNACCENT: 0
       LOG_LEVEL: info
     dns:
-      - 172.20.${ODOO_MINOR}.10
+      - 172.20.18.10
     networks:
       binaural:
+    deploy:
+      placement:
+        constraints:
+          - node.labels.role == db_node
     restart: always
 
 volumes:
+  odoo-db:
   odoo-web:
   odoo_data:
   py3:
@@ -98,9 +116,8 @@ volumes:
 
 networks:
   binaural:
-    driver: bridge
-    external: false
-    name: odoo-${ODOO_VERSION}
-    ipam:
-      config:
-        - subnet: 172.20.${ODOO_MINOR}.0/24
+    driver: overlay
+    # external: false
+    # ipam:
+    #   config:
+    #     - subnet: 172.20.18.0/24
