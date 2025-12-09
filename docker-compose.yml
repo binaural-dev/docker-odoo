@@ -1,33 +1,4 @@
 services:
-  traefik:
-    image: traefik:latest
-    command:
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-    labels:
-      - traefik.enable=true
-      - traefik.port=8080
-      - traefik.frontend.rule=Host:traefik.localhost
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    # para que funcione la solución *.localhost
-    # network_mode: "host"
-    ports:
-      - "90:8080"
-    networks:
-      - binaural
-    restart: always
-  dns:
-    image: cytopia/bind:alpine-0.30
-    environment:
-      DNS_A: "*.odoo.localhost=172.20.18.1"
-      DNS_FORWARDER: 127.0.0.11
-    networks:
-      binaural:
-        ipv4_address: 172.20.18.10
-    restart: always
   db:
     image: local_db:16.0
     environment:
@@ -42,16 +13,13 @@ services:
     deploy:
       placement:
         constraints:
-          - node.labels.role == leader_node
-    restart: always
+          - node.labels.role == db_node
+      restart_policy:
+        condition: on-failure
   odoo:
     image: local_odoo:18.0
     ports:
       - "80:8069"
-    depends_on:
-      - db
-      - dns
-      - traefik
     volumes:
       - odoo-web:/var/lib/odoo
       - ./src:/home/odoo/src
@@ -62,15 +30,15 @@ services:
     command: odoo server --dev=all
     labels:
       - traefik.enable=true
-      - traefik.frontend.port=8069
-      - traefik.frontend.rule=HostRegexp:$DOMAIN,{subdomain:[a-z0-9-_]+}.$DOMAIN
-      # - traefik.frontend.priority=10
+      - traefik.http.port=8069
+      - traefik.http.rule=HostRegexp:$DOMAIN,{subdomain:[a-z0-9-_]+}.$DOMAIN
+      # - traefik.http.priority=10
       # - traefik.longpolling.port=8072
       # - traefik.longpolling.frontend.rule=HostRegexp:$DOMAIN,{subdomain:[a-z0-9-_]+}.$DOMAIN;PathPrefix:/longpolling/
       - traefik.backend.loadbalancer.stickiness=true
       - traefik.backend.loadbalancer.method=drr
-      # traefik.frontend.redirect.regex: $strTraefikRedirectRegex
-      # traefik.frontend.redirect.replacement: $strTraefikRedirectReplacement
+      # traefik.http.redirect.regex: $strTraefikRedirectRegex
+      # traefik.http.redirect.replacement: $strTraefikRedirectReplacement
     environment:
       CUSTOM_CONFIG: |-
         [options]
@@ -96,15 +64,14 @@ services:
       LIMIT_TIME_REAL: 999999999999
       UNACCENT: 0
       LOG_LEVEL: info
-    dns:
-      - 172.20.18.10
     networks:
-      binaural:
+      - binaural
     deploy:
       placement:
         constraints:
-          - node.labels.role == db_node
-    restart: always
+          - node.labels.role == leader_node
+      restart_policy:
+        condition: on-failure
 
 volumes:
   odoo-db:
