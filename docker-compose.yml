@@ -10,10 +10,12 @@ services:
       - odoo-db:/var/lib/postgresql/data
     networks:
       - binaural
+    command: ["postgres", "-c", "listen_addresses=*","-c","max_connections=200"]
     deploy:
-      placement:
-        constraints:
-          - node.labels.role == db_node
+      endpoint_mode: dnsrr
+      # placement:
+      #   constraints:
+      #     - node.labels.role == db_node
       restart_policy:
         condition: on-failure
   odoo:
@@ -57,13 +59,21 @@ services:
       LIST_DB: 1
       WITHOUT_DEMO: 0
       ADMIN_PASSWORD: admin
+      RESET_PASSWORD: admin
       PROXY_MODE: 1
       SERVER_MODE: test
       AEROO_DOCS_HOST: aeroo
       LIMIT_TIME_REAL_CRON: 0
       LIMIT_TIME_REAL: 999999999999
       UNACCENT: 0
+      ODOO_UPGRADE_PATH: /home/odoo/custom/odoo-upgrade
       LOG_LEVEL: info
+      DOMAIN: "{catchall:.*}"
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: odoo
+      DB_PASSwORD: odoo
+      DB_NAME: postgres
     networks:
       - binaural
     deploy:
