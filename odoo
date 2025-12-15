@@ -3,6 +3,7 @@
 import argparse
 import os
 import subprocess
+
 try:
     from dotenv import load_dotenv
 except ModuleNotFoundError:
@@ -36,9 +37,7 @@ def sync(repo_name, branch, show=False):
     # Mapping from submodule names to their corresponding internal Git module directory names.
     # This is necessary when the submodule's directory name in .gitmodules differs from the name used in the codebase.
     # For example, "odoo-venezuela" is referred to as "homo-addons" in the .gitmodules file.
-    submodule_gitmodules_map = {
-        "odoo-venezuela": "homo-addons"
-    }
+    submodule_gitmodules_map = {"odoo-venezuela": "homo-addons"}
     print(
         "\r %s: Cambiando a %s                           " % (repo_name, branch),
         end=" " * 50,
@@ -102,7 +101,9 @@ def sync(repo_name, branch, show=False):
                 raise Exception("Error")
 
             if not show:
-                print("\r %s ( %s ) Sincronizado ✅" % (submodule, commit), end=" " * 30)
+                print(
+                    "\r %s ( %s ) Sincronizado ✅" % (submodule, commit), end=" " * 30
+                )
         except Exception as a:
             print(a)
             if not show:
@@ -209,24 +210,66 @@ def init_addons():
             print(f"{repository} exists")
 
 
-def run_odoo():
-    print("Ejecutando Odoo...")
-    os.system("docker compose up -d")
+def start_odoo():
+    print("\n=== Iniciando Odoo ===\n")
+
+    # Levantar base de datos
+    print("→ Iniciando base de datos...")
+    cmd_db = "docker compose -f docker-compose.db.yml up -d"
+    print(cmd_db)
+    os.system(cmd_db)
+
+    # Levantar aplicación Odoo
+    print("\n→ Iniciando aplicación Odoo...")
+    cmd_app = "docker compose -f docker-compose.app.yml up -d"
+    print(cmd_app)
+    os.system(cmd_app)
+
+    print("\n✅ Odoo y base de datos están en ejecución.\n")
 
 
 def stop_odoo():
-    print("Deteniendo Odoo...")
-    os.system("docker compose down")
+    print("\n=== Deteniendo Odoo ===\n")
+
+    # Detener aplicación Odoo
+    print("→ Deteniendo aplicación Odoo...")
+    cmd_app = "docker compose -f docker-compose.app.yml down"
+    print(cmd_app)
+    os.system(cmd_app)
+
+    # Detener base de datos
+    print("\n→ Deteniendo base de datos...")
+    cmd_db = "docker compose -f docker-compose.db.yml down"
+    print(cmd_db)
+    os.system(cmd_db)
+
+    print("\n🛑 Odoo y base de datos han sido detenidos.\n")
 
 
 def restart_odoo():
-    print("Reiniciando Odoo...")
-    os.system("docker compose down")
-    os.system("docker compose up -d")
+    print("\n=== Reiniciando Odoo ===\n")
+
+    # Detener aplicación Odoo
+    stop_odoo()
+
+    # Iniciar aplicación Odoo
+    start_odoo()
+
+    print("\n✅ Odoo y base de datos reiniciados correctamente.\n")
+
+
+def list_containers():
+    cmd = "docker compose -f docker-compose.app.yml ps"
+    os.system(cmd)
+
 
 def show_logs():
-    print("Mostrando logs de Odoo (últimos 10, en tiempo real)...")
-    os.system("docker compose logs --tail 10 -f")
+    cmd_db = "docker compose -f docker-compose.db.yml logs --tail=10 -f"
+    cmd_app = "docker compose -f docker-compose.app.yml logs --tail=10 -f"
+
+    # Abrir dos terminales independientes
+    os.system(cmd_app)
+    os.system(cmd_db)
 
 
 def psql(d):
@@ -247,7 +290,7 @@ def main():
     parser = argparse.ArgumentParser(description="Script para controlar Odoo.")
 
     subparsers = parser.add_subparsers(dest="action", help="Acciones")
-    subparsers.add_parser("run", help="Ejecuta Odoo")
+    subparsers.add_parser("start", help="Ejecuta Odoo")
     subparsers.add_parser("stop", help="Detiene Odoo")
     subparsers.add_parser("restart", help="Reiniciar Odoo")
     subparsers.add_parser("bash", help="Bash")
@@ -255,6 +298,8 @@ def main():
 
     # Subparser para el comando "logs"
     subparsers.add_parser("logs", help="Muestra los últimos 10 logs en tiempo real")
+
+    subparsers.add_parser("list", help="Lista los contenedores en ejecución")
 
     # Subparser para el comando "build"
     build_parser = subparsers.add_parser("build", help="Construye Odoo")
@@ -274,8 +319,8 @@ def main():
     args = parser.parse_args()
 
     # Ejecutar la acción correspondiente
-    if args.action == "run":
-        run_odoo()
+    if args.action == "start":
+        start_odoo()
     elif args.action == "stop":
         stop_odoo()
     elif args.action == "restart":
@@ -293,6 +338,10 @@ def main():
 
     elif args.action == "logs":
         show_logs()
+    elif args.action == "list":
+        list_containers()
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
