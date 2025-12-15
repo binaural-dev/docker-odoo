@@ -1,10 +1,6 @@
 .env
-src/enterprise
-src/integra-addons
-src/odoo-venezuela
-src/third-party-addons
-src/custom/*
-src/ext_*
+src
 .resources/Dockerfile
+.resources/dbconfigs/pg_hba.conf
 **/.vscode/
 venv
