@@ -1,0 +1,12 @@
+<odoo>
+    <data>
+        <!-- Menu -->
+        <menuitem
+            id="critical_stock_products"
+            name="Critical Stock Products"
+            action="critical_stock_products_action"
+            parent="stock.menu_stock_inventory_control"
+            sequence="50"
+        />            
+    </data>
+</odoo>

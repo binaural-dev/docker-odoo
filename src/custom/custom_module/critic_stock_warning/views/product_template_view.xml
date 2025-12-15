@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="product_template_form_inherited" model="ir.ui.view">
+            <field name="name">product.template.form.inherited</field>
+            <field name="model">product.template</field>
+            <field name="inherit_id" ref="product.product_template_only_form_view" />
+            <field name="arch" type="xml">
+                <group name="group_general" position="inside">
+                     <!-- <group> -->
+                        <field name="minimum_stock" string="Minimum Stock" 
+                            invisible="not is_storable"/>
+                    <!-- </group> -->
+                </group>
+            </field>
+        </record>
+
+        <record id="critical_stock_products_action" model="ir.actions.act_window">
+            <field name="name">Critical Stock Products</field>
+            <field name="res_model">product.template</field>
+            <field name="view_mode">kanban,form</field>
+            <field name="domain">[('low_stock', '=', True)]</field>
+        </record>
+    </data>
+</odoo>

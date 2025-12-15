@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Template for stock notifications -->
+        <template id="stock_notification">
+            <p>-----------------------------------------------------</p>
+            <br/>
+            <p>ATENCION, <t t-out="user.name"/>.</p>
+            <br/>
+            <p>El siguiente producto está por agotar su existencia en el inventario</p>
+            <br/>
+            <br/>
+            <p>Producto:  <t t-out="product_id.name" /></p>
+            <br/>
+            <p> - OdooBot</p>
+            <br/>
+            <p>-----------------------------------------------------</p>
+
+        </template>
+    </data>
+</odoo>
