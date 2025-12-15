@@ -252,7 +252,7 @@ def restart_odoo():
     # Detener aplicación Odoo
     stop_odoo()
 
-    # Detener base de datos
+    # Iniciar aplicación Odoo
     start_odoo()
 
     print("\n✅ Odoo y base de datos reiniciados correctamente.\n")

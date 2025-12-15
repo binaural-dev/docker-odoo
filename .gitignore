@@ -1,5 +1,6 @@
 .env
 src
 .resources/Dockerfile
+.resources/dbconfigs/pg_hba.conf
 **/.vscode/
 venv
