@@ -1,11 +1,13 @@
 services:
   db:
+    restart: always
+    container_name: ${PROJECT_NAME}_db
     build:
       context: .
       dockerfile: ./.resources/db.Dockerfile
       args:
         POSTGRES_IMG_VERSION: ${POSTGRES_IMG_VERSION}
-    container_name: ${PROJECT_NAME}_db
+    command: ["postgres", "-c", "config_file=/etc/postgres/dbconfigs/postgresql.conf"]
     environment:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
@@ -15,11 +17,9 @@ services:
       - ./.resources/dbconfigs:/etc/postgres/dbconfigs
       - odoo-db:/var/lib/postgresql/data
     ports:
-      - "5222:5432"
+      - "${EXTERNAL_PORT_POSTGRES}:5432"
     networks:
       - binaural
-    command: ["postgres", "-c", "config_file=/etc/postgres/dbconfigs/postgresql.conf"]
-    restart: always
 volumes:
   odoo-db:
 
