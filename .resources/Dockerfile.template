@@ -30,12 +30,7 @@ ENV ODOO_SERVER=odoo \
     UNACCENT=True \
     PROXY_MODE=True \
     WITHOUT_DEMO=True \
-    WAIT_PG=true \
-    PGUSER=odoo \
-    PGPASSWORD=odoo \
-    PGHOST=db \
-    PGPORT=5432 \
-    ADMIN_PASSWORD=admin
+    WAIT_PG=true
 
 # Usefull aliases
 RUN echo "alias odoo-shell='odoo shell --shell-interface ipython --no-http --limit-memory-hard=0 --limit-memory-soft=0'" >> /home/odoo/.bashrc
