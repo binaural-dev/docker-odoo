@@ -13,26 +13,13 @@ services:
       - traefik.frontend.rule=Host:traefik.localhost
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-    restart: unless-stopped
     # para que funcione la solución *.localhost
     # network_mode: "host"
     ports:
       - "${TRAEFIK_HOST_PORT}:${TRAEFIK_SERVICE_CONTAINER_PORT}"
     networks:
       - binaural
-  pgadmin:
-    container_name: ${PROJECT_NAME}_pgadmin_container
-    image: dpage/pgadmin4
-    ports:
-      - "${PG_ADMIN_HOST_PORT}:${PG_ADMIN_SERVICE_CONTAINER_PORT}"
-    environment:
-      PGADMIN_DEFAULT_EMAIL: binaural.ca@gmail.com
-      PGADMIN_DEFAULT_PASSWORD: odoo
-      PGADMIN_CONFIG_SERVER_MODE: "False"
-    volumes:
-      - odoo-pgadmin:/root/.pgadmin
-    networks:
-      - binaural
+    restart: always
   dns:
     image: cytopia/bind:alpine-0.30
     environment:
@@ -41,6 +28,7 @@ services:
     networks:
       binaural:
         ipv4_address: 172.20.${ODOO_MINOR}.10
+    restart: always
   odoo:
     container_name: ${PROJECT_NAME}
     build:
@@ -48,6 +36,7 @@ services:
       dockerfile: ./.resources/Dockerfile
     ports:
       - "${PORT_SERVICE_HOST_ODOO}:${PORT_SERVICE_CONTAINER_ODOO}"
+      - "${LONGPOLLING_PORT}:${LONGPOLLING_PORT}"
     depends_on:
       - dns
       - traefik
@@ -58,7 +47,7 @@ services:
       - odoo_data:/home/odoo/data
       - py3:/usr/local/lib/
       - py:/usr/lib/
-    command: odoo server --dev=all
+    command: odoo --dev=all
     labels:
       - traefik.enable=true
       - traefik.frontend.port=8069
@@ -79,26 +68,41 @@ services:
         #!/bin/bash
         # pip install --user --no-cache-dir -e /home/odoo/custom/odoo
         # pip install --user --no-cache-dir pyopenssl
+      # Postgres
+      DB_HOST: ${POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT}
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGHOST: ${POSTGRES_HOST}
+      PGPORT: ${POSTGRES_PORT}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      # Odoo
       SMTP_SERVER: mailhog
       SMTP_PORT: 1025
       DBFILTER: ${DBFILTER}
       SERVER_WIDE_MODULES: ${SERVER_WIDE_MODULES}
-      MAX_CRON_THREADS: ${MAX_CRON_THREADS}
       WORKERS: ${WORKERS}
       LIST_DB: ${LIST_DB}
       WITHOUT_DEMO: ${WITHOUT_DEMO}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       PROXY_MODE: ${PROXY_MODE}
       SERVER_MODE: ${SERVER_MODE}
       AEROO_DOCS_HOST: ${AEROO_DOCS_HOST}
-      LIMIT_TIME_REAL_CRON: ${LIMIT_TIME_REAL_CRON}
-      LIMIT_TIME_REAL: ${LIMIT_TIME_REAL}
+      LONGPOLLING_PORT: ${LONGPOLLING_PORT}
+      GEVENT_PORT: ${GEVENT_PORT}
       UNACCENT: ${UNACCENT}
       LOG_LEVEL: info
+      # Performance tuning
+      LIMIT_MEMORY_SOFT: ${LIMIT_MEMORY_SOFT}
+      LIMIT_MEMORY_HARD: ${LIMIT_MEMORY_HARD}
+      MAX_CRON_THREADS: ${MAX_CRON_THREADS}
+      LIMIT_TIME_REAL_CRON: ${LIMIT_TIME_REAL_CRON}
+      LIMIT_TIME_REAL: ${LIMIT_TIME_REAL}
+      DB_MAXCONN: ${DB_MAXCONN}
     dns:
       - 172.20.${ODOO_MINOR}.10
     networks:
       binaural:
+    restart: always
 
 volumes:
   odoo-web:
