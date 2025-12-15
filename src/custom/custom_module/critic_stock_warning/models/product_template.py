@@ -10,12 +10,11 @@ class ProductTemplate(models.Model):
     low_stock = fields.Boolean(default=False)
 
     
-
-    @api.constrains('minimum_stock')
     def check_for_critical_qty(self):
         if self.qty_available < self.minimum_stock:
-            self.low_stock = True
-            self.stock_warning()
+            if not self.low_stock:
+                self.low_stock = True
+                self.stock_warning()
         else:
             self.low_stock = False
 
@@ -24,7 +23,6 @@ class ProductTemplate(models.Model):
         users_in_group = self.env['res.users'].search([('groups_id', 'in', target_group.id)])
       # Enviamos el mensaje de notificacion
         for user in users_in_group:
-
             self.send_odoo_bot_message(
                 user_id=user.id,
                 message_body=self._get_message_notification(user)
@@ -41,13 +39,14 @@ class ProductTemplate(models.Model):
         # 2. Buscar un canal CHAT existente entre root y el usuario destino (exactamente 2 miembros)
         domain = [
             ('channel_type', '=', 'chat'),
-            ('channel_partner_ids', 'in', [root_partner]),
+            ('create_uid', 'in', [root_partner]),
             ('channel_partner_ids', 'in', [target_partner.id]),
         ]
         channel = self.env['discuss.channel'].sudo().search(domain, limit=1)
 
         # 3. Crear el canal si no existe
         if not channel:
+
             channel = self.env['discuss.channel'].sudo().create({
                 'name': f'Chat  {target_partner.name}',
                 'channel_type': 'chat',
@@ -55,6 +54,7 @@ class ProductTemplate(models.Model):
                     (0, 0, {'partner_id': target_partner.id}),
                 ],
             })
+
         
         # 4. Enviar mensaje como el usuario root
         channel.sudo().message_post(
@@ -63,6 +63,7 @@ class ProductTemplate(models.Model):
             subtype_xmlid="mail.mt_comment",
             author_id= root_partner,  # Siempre usa el root como autor
         )
+        
 
     def _get_message_notification(self, user):
         return self.env["ir.qweb"]._render(
@@ -72,10 +73,3 @@ class ProductTemplate(models.Model):
                 'product_id': self
             }
         )
-    
-    # def action_view_critical_stock_products(self):
-    #     action = self.env['ir.actions.actions']._for_xml_id('product.product_template_kanban_view')
-    #     _logger.info("##########################")
-    #     _logger.info(action.read())
-    #     action['domain'] = [('qty_available', '<', 'minimum_stock')]
-    #     return action
