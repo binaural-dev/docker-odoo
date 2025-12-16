@@ -176,10 +176,10 @@ def build_odoo(no_cache):
         print(e)
     if no_cache:
         print("Construyendo Odoo sin caché...")
-        os.system("docker compose build --no-cache")
+        os.system("docker compose -f docker-compose.app.yml build --no-cache")
     else:
         print("Construyendo Odoo con caché...")
-        os.system("docker compose build")
+        os.system("docker compose -f docker-compose.app.yml build")
 
 
 def init_addons():
@@ -246,6 +246,24 @@ def stop_odoo():
     print("\n🛑 Odoo y base de datos han sido detenidos.\n")
 
 
+def remove_odoo():
+    print("\n=== Eliminando Odoo ===\n")
+
+    # Detener aplicación Odoo
+    print("→ Eliminando aplicación Odoo...")
+    cmd_app = "docker compose -f docker-compose.app.yml down -v --remove-orphans"
+    print(cmd_app)
+    os.system(cmd_app)
+
+    # Detener base de datos
+    print("\n→ Eliminando base de datos...")
+    cmd_db = "docker compose -f docker-compose.db.yml down -v --remove-orphans"
+    print(cmd_db)
+    os.system(cmd_db)
+
+    print("\n🛑 Odoo y base de datos han sido eliminados.\n")
+
+
 def restart_odoo():
     print("\n=== Reiniciando Odoo ===\n")
 
@@ -301,6 +319,8 @@ def main():
 
     subparsers.add_parser("list", help="Lista los contenedores en ejecución")
 
+    subparsers.add_parser("remove", help="Lista los contenedores en ejecución")
+
     # Subparser para el comando "build"
     build_parser = subparsers.add_parser("build", help="Construye Odoo")
     build_parser.add_argument(
@@ -340,6 +360,8 @@ def main():
         show_logs()
     elif args.action == "list":
         list_containers()
+    elif args.action == "remove":
+        remove_odoo()
     else:
         parser.print_help()
 
