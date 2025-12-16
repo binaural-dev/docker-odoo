@@ -54,7 +54,8 @@ services:
       LIMIT_TIME_REAL: ${LIMIT_TIME_REAL}
       DB_MAXCONN: ${DB_MAXCONN}
     dns:
-      - 172.20.${ODOO_MINOR}.10
+      - 8.8.8.8
+      - 1.1.1.1
     networks:
       binaural:
   nginx:
