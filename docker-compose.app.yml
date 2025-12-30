@@ -1,12 +1,19 @@
 services:
   odoo:
+    command: odoo --dev=all
     restart: always
     container_name: ${PROJECT_NAME}
     build:
       context: .
       dockerfile: ./.resources/Dockerfile
-    command: odoo --dev=all
-    image: local_odoo:${ODOO_MINOR}
+    image: local_odoo_${PROJECT_NAME}:${ODOO_MINOR}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    networks:
+      binaural:
     volumes:
       - odoo-web:/var/lib/odoo
       - ./src:/home/odoo/src
@@ -40,6 +47,7 @@ services:
       SERVER_WIDE_MODULES: ${SERVER_WIDE_MODULES}
       WORKERS: ${WORKERS}
       LIST_DB: ${LIST_DB}
+      DB_NAME: ${DB_NAME}
       WITHOUT_DEMO: ${WITHOUT_DEMO}
       PROXY_MODE: ${PROXY_MODE}
       SERVER_MODE: ${SERVER_MODE}
@@ -54,36 +62,29 @@ services:
       LIMIT_TIME_REAL: ${LIMIT_TIME_REAL}
       LIMIT_TIME_CPU: ${LIMIT_TIME_CPU}
       DB_MAXCONN: ${DB_MAXCONN}
-    dns:
-      - 8.8.8.8
-      - 1.1.1.1
-    networks:
-      binaural:
   nginx:
     restart: always
     container_name: ${PROJECT_NAME}-nginx
     image: nginx:latest
-    ports:
-      - "${EXTERNAL_PORT_ODOO}:80"
-    volumes:
-      - ./.resources/nginx_configs/odoo.conf:/etc/nginx/conf.d/default.conf
     depends_on:
       - odoo
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${EXTERNAL_PORT_ODOO}:80"
     networks:
       binaural:
+    volumes:
+      - ./.resources/nginx_configs/odoo.conf:/etc/nginx/conf.d/default.conf
 
 volumes:
   odoo-web:
   odoo_data:
   py3:
   py:
-  odoo-pgadmin:
 
 networks:
   binaural:
     driver: bridge
     external: false
-    name: odoo-${ODOO_VERSION}
-    ipam:
-      config:
-        - subnet: 172.20.${ODOO_MINOR}.0/24
+    name: ${PROJECT_NAME}-odoo-${ODOO_VERSION}
