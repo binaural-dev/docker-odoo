@@ -122,8 +122,18 @@ def sync(repo_name, branch, show=False):
 
 def run_bash():
     PROJECT_NAME = os.getenv("PROJECT_NAME")
-    print(f"docker exec -uroot -it {PROJECT_NAME} bash")
-    os.system(f"docker exec -uroot -it {PROJECT_NAME} bash")
+    print(f"docker exec -u root -it {PROJECT_NAME} bash")
+    os.system(f"docker exec -u root -it {PROJECT_NAME} bash")
+
+
+def bash_update_modules(dbname: str, modules: str = "all"):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    print(
+        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+    )
+    os.system(
+        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+    )
 
 
 def build_odoo(no_cache):
@@ -335,35 +345,66 @@ def main():
     sync_parser.add_argument("b", help="Branch")
     sync_parser.add_argument("--v", action="store_true", default=False, help="Git log")
 
+    update_parser = subparsers.add_parser("update", help="Update Modules")
+    update_parser.add_argument("-d", required=True, help="Database name")
+    update_parser.add_argument(
+        "-m",
+        default="all",
+        help="Modules to update, default all. Use comma to separate multiple modules",
+    )
+
     # Parsear los argumentos
     args = parser.parse_args()
 
     # Ejecutar la acción correspondiente
     if args.action == "start":
         start_odoo()
-    elif args.action == "stop":
+        return True
+    if args.action == "stop":
         stop_odoo()
-    elif args.action == "restart":
+        return True
+    if args.action == "restart":
         restart_odoo()
-    elif args.action == "build":
+        return True
+    if args.action == "build":
         build_odoo(args.no_cache)
-    elif args.action == "bash":
-        run_bash()
-    elif args.action == "init":
-        init_addons()
-    elif args.action == "psql":
-        psql(args.d)
-    elif args.action == "sync":
-        sync(args.r, args.b, show=args.v)
+        return True
 
-    elif args.action == "logs":
+    if args.action == "bash":
+        run_bash()
+        return True
+
+    if args.action == "update":
+        bash_update_modules(args.d, args.m)
+        return True
+
+    if args.action == "init":
+        init_addons()
+        return True
+
+    if args.action == "psql":
+        psql(args.d)
+        return True
+
+    if args.action == "sync":
+        sync(args.r, args.b, show=args.v)
+        return True
+
+    if args.action == "logs":
         show_logs()
-    elif args.action == "list":
+        return True
+
+    if args.action == "list":
         list_containers()
-    elif args.action == "remove":
+        return True
+
+    if args.action == "remove":
         remove_odoo()
-    else:
-        parser.print_help()
+        return True
+
+    parser.print_help()
+
+    return False
 
 
 if __name__ == "__main__":
