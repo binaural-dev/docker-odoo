@@ -3,6 +3,7 @@
 import argparse
 import os
 import subprocess
+import sys
 
 try:
     from dotenv import load_dotenv
@@ -258,6 +259,17 @@ def stop_odoo():
 
 def remove_odoo():
     print("\n=== Eliminando Odoo ===\n")
+
+    do_continue = input(
+        "⚠️  Esto eliminará todos los datos de Odoo y la base de datos. ¿Deseas continuar? (s/n):  "
+    )
+
+    if do_continue.lower() == "s":
+        print("Continuando con la eliminación...")
+    else:
+        print("Operación cancelada.")
+        sys.exit()
+        return
 
     # Detener aplicación Odoo
     print("→ Eliminando aplicación Odoo...")
