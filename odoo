@@ -341,7 +341,9 @@ def main():
 
     subparsers.add_parser("list", help="Lista los contenedores en ejecución")
 
-    subparsers.add_parser("remove", help="Lista los contenedores en ejecución")
+    subparsers.add_parser(
+        "remove", help="Elimina los contenedores de Odoo y la base de datos"
+    )
 
     # Subparser para el comando "build"
     build_parser = subparsers.add_parser("build", help="Construye Odoo")
