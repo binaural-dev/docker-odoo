@@ -238,6 +238,25 @@ def start_odoo():
 
     print("\n✅ Odoo y base de datos están en ejecución.\n")
 
+    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
+        print("→ Iniciando pgAdmin...")
+        cmd_pgadmin = "docker compose -f docker-compose.pgadmin.yml up -d"
+        print(cmd_pgadmin)
+        os.system(cmd_pgadmin)
+        print("\n✅ pgAdmin está en ejecución.\n")
+
+        print(
+            f"""
+        → Recuerda agregar la conexión a la base de datos (Un nuevo server) en pgAdmin usando los siguientes detalles:
+
+            * Host (Host name/address): db
+            * Puerto (Port): {os.getenv("EXTERNAL_PORT_POSTGRES")}
+            * Usuario (Username): {os.getenv("POSTGRES_USER")}
+            * Contraseña (Password): {os.getenv("POSTGRES_PASSWORD")}
+            * Base de datos central (Maintenance database): {os.getenv("POSTGRES_DB")}
+        """
+        )
+
 
 def stop_odoo():
     print("\n=== Deteniendo Odoo ===\n")
@@ -255,6 +274,13 @@ def stop_odoo():
     os.system(cmd_db)
 
     print("\n🛑 Odoo y base de datos han sido detenidos.\n")
+
+    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
+        print("→ Deteniendo pgAdmin...")
+        cmd_pgadmin = "docker compose -f docker-compose.pgadmin.yml down"
+        print(cmd_pgadmin)
+        os.system(cmd_pgadmin)
+        print("\n🛑 pgAdmin ha sido detenido.\n")
 
 
 def remove_odoo():
@@ -284,6 +310,15 @@ def remove_odoo():
     os.system(cmd_db)
 
     print("\n🛑 Odoo y base de datos han sido eliminados.\n")
+
+    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
+        print("→ Eliminando pgAdmin...")
+        cmd_pgadmin = (
+            "docker compose -f docker-compose.pgadmin.yml down -v --remove-orphans"
+        )
+        print(cmd_pgadmin)
+        os.system(cmd_pgadmin)
+        print("\n🛑 pgAdmin ha sido eliminado.\n")
 
 
 def restart_odoo():
@@ -332,6 +367,7 @@ def main():
     subparsers = parser.add_subparsers(dest="action", help="Acciones")
     subparsers.add_parser("start", help="Ejecuta Odoo")
     subparsers.add_parser("stop", help="Detiene Odoo")
+
     subparsers.add_parser("restart", help="Reiniciar Odoo")
     subparsers.add_parser("bash", help="Bash")
     subparsers.add_parser("init", help="Clone repositories")
