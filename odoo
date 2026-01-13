@@ -250,7 +250,7 @@ def start_odoo():
         → Recuerda agregar la conexión a la base de datos (Un nuevo server) en pgAdmin usando los siguientes detalles:
 
             * Host (Host name/address): db
-            * Puerto (Port): {os.getenv("EXTERNAL_PORT_POSTGRES")}
+            * Puerto (Port): {os.getenv("PGADMIN_EXTERNAL_PORT")}
             * Usuario (Username): {os.getenv("POSTGRES_USER")}
             * Contraseña (Password): {os.getenv("POSTGRES_PASSWORD")}
             * Base de datos central (Maintenance database): {os.getenv("POSTGRES_DB")}
