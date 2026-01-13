@@ -7,7 +7,7 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD}
     extra_hosts:
-      - "host.docker.internal:host-gateway"
+      - "db:host-gateway"
     ports:
       - "${PGADMIN_EXTERNAL_PORT}:80"
     volumes:

@@ -245,6 +245,18 @@ def start_odoo():
         os.system(cmd_pgadmin)
         print("\n✅ pgAdmin está en ejecución.\n")
 
+        print(
+            f"""
+        → Recuerda agregar la conexión a la base de datos (Un nuevo server) en pgAdmin usando los siguientes detalles:
+
+            * Host (Host name/address): db
+            * Puerto (Port): {os.getenv("EXTERNAL_PORT_POSTGRES")}
+            * Usuario (Username): {os.getenv("POSTGRES_USER")}
+            * Contraseña (Password): {os.getenv("POSTGRES_PASSWORD")}
+            * Base de datos central (Maintenance database): {os.getenv("POSTGRES_DB")}
+        """
+        )
+
 
 def stop_odoo():
     print("\n=== Deteniendo Odoo ===\n")
