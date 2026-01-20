@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+
+import subprocess
+import datetime
+import os
+import sys
+
+
+# ============================================================
+# 1. DumpManager: genera dump.sql dentro del contenedor
+# ============================================================
+class DumpManager:
+    def __init__(
+        self,
+        container_name,
+        dump_path,
+        db_name,
+        db_user,
+        db_host,
+        db_port,
+        copy_to_local_path,
+    ):
+        self.container = container_name
+        self.db_name = db_name
+        self.db_user = db_user
+        self.db_host = db_host
+        self.db_port = db_port
+        self.dump_path = dump_path
+        self.dump_folder = os.path.dirname(dump_path)
+        self.copy_to_local_path = copy_to_local_path
+
+    def create_dump_folder(self):
+        print(f"Creando carpeta de dumps dentro del contenedor {self.container}")
+
+        subprocess.run(
+            ["docker", "exec", self.container, "mkdir", "-p", self.dump_folder],
+            check=True,
+        )
+
+    def generate_dump(self):
+        self.create_dump_folder()
+
+        print("Generando dump de la base de datos...")
+
+        cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "pg_dump",
+            "-h",
+            self.db_host,
+            "-p",
+            str(self.db_port),
+            "-U",
+            self.db_user,
+            "-F",
+            "p",
+            "-d",
+            self.db_name,
+            "-f",
+            self.dump_path,
+        ]
+
+        print(f"Generando dump.sql dentro del contenedor {self.container}")
+
+        print(f"Ejecutando comando: {' '.join(cmd)}")
+
+        subprocess.run(cmd, check=True)
+        return self.dump_path
+
+    def copy_dump_to_local(self):
+        print(
+            f"Copiando dump.sql desde el contenedor {self.container} a local path {self.copy_to_local_path}"
+        )
+
+        subprocess.run(
+            ["mkdir", "-p", os.path.dirname(self.copy_to_local_path)], check=True
+        )
+
+        subprocess.run(
+            [
+                "docker",
+                "cp",
+                f"{self.container}:{self.dump_path}",
+                self.copy_to_local_path,
+            ],
+            check=True,
+        )
+
+
+# ============================================================
+# 2. FilestoreManager: copia el filestore dentro del contenedor
+# ============================================================
+class FilestoreManager:
+
+    def __init__(self, container_name, container_filestore_path, local_filestore_path):
+        self.container = container_name
+        self.container_filestore_path = container_filestore_path
+        self.local_filestore_path = local_filestore_path
+
+    def copy_filestore(self):
+        print(f"Copiando filestore dentro del contenedor {self.container}")
+
+        print(f"Desde {self.container_filestore_path} a {self.local_filestore_path}")
+
+        subprocess.run(["mkdir", "-p", self.local_filestore_path], check=True)
+
+        subprocess.run(
+            [
+                "docker",
+                "cp",
+                f"{self.container}:{self.container_filestore_path}",
+                os.path.dirname(self.local_filestore_path),
+            ],
+            check=True,
+        )
+
+        return self.local_filestore_path
+
+
+# ============================================================
+# 3. ZipManager: crea el archivo ZIP dentro del contenedor
+# ============================================================
+class ZipManager:
+
+    def __init__(self, zip_path, content_paths: list):
+        self.zip_path = zip_path
+        self.content_paths = content_paths
+
+    def create_zip(self):
+        zip_folder = os.path.dirname(self.zip_path)
+
+        print(f"Creando carpeta para el ZIP en {zip_folder}")
+
+        subprocess.run(["mkdir", "-p", zip_folder], check=True)
+
+        cmd = ["zip", "-r", self.zip_path]
+        cmd.extend(self.content_paths)
+
+        print(f"Commando ZIP: \n\n{' '.join(cmd)}\n\n")
+
+        print(f"Creando ZIP {self.zip_path} con contenido: {self.content_paths}")
+        subprocess.run(cmd, check=True, cwd=zip_folder)
+
+        return self.zip_path
+
+
+# ============================================================
+# 4. CleanupManager: elimina archivos temporales
+# ============================================================
+class CleanupManager:
+    def __init__(
+        self,
+        container_name,
+        local_paths_to_cleanup=[
+            "/tmp/odoo_database_backups/dump.sql",
+            "/tmp/odoo_database_backups/filestore",
+        ],
+    ):
+        self.container = container_name
+        self.local_paths_to_cleanup = local_paths_to_cleanup
+
+    def local_cleanup(self):
+        print("Limpiando archivos temporales locales")
+        # Aquí se podrían eliminar archivos temporales locales si se desea
+
+        for path in self.local_paths_to_cleanup:
+
+            if not os.path.exists(path):
+                continue
+
+            if os.path.isfile(path):
+
+                subprocess.run(["rm", "-f", path], check=True)
+
+                continue
+
+            if os.path.isdir(path):
+                subprocess.run(["rm", "-rf", path], check=True)
+
+
+# ============================================================
+# 5. BackupOrchestrator: clase mayor que usa todas las anteriores
+# ============================================================
+class BackupOrchestrator:
+    def __init__(
+        self,
+        container_name,
+        db_name,
+        db_user,
+        db_host,
+        db_port,
+        backup_local_path="/tmp/odoo_database_backups",
+        db_container_dump_path="/tmp/odoo_database_backups/dump.sql",
+        container_filestore_path=None,
+    ):
+        self.backup_local_path = backup_local_path
+        self.container = container_name
+
+        self.db_name = db_name
+        self.db_user = db_user
+        self.db_host = db_host
+        self.db_port = db_port
+        self.container_filestore_path = container_filestore_path
+        self.db_container_dump_path = db_container_dump_path
+        self.db_copy_to_local_path = f"{self.backup_local_path}/dump.sql"
+
+        self.local_filestore_path = f"{self.backup_local_path}/filestore"
+
+        self.dump_manager = DumpManager(
+            container_name=container_name,
+            dump_path=self.db_container_dump_path,
+            copy_to_local_path=self.db_copy_to_local_path,
+            db_name=db_name,
+            db_user=db_user,
+            db_host=db_host,
+            db_port=db_port,
+        )
+
+        self.cleanup_manager = CleanupManager(container_name)
+
+        if container_filestore_path:
+            self.filestore_manager = FilestoreManager(
+                container_name=container_name,
+                container_filestore_path=container_filestore_path,
+                local_filestore_path=self.local_filestore_path,
+            )
+        else:
+            self.filestore_manager = None
+
+        self.backup_zip_path = self._get_zip_path()
+        self.content_paths = [self.db_copy_to_local_path, self.local_filestore_path]
+
+        self.zip_manager = ZipManager(
+            zip_path=self.backup_zip_path,
+            content_paths=self.content_paths,
+        )
+
+    # ---------------------------
+    # Generar nombre del ZIP
+    # ---------------------------
+    def _get_zip_path(self):
+        now = datetime.datetime.now()
+        timestamp = now.strftime("%Y-%m-%d_%H%M%S")
+
+        suffix = "_fs" if self.filestore_manager else "_nofs"
+
+        zip_name = f"{self.db_name}_{timestamp}{suffix}.zip"
+
+        zip_path = f"{self.backup_local_path}/{zip_name}"
+
+        return zip_path
+
+    def _get_database_dump(self):
+        self.dump_manager.generate_dump()
+        self.dump_manager.copy_dump_to_local()
+
+        return self.db_copy_to_local_path
+
+    def _get_filestore(self):
+        if self.filestore_manager:
+            self.filestore_manager.copy_filestore()
+            return self.local_filestore_path
+        return None
+
+    def _create_backup_zip(self):
+        zip_path = self._get_zip_path()
+
+        self.zip_manager.create_zip()
+
+        return zip_path
+
+    # ---------------------------
+    # Ejecutar proceso completo
+    # ---------------------------
+    def run_backup(self):
+        print("\n=== Iniciando proceso de backup ===")
+
+        # 1. Dump
+        self._get_database_dump()
+
+        # 2. Filestore (si aplica)
+        self._get_filestore()
+
+        # 3. Crear ZIP
+        self._create_backup_zip()
+
+        print(f"\n✔ Backup generado correctamente: {self.backup_zip_path}\n")
+
+        return self.backup_zip_path
+
+
+if __name__ == "__main__":
+
+    orchestrator = BackupOrchestrator(
+        container_name="proj_17",
+        db_name="demo",
+        db_user="odoo",
+        db_host="host.docker.internal",
+        db_port="5432",
+        backup_local_path="/home/bin03/Documents/christopher/downloads/odoo_database_backups",
+        db_container_dump_path="/tmp/odoo_database_backups/dump.sql",
+        container_filestore_path="/home/odoo/data/filestore",
+    )
+
+    orchestrator.run_backup()
+
+    # 4. Cleanup
+    orchestrator.cleanup_manager.local_cleanup()
