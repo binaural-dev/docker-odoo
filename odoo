@@ -238,6 +238,8 @@ def start_odoo():
 
     print("\n✅ Odoo y base de datos están en ejecución.\n")
 
+    print(f"\n✅ URL: http://localhost:{os.getenv('EXTERNAL_PORT_ODOO')}\n")
+
     if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
         print("→ Iniciando pgAdmin...")
         cmd_pgadmin = "docker compose -f docker-compose.pgadmin.yml up -d"
