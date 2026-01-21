@@ -5,6 +5,8 @@ import tempfile
 import shutil
 import os
 import subprocess
+import argparse
+import sys
 
 
 class ZipExtractor:
@@ -265,8 +267,8 @@ class RestoreOrchestrator:
             "exec",
             self.container,
             "rm",
-            "-f",
-            self.container_db_dump_path,
+            "-r",
+            os.path.dirname(self.container_db_dump_path),
         ]
 
         subprocess.run(rm_container_db_dump_cmd, check=True)
@@ -285,18 +287,59 @@ except ModuleNotFoundError:
         "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
     )
 
-load_dotenv()
 
-restorer = RestoreOrchestrator(
-    zip_path="/home/bin03/Documents/christopher/downloads/odoo_database_backups/demo_2026-01-21_150415_fs.zip",
-    container_name=os.getenv("PROJECT_NAME"),
-    new_db_name="restored_db",
-    db_user=os.getenv("POSTGRES_USER"),
-    db_host=os.getenv("POSTGRES_HOST"),
-    db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
-    container_filestore_base_path="/home/odoo/data/filestore",
-    container_db_dump_path="/tmp/odoo_restore/dump.sql",
-)
+if __name__ == "__main__":
 
-restorer.run()
-restorer.cleanup()
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description="Script de restore de Odoo")
+
+    subparsers = parser.add_subparsers(dest="run", help="Acciones")
+
+    restore_parser = subparsers.add_parser(
+        "restore", help="Restaurar una base de datos y filestore desde un ZIP"
+    )
+
+    restore_parser.add_argument(
+        "-z",
+        required=True,
+        help="Ruta local del archivo ZIP del backup",
+    )
+
+    restore_parser.add_argument(
+        "-d",
+        required=True,
+        help="Nombre de la nueva base de datos restaurada",
+    )
+
+    restore_parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="No eliminar archivos temporales después del restore",
+        default=False,
+    )
+
+    args = parser.parse_args()
+
+    # Validación del subcomando
+    if args.run != "restore":
+        parser.print_help()
+        sys.exit(1)
+
+    # Construcción del orquestador
+    restorer = RestoreOrchestrator(
+        zip_path=args.z,
+        container_name=os.getenv("PROJECT_NAME"),
+        new_db_name=args.d,
+        db_user=os.getenv("POSTGRES_USER"),
+        db_host=os.getenv("POSTGRES_HOST"),
+        db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        container_filestore_base_path="/home/odoo/data/filestore",
+    )
+
+    # Ejecución del restore
+    restorer.run()
+
+    # Cleanup opcional
+    if not args.no_cleanup:
+        restorer.cleanup()

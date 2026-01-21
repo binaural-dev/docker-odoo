@@ -369,10 +369,20 @@ class OdooBackupOrchestrator:
         return self.db_copy_to_local_path
 
     def _get_filestore(self):
+
         if self.filestore_manager:
             self.filestore_manager.copy_filestore()
             return self.local_filestore_path
-        return None
+
+        cmd = [
+            "mkdir",
+            "-p",
+            self.local_filestore_path,
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        return self.local_filestore_path
 
     def _create_backup_zip(self):
         zip_path = self._get_zip_path()
