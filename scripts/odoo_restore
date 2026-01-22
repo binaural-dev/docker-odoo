@@ -39,6 +39,7 @@ class DatabaseRestoreManager:
         db_port,
         local_dump_path,
         container_db_dump_path,
+        linux_dump_user,
     ):
         self.container = container
         self.db_name = db_name
@@ -47,8 +48,52 @@ class DatabaseRestoreManager:
         self.db_port = db_port
         self.local_dump_path = local_dump_path
         self.container_db_dump_path = container_db_dump_path
+        self.linux_dump_user = linux_dump_user
+
+    def _create_dump_user(self):
+        print(
+            f"Creando usuario Linux para realizar dump dentro del contenedor {self.container} de forma segura."
+        )
+
+        # 1. Verificar si el usuario ya existe
+        check_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "bash",
+            "-c",
+            f"id -u {self.linux_dump_user} >/dev/null 2>&1",
+        ]
+
+        user_exists = subprocess.run(check_cmd).returncode == 0
+
+        if user_exists:
+            print(
+                f"Usuario '{self.linux_dump_user}' ya existe. No se creará nuevamente."
+            )
+            return
+
+        cmd = [
+            "docker",
+            "exec",
+            "-u",
+            "root",
+            self.container,
+            "useradd",
+            "-m",
+            "-s",
+            "/bin/bash",
+            self.linux_dump_user,
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        print(f"Usuario '{self.linux_dump_user}' creado correctamente.")
 
     def create_database(self):
+
+        self._create_dump_user()
+
         print(
             f"Creando nueva base de datos '{self.db_name}' dentro del contenedor {self.container}"
         )
@@ -97,6 +142,8 @@ class DatabaseRestoreManager:
         cmd_mkdir = [
             "docker",
             "exec",
+            "-u",
+            self.linux_dump_user,
             self.container,
             "mkdir",
             "-p",
@@ -146,10 +193,13 @@ class DatabaseRestoreManager:
 
 class FilestoreRestoreManager:
 
-    def __init__(self, container, local_filestore_path, container_filestore_path):
+    def __init__(
+        self, container, local_filestore_path, container_filestore_path, linux_dump_user
+    ):
         self.container = container
         self.local_filestore_path = local_filestore_path
         self.container_filestore_path = container_filestore_path
+        self.linux_dump_user = linux_dump_user
 
     def restore_filestore(self):
         if not os.path.isdir(self.local_filestore_path):
@@ -202,6 +252,7 @@ class RestoreOrchestrator:
         db_host,
         db_port,
         container_filestore_base_path,
+        linux_dump_user,
     ):
         self.zip_path = zip_path
         self.container = container_name
@@ -212,6 +263,7 @@ class RestoreOrchestrator:
         self.container_filestore_base_path = container_filestore_base_path
         self.container_db_dump_path = f"/tmp/odoo_restore_{self.new_db_name}/dump.sql"
         self.extract_to = tempfile.mkdtemp(prefix="odoo_restore_")
+        self.linux_dump_user = linux_dump_user
 
     def run(self):
         print("\n=== Iniciando proceso de RESTORE ===")
@@ -229,6 +281,7 @@ class RestoreOrchestrator:
             db_port=self.db_port,
             local_dump_path=local_dump_path,
             container_db_dump_path=self.container_db_dump_path,
+            linux_dump_user=self.linux_dump_user,
         )
 
         db_manager.create_database()
@@ -243,6 +296,7 @@ class RestoreOrchestrator:
             container=self.container,
             local_filestore_path=local_filestore_path,
             container_filestore_path=filestore_container_path,
+            linux_dump_user=self.linux_dump_user,
         )
 
         filestore_manager.restore_filestore()
@@ -254,9 +308,7 @@ class RestoreOrchestrator:
     def cleanup(self):
         print("Limpiando archivos temporales...")
 
-        shutil.rmtree(self.extract_to, ignore_errors=True)
-
-        rm_local_extracted_folder_cmd = ["rm", "-r", "-f", self.extract_to]
+        rm_local_extracted_folder_cmd = ["rm", "-rf", self.extract_to]
 
         subprocess.run(rm_local_extracted_folder_cmd, check=True)
 
@@ -265,6 +317,8 @@ class RestoreOrchestrator:
         rm_container_db_dump_cmd = [
             "docker",
             "exec",
+            "-u",
+            self.linux_dump_user,
             self.container,
             "rm",
             "-r",
@@ -335,6 +389,7 @@ if __name__ == "__main__":
         db_host=os.getenv("POSTGRES_HOST"),
         db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
         container_filestore_base_path="/home/odoo/data/filestore",
+        linux_dump_user="dump_user",
     )
 
     # Ejecución del restore
