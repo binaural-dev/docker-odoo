@@ -20,6 +20,7 @@ class DumpManager:
         db_host,
         db_port,
         copy_to_local_path,
+        linux_dump_user,
         overwrite_existing=False,
     ):
         self.container = container_name
@@ -31,16 +32,68 @@ class DumpManager:
         self.dump_folder = os.path.dirname(dump_path)
         self.copy_to_local_path = copy_to_local_path
         self.overwrite_existing = overwrite_existing
+        self.linux_dump_user = linux_dump_user  # Para crear y eliminar con este usuario. Asi evitamos eliminar archivos importantes.
+
+    def _create_dump_user(self):
+        print(
+            f"Creando usuario Linux para realizar dump dentro del contenedor {self.container} de forma segura."
+        )
+
+        # 1. Verificar si el usuario ya existe
+        check_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "bash",
+            "-c",
+            f"id -u {self.linux_dump_user} >/dev/null 2>&1",
+        ]
+
+        user_exists = subprocess.run(check_cmd).returncode == 0
+
+        if user_exists:
+            print(
+                f"Usuario '{self.linux_dump_user}' ya existe. No se creará nuevamente."
+            )
+            return
+
+        cmd = [
+            "docker",
+            "exec",
+            "-u",
+            "root",
+            self.container,
+            "useradd",
+            "-m",
+            "-s",
+            "/bin/bash",
+            self.linux_dump_user,
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        print(f"Usuario '{self.linux_dump_user}' creado correctamente.")
 
     def create_dump_folder(self):
         print(f"Creando carpeta de dumps dentro del contenedor {self.container}")
 
         subprocess.run(
-            ["docker", "exec", self.container, "mkdir", "-p", self.dump_folder],
+            [
+                "docker",
+                "exec",
+                "-u",
+                self.linux_dump_user,
+                self.container,
+                "mkdir",
+                "-p",
+                self.dump_folder,
+            ],
             check=True,
         )
 
     def generate_dump(self):
+        self._create_dump_user()
+
         self.create_dump_folder()
 
         print("Generando dump de la base de datos...")
@@ -61,7 +114,16 @@ class DumpManager:
 
         dump_cmd = overwriting_cmd if self.overwrite_existing else inner_cmd
 
-        cmd = ["docker", "exec", self.container, "bash", "-c", dump_cmd]
+        cmd = [
+            "docker",
+            "exec",
+            "-u",
+            self.linux_dump_user,
+            self.container,
+            "bash",
+            "-c",
+            dump_cmd,
+        ]
 
         print(f"Generando dump.sql dentro del contenedor {self.container}")
 
@@ -192,11 +254,13 @@ class CleanupManager:
         local_paths_to_cleanup=None,
         container_paths_to_cleanup=None,
         confirm=False,
+        linux_dump_user=None,
     ):
         self.container = container_name
         self.local_paths_to_cleanup = local_paths_to_cleanup
         self.container_paths_to_cleanup = container_paths_to_cleanup
         self.confirm = confirm
+        self.linux_dump_user = linux_dump_user
 
     def _confirm(self, message):
 
@@ -216,7 +280,9 @@ class CleanupManager:
             f"*** Limpiando archivos temporales dentro del contenedor {self.container}"
         )
 
-        if not (self.container_paths_to_cleanup and self.container):
+        if not (
+            self.container_paths_to_cleanup and self.container and self.linux_dump_user
+        ):
             return
 
         continue_cleanup = self._confirm(
@@ -232,7 +298,17 @@ class CleanupManager:
         for path in self.container_paths_to_cleanup:
             print(f"Eliminando archivo/carpeta temporal en contenedor: {path}")
             subprocess.run(
-                ["docker", "exec", self.container, "rm", "-rf", path], check=True
+                [
+                    "docker",
+                    "exec",
+                    "-u",
+                    self.linux_dump_user,
+                    self.container,
+                    "rm",
+                    "-r",
+                    path,
+                ],
+                check=True,
             )
 
     def local_cleanup(self):
@@ -277,6 +353,7 @@ class CleanupManager:
 # 5. OdooBackupOrchestrator: clase mayor que usa todas las anteriores
 # ============================================================
 class OdooBackupOrchestrator:
+
     def __init__(
         self,
         container_name,
@@ -286,6 +363,7 @@ class OdooBackupOrchestrator:
         db_port,
         backup_local_path,
         db_container_dump_path,
+        linux_dump_user,
         container_filestore_path=None,
         overwrite_existing=False,
     ):
@@ -308,6 +386,8 @@ class OdooBackupOrchestrator:
 
         self.overwrite_existing = overwrite_existing
 
+        self.linux_dump_user = linux_dump_user
+
         self.dump_manager = DumpManager(
             container_name=container_name,
             dump_path=self.db_container_dump_path,
@@ -317,6 +397,7 @@ class OdooBackupOrchestrator:
             db_host=db_host,
             db_port=db_port,
             overwrite_existing=self.overwrite_existing,
+            linux_dump_user=self.linux_dump_user,
         )
 
         self.cleanup_manager = CleanupManager(
@@ -326,6 +407,7 @@ class OdooBackupOrchestrator:
                 self.db_copy_to_local_path,
                 self.local_filestore_path,
             ],
+            linux_dump_user=self.linux_dump_user,
         )
 
         if self.container_filestore_path:
@@ -421,6 +503,60 @@ except ModuleNotFoundError:
     )
 
 
+def list_databases(db_user, db_host, db_port):
+    """
+    Devuelve una lista de bases de datos disponibles en PostgreSQL.
+    Usa psql -lqt para obtenerlas.
+    """
+
+    cmd = [
+        "docker",
+        "exec",
+        "-it",
+        os.getenv("PROJECT_NAME"),
+        "psql",
+        f"-U{db_user}",
+        f"-h{db_host}",
+        f"-p{db_port}",
+        "-lqt",
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PGPASSWORD": os.getenv("POSTGRES_PASSWORD")},
+    )
+
+    if result.returncode != 0:
+        print("Error al listar bases de datos:")
+        print(result.stderr)
+        sys.exit(1)
+
+    dbs = []
+    for line in result.stdout.splitlines():
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) >= 1 and parts[0]:
+            dbs.append(parts[0])
+
+    return dbs
+
+
+def choose_database(db_list):
+    """
+    Muestra las bases de datos y permite elegir una.
+    """
+    print("\nBases de datos disponibles:\n")
+    for i, db in enumerate(db_list, start=1):
+        print(f"{i}. {db}")
+
+    while True:
+        choice = input("\nSeleccione el número de la base de datos: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(db_list):
+            return db_list[int(choice) - 1]
+        print("Selección inválida. Intente nuevamente.")
+
+
 def backup(db_name, backup_path, with_filestore=True, cleanup=True):
     odoo_backup_orchestrator = OdooBackupOrchestrator(
         container_name=os.getenv("PROJECT_NAME"),
@@ -434,6 +570,7 @@ def backup(db_name, backup_path, with_filestore=True, cleanup=True):
             "/home/odoo/data/filestore" if with_filestore else None
         ),
         overwrite_existing=True,
+        linux_dump_user="dump_user",
     )
 
     odoo_backup_orchestrator.run_backup()
@@ -455,7 +592,11 @@ if __name__ == "__main__":
         "backup", help="Backup de la base de datos y filestore de Odoo"
     )
 
-    backup_parser.add_argument("-d", required=True, help="Nombre de la base de datos")
+    backup_parser.add_argument(
+        "-d",
+        required=False,
+        help="Nombre de la base de datos (opcional). Si no se proporciona, se listarán las bases disponibles para elegir.",
+    )
 
     backup_parser.add_argument(
         "-p",
@@ -482,6 +623,22 @@ if __name__ == "__main__":
     if args.run != "backup":
         parser.print_help()
         sys.exit(1)
+
+    # Si no se pasa -d, listar y elegir
+    if not args.d:
+        print("No se especificó base de datos. Listando bases disponibles...")
+        dbs = list_databases(
+            db_user=os.getenv("POSTGRES_USER"),
+            db_host=os.getenv("POSTGRES_HOST"),
+            db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        )
+        if not dbs:
+            print("No se encontraron bases de datos.")
+            sys.exit(1)
+
+        chosen_db = choose_database(dbs)
+        print(f"\nBase de datos seleccionada: {chosen_db}")
+        args.d = chosen_db
 
     backup(
         db_name=args.d,
