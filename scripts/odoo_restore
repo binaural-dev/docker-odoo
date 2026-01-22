@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+
+import zipfile
+import tempfile
+import shutil
+import os
+import subprocess
+import argparse
+import sys
+
+
+class ZipExtractor:
+    def __init__(self, zip_path, extract_to):
+        self.zip_path = zip_path
+        self.temp_dir = extract_to
+
+    def extract(self):
+        print(f"Descomprimiendo ZIP en ruta local: {self.temp_dir}")
+
+        with zipfile.ZipFile(self.zip_path, "r") as z:
+            z.extractall(self.temp_dir)
+
+        dump_path = os.path.join(self.temp_dir, "dump.sql")
+        filestore_path = os.path.join(self.temp_dir, "filestore")
+
+        if not os.path.isfile(dump_path):
+            raise FileNotFoundError("dump.sql no encontrado dentro del ZIP")
+
+        return dump_path, filestore_path, self.temp_dir
+
+
+class DatabaseRestoreManager:
+    def __init__(
+        self,
+        container,
+        db_name,
+        db_user,
+        db_host,
+        db_port,
+        local_dump_path,
+        container_db_dump_path,
+        linux_dump_user,
+    ):
+        self.container = container
+        self.db_name = db_name
+        self.db_user = db_user
+        self.db_host = db_host
+        self.db_port = db_port
+        self.local_dump_path = local_dump_path
+        self.container_db_dump_path = container_db_dump_path
+        self.linux_dump_user = linux_dump_user
+
+    def _create_dump_user(self):
+        print(
+            f"Creando usuario Linux para realizar dump dentro del contenedor {self.container} de forma segura."
+        )
+
+        # 1. Verificar si el usuario ya existe
+        check_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "bash",
+            "-c",
+            f"id -u {self.linux_dump_user} >/dev/null 2>&1",
+        ]
+
+        user_exists = subprocess.run(check_cmd).returncode == 0
+
+        if user_exists:
+            print(
+                f"Usuario '{self.linux_dump_user}' ya existe. No se creará nuevamente."
+            )
+            return
+
+        cmd = [
+            "docker",
+            "exec",
+            "-u",
+            "root",
+            self.container,
+            "useradd",
+            "-m",
+            "-s",
+            "/bin/bash",
+            self.linux_dump_user,
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        print(f"Usuario '{self.linux_dump_user}' creado correctamente.")
+
+    def create_database(self):
+
+        self._create_dump_user()
+
+        print(
+            f"Creando nueva base de datos '{self.db_name}' dentro del contenedor {self.container}"
+        )
+
+        check_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "psql",
+            "-U",
+            self.db_user,
+            "-h",
+            self.db_host,
+            "-p",
+            str(self.db_port),
+            "-tAc",
+            f"SELECT 1 FROM pg_database WHERE datname='{self.db_name}'",
+        ]
+
+        result = subprocess.run(check_cmd, capture_output=True, text=True)
+
+        if result.stdout.strip() == "1":
+            raise RuntimeError(
+                f"La base de datos '{self.db_name}' ya existe. No se puede sobrescribir."
+            )
+
+        create_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "createdb",
+            "-U",
+            self.db_user,
+            "-h",
+            self.db_host,
+            "-p",
+            str(self.db_port),
+            self.db_name,
+        ]
+
+        subprocess.run(create_cmd, check=True)
+
+    def _copy_dump_to_container(self):
+        print(f"Copiando dump.sql al contenedor {self.container}")
+
+        cmd_mkdir = [
+            "docker",
+            "exec",
+            "-u",
+            self.linux_dump_user,
+            self.container,
+            "mkdir",
+            "-p",
+            os.path.dirname(self.container_db_dump_path),
+        ]
+
+        subprocess.run(cmd_mkdir, check=True)
+
+        cmd = [
+            "docker",
+            "cp",
+            self.local_dump_path,
+            f"{self.container}:{self.container_db_dump_path}",
+        ]
+
+        subprocess.run(cmd, check=True)
+
+    def restore_dump(self):
+        print(f"Restaurando dump.sql en la base '{self.db_name}'")
+
+        self._copy_dump_to_container()
+
+        cmd = [
+            "docker",
+            "exec",
+            "-i",
+            self.container,
+            "psql",
+            "-U",
+            self.db_user,
+            "-h",
+            self.db_host,
+            "-p",
+            str(self.db_port),
+            "-d",
+            self.db_name,
+            "-f",
+            self.container_db_dump_path,
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        print("Command:", " ".join(cmd))
+
+        return True
+
+
+class FilestoreRestoreManager:
+
+    def __init__(
+        self, container, local_filestore_path, container_filestore_path, linux_dump_user
+    ):
+        self.container = container
+        self.local_filestore_path = local_filestore_path
+        self.container_filestore_path = container_filestore_path
+        self.linux_dump_user = linux_dump_user
+
+    def restore_filestore(self):
+        if not os.path.isdir(self.local_filestore_path):
+            print("No se encontró filestore en el ZIP. Se omitirá.")
+            return
+
+        print(f"Restaurando filestore a {self.container_filestore_path}")
+
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                self.container,
+                "mkdir",
+                "-p",
+                self.container_filestore_path,
+            ],
+            check=True,
+        )
+
+        cmd = [
+            "docker",
+            "cp",
+            f"{self.local_filestore_path}/.",
+            f"{self.container}:{self.container_filestore_path}",
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        cmd_fix_permissions = [
+            "docker",
+            "exec",
+            self.container,
+            "chown",
+            "-R",
+            "odoo:odoo",
+            self.container_filestore_path,
+        ]
+
+        subprocess.run(cmd_fix_permissions, check=True)
+
+
+class RestoreOrchestrator:
+    def __init__(
+        self,
+        zip_path,
+        container_name,
+        new_db_name,
+        db_user,
+        db_host,
+        db_port,
+        container_filestore_base_path,
+        linux_dump_user,
+    ):
+        self.zip_path = zip_path
+        self.container = container_name
+        self.new_db_name = new_db_name
+        self.db_user = db_user
+        self.db_host = db_host
+        self.db_port = db_port
+        self.container_filestore_base_path = container_filestore_base_path
+        self.container_db_dump_path = f"/tmp/odoo_restore_{self.new_db_name}/dump.sql"
+        self.extract_to = tempfile.mkdtemp(prefix="odoo_restore_")
+        self.linux_dump_user = linux_dump_user
+
+    def run(self):
+        print("\n=== Iniciando proceso de RESTORE ===")
+
+        # 1. Extraer ZIP
+        extractor = ZipExtractor(zip_path=self.zip_path, extract_to=self.extract_to)
+        local_dump_path, local_filestore_path, temp_dir = extractor.extract()
+
+        # 2. Restaurar base de datos
+        db_manager = DatabaseRestoreManager(
+            container=self.container,
+            db_name=self.new_db_name,
+            db_user=self.db_user,
+            db_host=self.db_host,
+            db_port=self.db_port,
+            local_dump_path=local_dump_path,
+            container_db_dump_path=self.container_db_dump_path,
+            linux_dump_user=self.linux_dump_user,
+        )
+
+        db_manager.create_database()
+        db_manager.restore_dump()
+
+        # 3. Restaurar filestore
+        filestore_container_path = (
+            f"{self.container_filestore_base_path}/{self.new_db_name}"
+        )
+
+        filestore_manager = FilestoreRestoreManager(
+            container=self.container,
+            local_filestore_path=local_filestore_path,
+            container_filestore_path=filestore_container_path,
+            linux_dump_user=self.linux_dump_user,
+        )
+
+        filestore_manager.restore_filestore()
+
+        print(
+            f"\n✔ Restore completado correctamente para la base '{self.new_db_name}'\n"
+        )
+
+    def cleanup(self):
+        print("Limpiando archivos temporales...")
+
+        rm_local_extracted_folder_cmd = ["rm", "-rf", self.extract_to]
+
+        subprocess.run(rm_local_extracted_folder_cmd, check=True)
+
+        print(f"Removed local temporary files extracted: {self.extract_to}")
+
+        rm_container_db_dump_cmd = [
+            "docker",
+            "exec",
+            "-u",
+            self.linux_dump_user,
+            self.container,
+            "rm",
+            "-r",
+            os.path.dirname(self.container_db_dump_path),
+        ]
+
+        subprocess.run(rm_container_db_dump_cmd, check=True)
+
+        print(
+            f"Removed temporary files dump sql from container: {self.container_db_dump_path}"
+        )
+
+        print("Limpieza completada.")
+
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    raise SystemExit(
+        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
+    )
+
+
+if __name__ == "__main__":
+
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description="Script de restore de Odoo")
+
+    subparsers = parser.add_subparsers(dest="run", help="Acciones")
+
+    restore_parser = subparsers.add_parser(
+        "restore", help="Restaurar una base de datos y filestore desde un ZIP"
+    )
+
+    restore_parser.add_argument(
+        "-z",
+        required=True,
+        help="Ruta local del archivo ZIP del backup",
+    )
+
+    restore_parser.add_argument(
+        "-d",
+        required=True,
+        help="Nombre de la nueva base de datos restaurada",
+    )
+
+    restore_parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="No eliminar archivos temporales después del restore",
+        default=False,
+    )
+
+    args = parser.parse_args()
+
+    # Validación del subcomando
+    if args.run != "restore":
+        parser.print_help()
+        sys.exit(1)
+
+    # Construcción del orquestador
+    restorer = RestoreOrchestrator(
+        zip_path=args.z,
+        container_name=os.getenv("PROJECT_NAME"),
+        new_db_name=args.d,
+        db_user=os.getenv("POSTGRES_USER"),
+        db_host=os.getenv("POSTGRES_HOST"),
+        db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        container_filestore_base_path="/home/odoo/data/filestore",
+        linux_dump_user="dump_user",
+    )
+
+    # Ejecución del restore
+    restorer.run()
+
+    # Cleanup opcional
+    if not args.no_cleanup:
+        restorer.cleanup()
