@@ -1,0 +1,97 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* account_invoice_discount
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 17.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-01-01 00:00+0000\n"
+"PO-Revision-Date: 2024-01-01 00:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Spanish (Venezuela)\n"
+"Language: es_VE\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#. module: account_invoice_discount
+#: model:ir.model,name:account_invoice_discount.model_account_customer_type
+msgid "Customer Type"
+msgstr "Tipo de Cliente"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_customer_type__name
+msgid "Name"
+msgstr "Nombre"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_customer_type__code
+msgid "Code"
+msgstr "Código"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_customer_type__description
+msgid "Description"
+msgstr "Descripción"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_customer_type__active
+msgid "Active"
+msgstr "Activo"
+
+#. module: account_invoice_discount
+#: model:ir.actions.act_window,name:account_invoice_discount.action_account_customer_type
+msgid "Customer Types"
+msgstr "Tipos de Cliente"
+
+#. module: account_invoice_discount
+#: model:ir.model,name:account_invoice_discount.model_account_discount_rule
+msgid "Discount Rule"
+msgstr "Regla de Descuento"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_discount_rule__name
+msgid "Rule Name"
+msgstr "Nombre de la Regla"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_discount_rule__customer_type_id
+msgid "Customer Type"
+msgstr "Tipo de Cliente"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_discount_rule__discount_percentage
+msgid "Discount (%)"
+msgstr "Descuento (%)"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_discount_rule__min_amount
+msgid "Minimum Amount"
+msgstr "Monto Mínimo"
+
+#. module: account_invoice_discount
+#: model:ir.actions.act_window,name:account_invoice_discount.action_account_discount_rule
+msgid "Discount Rules"
+msgstr "Reglas de Descuento"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_res_partner__customer_type_id
+msgid "Customer Type"
+msgstr "Tipo de Cliente"
+
+#. module: account_invoice_discount
+#: model:ir.model.fields,field_description:account_invoice_discount.field_account_discount_rule__company_id
+msgid "Company"
+msgstr "Compañía"
+
+#. module: account_invoice_discount
+#: model_terms:ir.ui.view,arch_db:account_invoice_discount.account_customer_type_form_view
+msgid "Archived"
+msgstr "Archivado"
+
+#. module: account_invoice_discount
+#: model_terms:ir.ui.view,arch_db:account_invoice_discount.account_discount_rule_form_view
+msgid "Archived"
+msgstr "Archivado"

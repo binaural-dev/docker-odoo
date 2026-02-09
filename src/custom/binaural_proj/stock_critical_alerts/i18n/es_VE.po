@@ -1,0 +1,52 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* stock_critical_alerts
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 17.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-01-01 00:00+0000\n"
+"PO-Revision-Date: 2024-01-01 00:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Spanish (Venezuela)\n"
+"Language: es_VE\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#. module: stock_critical_alerts
+#: model:ir.model.fields,field_description:stock_critical_alerts.field_product_template__stock_minimum
+msgid "Minimum Stock"
+msgstr "Stock Mínimo"
+
+#. module: stock_critical_alerts
+#: model:ir.model.fields,field_description:stock_critical_alerts.field_product_template__stock_alert_sent
+msgid "Alert Sent"
+msgstr "Alerta Enviada"
+
+#. module: stock_critical_alerts
+#: model:ir.actions.act_window,name:stock_critical_alerts.action_product_critical_stock
+msgid "Critical Stock Dashboard"
+msgstr "Tablero de Stock Crítico"
+
+#. module: stock_critical_alerts
+#: model:ir.ui.menu,name:stock_critical_alerts.menu_critical_stock_root
+msgid "Critical Stock"
+msgstr "Stock Crítico"
+
+#. module: stock_critical_alerts
+#: model:ir.cron,name:stock_critical_alerts.ir_cron_check_stock_critical
+msgid "Check Critical Stock Levels"
+msgstr "Verificar Niveles de Stock Crítico"
+
+#. module: stock_critical_alerts
+#: model_terms:ir.ui.view,arch_db:stock_critical_alerts.product_template_search_view_stock_critical
+msgid "Has Minimum Stock"
+msgstr "Tiene Stock Mínimo"
+
+#. module: stock_critical_alerts
+#: model_terms:ir.ui.view,arch_db:stock_critical_alerts.product_template_critical_stock_tree
+msgid "Critical Stock Products"
+msgstr "Productos con Stock Crítico"

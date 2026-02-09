@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="account_financial_kpi_form_view" model="ir.ui.view">
+        <field name="name">account.financial.kpi.form</field>
+        <field name="model">account.financial.kpi</field>
+        <field name="arch" type="xml">
+            <form string="Financial KPI">
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_refresh" type="object" class="oe_stat_button" icon="fa-refresh">
+                            <span>Refresh</span>
+                        </button>
+                    </div>
+                    <widget name="web_ribbon" title="Archived" bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1>
+                            <field name="name" placeholder="KPI Name"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="sequence"/>
+                            <field name="unit_type"/>
+                            <field name="kpi_value"/>
+                            <field name="kpi_status" widget="badge" decoration-success="kpi_status == 'green'" decoration-warning="kpi_status == 'yellow'" decoration-danger="kpi_status == 'red'"/>
+                        </group>
+                        <group>
+                            <field name="threshold_warning"/>
+                            <field name="threshold_critical"/>
+                            <field name="invert_thresholds"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="formula" widget="ace" options="{'mode': 'python'}"/>
+                    </group>
+                    <group>
+                        <field name="description"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="account_financial_kpi_tree_view" model="ir.ui.view">
+        <field name="name">account.financial.kpi.tree</field>
+        <field name="model">account.financial.kpi</field>
+        <field name="arch" type="xml">
+            <tree string="Financial KPIs">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="kpi_value"/>
+                <field name="unit_type"/>
+                <field name="kpi_status" widget="badge" decoration-success="kpi_status == 'green'" decoration-warning="kpi_status == 'yellow'" decoration-danger="kpi_status == 'red'"/>
+                <field name="threshold_warning"/>
+                <field name="threshold_critical"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="account_financial_kpi_search_view" model="ir.ui.view">
+        <field name="name">account.financial.kpi.search</field>
+        <field name="model">account.financial.kpi</field>
+        <field name="arch" type="xml">
+            <search string="Financial KPIs">
+                <field name="name"/>
+                <filter string="Good" name="status_green" domain="[('kpi_status', '=', 'green')]"/>
+                <filter string="Warning" name="status_yellow" domain="[('kpi_status', '=', 'yellow')]"/>
+                <filter string="Critical" name="status_red" domain="[('kpi_status', '=', 'red')]"/>
+                <separator/>
+                <filter string="Archived" name="inactive" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter string="Status" name="group_status" context="{'group_by': 'kpi_status'}"/>
+                    <filter string="Unit Type" name="group_unit" context="{'group_by': 'unit_type'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_account_financial_kpi" model="ir.actions.act_window">
+        <field name="name">Financial KPIs</field>
+        <field name="res_model">account.financial.kpi</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+</odoo>

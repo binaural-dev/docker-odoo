@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_account_financial_kpi_dashboard"
+        name="Financial Health"
+        parent="account.menu_finance"
+        action="action_account_financial_kpi_dashboard"
+        sequence="5"/>
+
+    <menuitem id="menu_account_financial_kpi_config"
+        name="Financial KPIs"
+        parent="account.menu_finance_configuration"
+        action="action_account_financial_kpi"
+        sequence="60"/>
+</odoo>

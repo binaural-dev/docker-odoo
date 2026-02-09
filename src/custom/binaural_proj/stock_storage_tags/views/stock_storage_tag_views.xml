@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="stock_storage_tag_form_view" model="ir.ui.view">
+        <field name="name">stock.storage.tag.form</field>
+        <field name="model">stock.storage.tag</field>
+        <field name="arch" type="xml">
+            <form string="Storage Tag">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1>
+                            <field name="name" placeholder="Tag Name"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="color" widget="color_picker"/>
+                        </group>
+                        <group>
+                            <field name="product_count"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="description"/>
+                    </group>
+                    <notebook>
+                        <page string="Products" name="products">
+                            <field name="product_ids">
+                                <tree>
+                                    <field name="name"/>
+                                    <field name="default_code"/>
+                                    <field name="categ_id"/>
+                                </tree>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="stock_storage_tag_tree_view" model="ir.ui.view">
+        <field name="name">stock.storage.tag.tree</field>
+        <field name="model">stock.storage.tag</field>
+        <field name="arch" type="xml">
+            <tree string="Storage Tags">
+                <field name="name"/>
+                <field name="color" widget="color_picker"/>
+                <field name="product_count"/>
+                <field name="description"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="stock_storage_tag_kanban_view" model="ir.ui.view">
+        <field name="name">stock.storage.tag.kanban</field>
+        <field name="model">stock.storage.tag</field>
+        <field name="arch" type="xml">
+            <kanban class="o_kanban_mobile">
+                <field name="name"/>
+                <field name="color"/>
+                <field name="product_count"/>
+                <templates>
+                    <t t-name="kanban-box">
+                        <div t-attf-class="oe_kanban_color_#{kanban_getcolor(record.color.raw_value)} oe_kanban_global_click">
+                            <div class="oe_kanban_content">
+                                <div class="o_kanban_record_top">
+                                    <strong class="o_kanban_record_title">
+                                        <field name="name"/>
+                                    </strong>
+                                </div>
+                                <div class="o_kanban_record_bottom">
+                                    <span class="badge rounded-pill">
+                                        <field name="product_count"/> Products
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <record id="stock_storage_tag_search_view" model="ir.ui.view">
+        <field name="name">stock.storage.tag.search</field>
+        <field name="model">stock.storage.tag</field>
+        <field name="arch" type="xml">
+            <search string="Storage Tags">
+                <field name="name"/>
+                <field name="description"/>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_stock_storage_tag" model="ir.actions.act_window">
+        <field name="name">Storage Tags</field>
+        <field name="res_model">stock.storage.tag</field>
+        <field name="view_mode">kanban,tree,form</field>
+    </record>
+</odoo>

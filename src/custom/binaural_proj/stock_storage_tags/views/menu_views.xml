@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_stock_storage_tags"
+        name="Storage Tags"
+        parent="stock.menu_stock_config_settings"
+        action="action_stock_storage_tag"
+        sequence="50"/>
+
+    <menuitem id="menu_products_by_storage_tag"
+        name="Products by Tag"
+        parent="stock.menu_stock_root"
+        action="action_product_template_by_storage_tag"
+        sequence="15"/>
+</odoo>

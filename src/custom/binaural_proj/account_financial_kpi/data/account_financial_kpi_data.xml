@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <record id="kpi_gross_margin" model="account.financial.kpi">
+            <field name="name">Margen Bruto</field>
+            <field name="sequence">10</field>
+            <field name="formula">(total_income - total_expense) / total_income * 100 if total_income else 0</field>
+            <field name="threshold_warning">30</field>
+            <field name="threshold_critical">15</field>
+            <field name="unit_type">percentage</field>
+            <field name="description">Utilidad bruta como porcentaje del ingreso total</field>
+        </record>
+
+        <record id="kpi_current_ratio" model="account.financial.kpi">
+            <field name="name">Liquidez Corriente</field>
+            <field name="sequence">20</field>
+            <field name="formula">total_current_assets / total_current_liabilities if total_current_liabilities else 0</field>
+            <field name="threshold_warning">1.5</field>
+            <field name="threshold_critical">1.0</field>
+            <field name="unit_type">ratio</field>
+            <field name="description">Capacidad de pagar obligaciones a corto plazo con activos corrientes</field>
+        </record>
+
+        <record id="kpi_receivable_turnover" model="account.financial.kpi">
+            <field name="name">Rotación de Cuentas por Cobrar</field>
+            <field name="sequence">30</field>
+            <field name="formula">total_income / total_receivable if total_receivable else 0</field>
+            <field name="threshold_warning">4</field>
+            <field name="threshold_critical">2</field>
+            <field name="unit_type">ratio</field>
+            <field name="description">Eficiencia en el cobro de cuentas por cobrar</field>
+        </record>
+    </data>
+</odoo>

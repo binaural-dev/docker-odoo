@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="product_template_form_view_storage_tags" model="ir.ui.view">
+        <field name="name">product.template.form.storage.tags</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='categ_id']" position="after">
+                <field name="storage_tag_ids" widget="many2many_tags" options="{'color_field': 'color'}"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="product_template_kanban_view_storage_tags" model="ir.ui.view">
+        <field name="name">product.template.kanban.storage.tags</field>
+        <field name="model">product.template</field>
+        <field name="arch" type="xml">
+            <kanban default_group_by="storage_tag_ids">
+                <field name="name"/>
+                <field name="default_code"/>
+                <field name="categ_id"/>
+                <field name="storage_tag_ids"/>
+                <field name="qty_available"/>
+                <field name="image_128"/>
+                <templates>
+                    <t t-name="kanban-box">
+                        <div class="oe_kanban_global_click">
+                            <div class="o_kanban_image">
+                                <img t-att-src="kanban_image('product.template', 'image_128', record.id.raw_value)" alt="Product"/>
+                            </div>
+                            <div class="oe_kanban_details">
+                                <strong class="o_kanban_record_title">
+                                    <field name="name"/>
+                                </strong>
+                                <div t-if="record.default_code.raw_value">
+                                    [<field name="default_code"/>]
+                                </div>
+                                <div>
+                                    <field name="categ_id"/>
+                                </div>
+                                <div class="mt-2">
+                                    <field name="storage_tag_ids" widget="many2many_tags" options="{'color_field': 'color'}"/>
+                                </div>
+                                <div class="text-muted">
+                                    Stock: <field name="qty_available"/>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <record id="product_template_search_view_storage_tags" model="ir.ui.view">
+        <field name="name">product.template.search.storage.tags</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_search_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='categ_id']" position="after">
+                <field name="storage_tag_ids"/>
+            </xpath>
+            <xpath expr="//group[@expand='1']" position="inside">
+                <filter string="Storage Tag" name="group_storage_tag" context="{'group_by': 'storage_tag_ids'}"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="action_product_template_by_storage_tag" model="ir.actions.act_window">
+        <field name="name">Products by Storage Tag</field>
+        <field name="res_model">product.template</field>
+        <field name="view_mode">kanban,tree,form</field>
+        <field name="context">{'search_default_group_storage_tag': 1}</field>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'kanban', 'view_id': ref('product_template_kanban_view_storage_tags')})]"/>
+    </record>
+
+    <record id="action_add_storage_tag" model="ir.actions.server">
+        <field name="name">Add Storage Tag</field>
+        <field name="model_id" ref="product.model_product_template"/>
+        <field name="binding_model_id" ref="product.model_product_template"/>
+        <field name="binding_view_types">list,form</field>
+        <field name="state">code</field>
+        <field name="code">
+action = {
+    'type': 'ir.actions.act_window',
+    'name': 'Add Storage Tag',
+    'res_model': 'stock.storage.tag.wizard',
+    'view_mode': 'form',
+    'target': 'new',
+    'context': {'default_product_ids': records.ids},
+}
+        </field>
+    </record>
+</odoo>

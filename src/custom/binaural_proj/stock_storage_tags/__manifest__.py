@@ -1,0 +1,21 @@
+{
+    'name': 'Stock Storage Tags',
+    'version': '17.0.1.0.0',
+    'category': 'Inventory',
+    'summary': 'Smart storage tags for product organization in warehouses',
+    'description': 'Allows products to have dynamic tags for improved warehouse organization with kanban view and quick actions.',
+    'author': 'Binaural',
+    'website': 'https://www.binaural.es',
+    'license': 'LGPL-3',
+    'depends': ['stock', 'product'],
+    'data': [
+        'security/ir.model.access.csv',
+        'views/stock_storage_tag_views.xml',
+        'views/stock_storage_tag_wizard_views.xml',
+        'views/product_template_views.xml',
+        'views/menu_views.xml',
+    ],
+    'installable': True,
+    'application': False,
+    'auto_install': False,
+}

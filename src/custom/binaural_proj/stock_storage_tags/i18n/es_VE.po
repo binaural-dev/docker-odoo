@@ -1,0 +1,107 @@
+# Translation of Odoo Server.
+# This file contains the translation of the following modules:
+# 	* stock_storage_tags
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: Odoo Server 17.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2024-01-01 00:00+0000\n"
+"PO-Revision-Date: 2024-01-01 00:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Spanish (Venezuela)\n"
+"Language: es_VE\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#. module: stock_storage_tags
+#: model:ir.model,name:stock_storage_tags.model_stock_storage_tag
+msgid "Storage Tag"
+msgstr "Etiqueta de Almacenamiento"
+
+#. module: stock_storage_tags
+#: model:ir.model.fields,field_description:stock_storage_tags.field_stock_storage_tag__name
+msgid "Tag Name"
+msgstr "Nombre de Etiqueta"
+
+#. module: stock_storage_tags
+#: model:ir.model.fields,field_description:stock_storage_tags.field_stock_storage_tag__color
+msgid "Color Index"
+msgstr "Índice de Color"
+
+#. module: stock_storage_tags
+#: model:ir.model.fields,field_description:stock_storage_tags.field_stock_storage_tag__description
+msgid "Description"
+msgstr "Descripción"
+
+#. module: stock_storage_tags
+#: model:ir.model.fields,field_description:stock_storage_tags.field_stock_storage_tag__product_ids
+msgid "Products"
+msgstr "Productos"
+
+#. module: stock_storage_tags
+#: model:ir.model.fields,field_description:stock_storage_tags.field_stock_storage_tag__product_count
+msgid "Product Count"
+msgstr "Cantidad de Productos"
+
+#. module: stock_storage_tags
+#: model:ir.model.fields,field_description:stock_storage_tags.field_product_template__storage_tag_ids
+msgid "Storage Tags"
+msgstr "Etiquetas de Almacenamiento"
+
+#. module: stock_storage_tags
+#: model:ir.actions.act_window,name:stock_storage_tags.action_stock_storage_tag
+msgid "Storage Tags"
+msgstr "Etiquetas de Almacenamiento"
+
+#. module: stock_storage_tags
+#: model:ir.ui.menu,name:stock_storage_tags.menu_stock_storage_tags
+msgid "Storage Tags"
+msgstr "Etiquetas de Almacenamiento"
+
+#. module: stock_storage_tags
+#: model:ir.actions.act_window,name:stock_storage_tags.action_product_template_by_storage_tag
+msgid "Products by Storage Tag"
+msgstr "Productos por Etiqueta de Almacenamiento"
+
+#. module: stock_storage_tags
+#: model:ir.ui.menu,name:stock_storage_tags.menu_products_by_storage_tag
+msgid "Products by Tag"
+msgstr "Productos por Etiqueta"
+
+#. module: stock_storage_tags
+#: model:ir.actions.server,name:stock_storage_tags.action_add_storage_tag
+msgid "Add Storage Tag"
+msgstr "Agregar Etiqueta de Almacenamiento"
+
+#. module: stock_storage_tags
+#: model:ir.model,name:stock_storage_tags.model_stock_storage_tag_wizard
+msgid "Add Storage Tag Wizard"
+msgstr "Asistente para Agregar Etiqueta"
+
+#. module: stock_storage_tags
+#: model:ir.model.fields,field_description:stock_storage_tags.field_stock_storage_tag_wizard__tag_ids
+msgid "Tags to Add"
+msgstr "Etiquetas a Agregar"
+
+#. module: stock_storage_tags
+#: model:ir.model.fields,field_description:stock_storage_tags.field_stock_storage_tag_wizard__remove_tag_ids
+msgid "Tags to Remove"
+msgstr "Etiquetas a Eliminar"
+
+#. module: stock_storage_tags
+#: model:ir.ui.view,arch_db:stock_storage_tags.stock_storage_tag_wizard_form_view
+msgid "Manage Storage Tags"
+msgstr "Gestionar Etiquetas de Almacenamiento"
+
+#. module: stock_storage_tags
+#: model:ir.ui.view,arch_db:stock_storage_tags.stock_storage_tag_wizard_form_view
+msgid "Apply"
+msgstr "Aplicar"
+
+#. module: stock_storage_tags
+#: model:ir.ui.view,arch_db:stock_storage_tags.stock_storage_tag_wizard_form_view
+msgid "Cancel"
+msgstr "Cancelar"

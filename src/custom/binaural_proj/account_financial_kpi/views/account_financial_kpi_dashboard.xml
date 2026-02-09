@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="account_financial_kpi_kanban_view" model="ir.ui.view">
+        <field name="name">account.financial.kpi.kanban</field>
+        <field name="model">account.financial.kpi</field>
+        <field name="arch" type="xml">
+            <kanban class="o_kanban_dashboard" create="false">
+                <field name="name"/>
+                <field name="kpi_value"/>
+                <field name="kpi_status"/>
+                <field name="unit_type"/>
+                <field name="description"/>
+                <templates>
+                    <t t-name="kanban-box">
+                        <div t-attf-class="oe_kanban_global_click kpi_card #{record.kpi_status.raw_value == 'green' ? 'kpi_status_green' : record.kpi_status.raw_value == 'yellow' ? 'kpi_status_yellow' : 'kpi_status_red'}">
+                            <div class="o_kanban_card_content">
+                                <div class="kpi_header">
+                                    <strong class="kpi_title">
+                                        <field name="name"/>
+                                    </strong>
+                                </div>
+                                <div class="kpi_value_container">
+                                    <span class="kpi_value">
+                                        <field name="kpi_value" widget="float" digits="[16, 2]"/>
+                                    </span>
+                                    <span class="kpi_unit">
+                                        <t t-if="record.unit_type.raw_value == 'percentage'">%</t>
+                                        <t t-elif="record.unit_type.raw_value == 'currency'">$</t>
+                                    </span>
+                                </div>
+                                <div class="kpi_status_indicator">
+                                    <span t-attf-class="badge #{record.kpi_status.raw_value == 'green' ? 'text-bg-success' : record.kpi_status.raw_value == 'yellow' ? 'text-bg-warning' : 'text-bg-danger'}">
+                                        <t t-if="record.kpi_status.raw_value == 'green'">Good</t>
+                                        <t t-elif="record.kpi_status.raw_value == 'yellow'">Warning</t>
+                                        <t t-else="">Critical</t>
+                                    </span>
+                                </div>
+                                <div class="kpi_description text-muted" t-if="record.description.raw_value">
+                                    <field name="description"/>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <record id="action_account_financial_kpi_dashboard" model="ir.actions.act_window">
+        <field name="name">Financial Health Dashboard</field>
+        <field name="res_model">account.financial.kpi</field>
+        <field name="view_mode">kanban,tree,form</field>
+        <field name="view_ids" eval="[(5, 0, 0),
+            (0, 0, {'view_mode': 'kanban', 'view_id': ref('account_financial_kpi_kanban_view')})]"/>
+    </record>
+</odoo>

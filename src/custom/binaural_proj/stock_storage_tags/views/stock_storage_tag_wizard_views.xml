@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="stock_storage_tag_wizard_form_view" model="ir.ui.view">
+        <field name="name">stock.storage.tag.wizard.form</field>
+        <field name="model">stock.storage.tag.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Manage Storage Tags">
+                <group>
+                    <field name="product_ids" widget="many2many_tags" readonly="1"/>
+                </group>
+                <group>
+                    <group>
+                        <field name="tag_ids" widget="many2many_tags" options="{'color_field': 'color'}"/>
+                    </group>
+                    <group>
+                        <field name="remove_tag_ids" widget="many2many_tags" options="{'color_field': 'color'}"/>
+                    </group>
+                </group>
+                <footer>
+                    <button name="action_apply" string="Apply" type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="account_discount_rule_form_view" model="ir.ui.view">
+        <field name="name">account.discount.rule.form</field>
+        <field name="model">account.discount.rule</field>
+        <field name="arch" type="xml">
+            <form string="Discount Rule">
+                <sheet>
+                    <div class="oe_button_box" name="button_box"/>
+                    <widget name="web_ribbon" title="Archived" bg_color="text-bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <label for="name"/>
+                        <h1>
+                            <field name="name" placeholder="Rule Name"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="customer_type_id"/>
+                        </group>
+                        <group>
+                            <field name="discount_percentage"/>
+                            <field name="min_amount"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="active" invisible="1"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="description"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="account_discount_rule_tree_view" model="ir.ui.view">
+        <field name="name">account.discount.rule.tree</field>
+        <field name="model">account.discount.rule</field>
+        <field name="arch" type="xml">
+            <tree string="Discount Rules">
+                <field name="name"/>
+                <field name="customer_type_id"/>
+                <field name="discount_percentage"/>
+                <field name="min_amount"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="account_discount_rule_search_view" model="ir.ui.view">
+        <field name="name">account.discount.rule.search</field>
+        <field name="model">account.discount.rule</field>
+        <field name="arch" type="xml">
+            <search string="Discount Rules">
+                <field name="name"/>
+                <field name="customer_type_id"/>
+                <filter string="Archived" name="inactive" domain="[('active', '=', False)]"/>
+                <group expand="0" string="Group By">
+                    <filter string="Customer Type" name="group_customer_type" context="{'group_by': 'customer_type_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_account_discount_rule" model="ir.actions.act_window">
+        <field name="name">Discount Rules</field>
+        <field name="res_model">account.discount.rule</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+</odoo>

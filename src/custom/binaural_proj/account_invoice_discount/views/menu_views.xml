@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_account_customer_type_config"
+        name="Customer Types"
+        parent="account.menu_finance_configuration"
+        action="action_account_customer_type"
+        groups="account.group_account_manager"
+        sequence="49"/>
+
+    <menuitem id="menu_account_discount_rule_config"
+        name="Discount Rules"
+        parent="account.menu_finance_configuration"
+        action="action_account_discount_rule"
+        groups="account.group_account_manager"
+        sequence="50"/>
+</odoo>

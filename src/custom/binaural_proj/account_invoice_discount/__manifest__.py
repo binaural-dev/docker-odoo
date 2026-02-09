@@ -1,0 +1,21 @@
+{
+    'name': 'Account Invoice Discount',
+    'version': '17.0.2.0.0',
+    'category': 'Accounting',
+    'summary': 'Automatic discount rules on invoices based on customer type',
+    'description': 'Implements automatic discount policies on invoices according to customer type with configurable discount rules.',
+    'author': 'Binaural',
+    'website': 'https://www.binaural.es',
+    'license': 'LGPL-3',
+    'depends': ['account', 'contacts'],
+    'data': [
+        'security/ir.model.access.csv',
+        'views/account_customer_type_views.xml',
+        'views/res_partner_views.xml',
+        'views/account_discount_rule_views.xml',
+        'views/menu_views.xml',
+    ],
+    'installable': True,
+    'application': False,
+    'auto_install': False,
+}

@@ -1,0 +1,20 @@
+{
+    'name': 'Stock Critical Alerts',
+    'version': '17.0.1.0.0',
+    'category': 'Inventory',
+    'summary': 'Generate alerts when product stock falls below minimum threshold',
+    'description': 'Generates notifications when stock is below configurable minimum levels with dashboard for critical products.',
+    'author': 'Binaural',
+    'website': 'https://www.binaural.es',
+    'license': 'LGPL-3',
+    'depends': ['stock', 'mail', 'product'],
+    'data': [
+        'security/ir.model.access.csv',
+        'data/ir_cron.xml',
+        'views/product_template_views.xml',
+        'views/stock_critical_dashboard.xml',
+    ],
+    'installable': True,
+    'application': False,
+    'auto_install': False,
+}

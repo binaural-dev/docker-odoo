@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="product_template_form_view_stock_minimum" model="ir.ui.view">
+        <field name="name">product.template.form.stock.minimum</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="stock.view_template_property_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//group[@name='stock_property']" position="inside">
+                <field name="stock_minimum" invisible="type != 'product'"/>
+                <field name="stock_alert_sent"/>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="product_template_search_view_stock_critical" model="ir.ui.view">
+        <field name="name">product.template.search.stock.critical</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="product.product_template_search_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//filter[@name='consumable']" position="after">
+                <separator/>
+                <filter string="Critical Stock" name="critical_stock"
+                    domain="[('stock_alert_sent', '=', True)]"/>
+                <filter string="Has Minimum Stock" name="has_minimum"
+                    domain="[('stock_minimum', '&gt;', 0), ('type', '=', 'product')]"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
