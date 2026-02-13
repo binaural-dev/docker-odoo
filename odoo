@@ -221,6 +221,19 @@ def init_addons():
             print(f"{repository} exists")
 
 
+def fix_filestore_ownership_odoo():
+    print("\n=== Corrección de permisos de propiedad filestore Odoo ===\n")
+
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+
+    cmd_app = (
+        f"docker exec -u root -it {PROJECT_NAME} chown -R odoo:odoo /home/odoo/data"
+    )
+    print(cmd_app)
+    os.system(cmd_app)
+    print()
+
+
 def start_odoo():
     print("\n=== Iniciando Odoo ===\n")
 
@@ -235,6 +248,8 @@ def start_odoo():
     cmd_app = "docker compose -f docker-compose.app.yml up -d"
     print(cmd_app)
     os.system(cmd_app)
+
+    fix_filestore_ownership_odoo()
 
     print("\n✅ Odoo y base de datos están en ejecución.\n")
 
@@ -371,7 +386,13 @@ def main():
     subparsers.add_parser("stop", help="Detiene Odoo")
 
     subparsers.add_parser("restart", help="Reiniciar Odoo")
+
+    subparsers.add_parser(
+        "fix-files", help="Arreglar permisos de propiedad de filestore"
+    )
+
     subparsers.add_parser("bash", help="Bash")
+
     subparsers.add_parser("init", help="Clone repositories")
 
     # Subparser para el comando "logs"
@@ -418,6 +439,11 @@ def main():
     if args.action == "restart":
         restart_odoo()
         return True
+
+    if args.action == "fix-files":
+        fix_filestore_ownership_odoo()
+        return True
+
     if args.action == "build":
         build_odoo(args.no_cache)
         return True
