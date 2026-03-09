@@ -10,7 +10,10 @@
     """,
     'author': 'Ronald Villa',
     'depends': ['stock', 'mail'],
-    'data': [],
+    'data': [
+        'views/product_template_views.xml',
+        'views/stock_critical_dashboard_views.xml',
+    ],
     'installable': True,
     'application': False,
     'auto_install': False,
