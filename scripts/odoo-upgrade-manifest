@@ -1,0 +1,170 @@
+#!/usr/bin/env python3
+import os
+import re
+import sys
+
+# ==========================================
+# 1. RESOLUCIÓN DINÁMICA DE RUTAS Y DOTENV
+# ==========================================
+# Obtiene la ruta absoluta de donde está ESTE script (carpeta 'scripts')
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+# Asumimos que la raíz del proyecto es un nivel arriba de 'scripts'
+PROJECT_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, '..'))
+
+def load_custom_dotenv(env_path):
+    """Lee el archivo .env de forma nativa sin requerir pip install python-dotenv"""
+    if os.path.exists(env_path):
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    # Limpiamos espacios y comillas
+                    os.environ[key.strip()] = value.strip().strip("'").strip('"')
+
+# Cargamos el .env desde la raíz del proyecto
+load_custom_dotenv(os.path.join(PROJECT_ROOT, '.env'))
+
+# Leemos la variable del .env, si no existe, usamos 'src' por defecto
+SRC_FOLDER_NAME = os.getenv('ODOO_SRC_PATH', 'src')
+BASE_SRC_PATH = os.path.join(PROJECT_ROOT, SRC_FOLDER_NAME)
+
+# ==========================================
+# 2. LÓGICA DE ACTUALIZACIÓN
+# ==========================================
+def bump_version(version_str):
+    parts = version_str.split('.')
+    try:
+        parts[-1] = str(int(parts[-1]) + 1)
+        return '.'.join(parts)
+    except ValueError:
+        print(f"  [!] Error: El último valor de la versión no es numérico ({version_str})")
+        return version_str
+
+def update_manifest(module_path):
+    manifest_path = os.path.join(module_path, '__manifest__.py')
+    
+    if not os.path.exists(manifest_path):
+        print(f"  [-] Saltando: No se encontró __manifest__.py en {module_path}")
+        return
+
+    with open(manifest_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    pattern = r"(['\"]version['\"]\s*:\s*['\"])([\d\.]+)(['\"])"
+    match = re.search(pattern, content)
+    
+    if match:
+        old_version = match.group(2)
+        new_version = bump_version(old_version)
+        
+        if old_version != new_version:
+            new_content = content[:match.start(2)] + new_version + content[match.end(2):]
+            with open(manifest_path, 'w', encoding='utf-8') as f:
+                f.write(new_content)
+            print(f"  [+] Éxito: {old_version} -> {new_version}")
+    else:
+        print(f"  [!] Advertencia: No se encontró la clave 'version' en {manifest_path}")
+
+# ==========================================
+# 3. ASISTENTE INTERACTIVO
+# ==========================================
+def get_parent_directories(base_path):
+    """Busca carpetas válidas dentro de src/ y src/custom/"""
+    parents = []
+    
+    # 1. Buscar en src/ directamente (ej. enterprise)
+    if os.path.exists(base_path):
+        for d in sorted(os.listdir(base_path)):
+            full_path = os.path.join(base_path, d)
+            if os.path.isdir(full_path) and not d.startswith('.') and d != 'custom':
+                parents.append({'display': d, 'full_path': full_path})
+    
+    # 2. Buscar dentro de src/custom/
+    custom_path = os.path.join(base_path, 'custom')
+    if os.path.exists(custom_path):
+        for d in sorted(os.listdir(custom_path)):
+            full_path = os.path.join(custom_path, d)
+            if os.path.isdir(full_path) and not d.startswith('.'):
+                parents.append({'display': f"custom/{d}", 'full_path': full_path})
+                
+    return parents
+
+def main():
+    print(f"\n--- BUMP VERSION ODOO ---")
+    print(f"📍 Directorio base detectado: {BASE_SRC_PATH}")
+    
+    parents = get_parent_directories(BASE_SRC_PATH)
+    if not parents:
+        print(f"❌ No se encontraron carpetas padre en '{BASE_SRC_PATH}'.")
+        print("💡 Verifica tu archivo .env o la estructura de carpetas.")
+        sys.exit(1)
+
+    print("\n📁 Carpetas padre disponibles:")
+    for i, p in enumerate(parents, 1):
+        print(f"  {i}. {p['display']}")
+        
+    parent_choice = input("\n👉 Selecciona el número de la carpeta padre: ")
+    try:
+        parent_idx = int(parent_choice.strip()) - 1
+        if parent_idx < 0 or parent_idx >= len(parents):
+            raise ValueError
+        selected_parent = parents[parent_idx]
+    except ValueError:
+        print("❌ Selección inválida. Saliendo...")
+        sys.exit(1)
+
+    print(f"\n📂 Escaneando módulos en '{selected_parent['display']}'...")
+    modules = []
+    parent_full_path = selected_parent['full_path']
+    
+    for d in os.listdir(parent_full_path):
+        mod_path = os.path.join(parent_full_path, d)
+        if os.path.isdir(mod_path) and os.path.exists(os.path.join(mod_path, '__manifest__.py')):
+            modules.append(d)
+            
+    modules.sort()
+    
+    if not modules:
+        print(f"❌ No se encontraron módulos en '{selected_parent['display']}'.")
+        sys.exit(1)
+
+    print("\n📦 Módulos disponibles:")
+    for i, mod in enumerate(modules, 1):
+        print(f"  {i}. {mod}")
+        
+    print("\n💡 Ingresa los números separados por espacios o comas (Ej: 1, 4, 5)")
+    mod_choices = input("👉 Módulos a actualizar: ")
+    
+    selected_modules = []
+    raw_numbers = mod_choices.replace(',', ' ').split()
+    
+    for num_str in raw_numbers:
+        try:
+            mod_idx = int(num_str.strip()) - 1
+            if 0 <= mod_idx < len(modules):
+                if modules[mod_idx] not in selected_modules:
+                    selected_modules.append(modules[mod_idx])
+            else:
+                print(f"  [!] Número {num_str} fuera de rango.")
+        except ValueError:
+            print(f"  [!] '{num_str}' no es un número válido.")
+            
+    if not selected_modules:
+        print("❌ Ningún módulo seleccionado.")
+        sys.exit(1)
+        
+    print(f"\n🚀 Actualizando {len(selected_modules)} módulos:\n")
+    for mod in selected_modules:
+        mod_path = os.path.join(parent_full_path, mod)
+        print(f"Procesando: {mod}")
+        update_manifest(mod_path)
+        
+    print("\n✅ ¡Proceso completado con éxito!")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n🛑 Proceso cancelado.")
+        sys.exit(0)
