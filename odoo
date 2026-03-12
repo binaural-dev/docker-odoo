@@ -220,16 +220,17 @@ def sync(repo_name_arg="interactive", branch="interactive", show=False):
         
         # 4. Sincronización de carpetas compartidas globales
         for sub in submodules:
+            os.chdir(repo_path)
             sub_name = sub["name"]
             sub_path = sub["path"]
             
             try:
                 commit_res = subprocess.run(["git", "rev-parse", f"HEAD:{sub_path}"], capture_output=True, text=True, check=True)
-                commit = commit_res.stdout.strip()
+                required_hash = commit_res.stdout.strip()
             except subprocess.CalledProcessError:
                 continue
             
-            if not commit:
+            if not required_hash:
                 continue
 
             global_candidates = [
@@ -257,20 +258,35 @@ def sync(repo_name_arg="interactive", branch="interactive", show=False):
             try:
                 subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
                 subprocess.run(["git", "fetch"], stdout=stdout, stderr=stderr)
-                subprocess.run(["git", "checkout", commit], stdout=stdout, stderr=stderr)
                 
-                current_commit = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
-                if current_commit != commit:
-                    print(f"\nERROR: No se pudo hacer checkout a {commit[:7]} en {global_repo}")
+                # Intento 1: Checkout directo (Fast Path)
+                subprocess.run(["git", "checkout", required_hash], stdout=stdout, stderr=stderr)
+                current_hash = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+                
+                # Intento 2: Plan de rescate (Targeted Fetch) si la rama fue borrada
+                if current_hash != required_hash:
+                    if not show:
+                        print(f"\r {sub_name} Intentando rescate de hash en origin... ", end="")
+                    
+                    rescue_fetch = subprocess.run(["git", "fetch", "origin", required_hash], stdout=stdout, stderr=stderr)
+                    
+                    if rescue_fetch.returncode == 0:
+                        subprocess.run(["git", "checkout", required_hash], stdout=stdout, stderr=stderr)
+                        current_hash = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+                # Verificación final
+                if current_hash != required_hash:
+                    print(f"\nERROR: No se pudo hacer checkout a {required_hash[:7]} en {global_repo}")
                     raise Exception("Checkout error")
 
                 if not show:
-                    print(f"\r {sub_name} ( {commit[:7]} ) Sincronizado ✅" + " " * 30)
-            except Exception as a:
+                    print(f"\r {sub_name} ( {required_hash[:7]} ) Sincronizado ✅" + " " * 30)
+                    
+            except Exception as e:
                 if show:
-                    print(a)
+                    print(e)
                 if not show:
-                    print(f"\r {sub_name} ( {commit[:7]} ) Sincronizado Fallido ❌" + " " * 30)
+                    print(f"\r {sub_name} ( {required_hash[:7]} ) Sincronizado Fallido ❌" + " " * 30)
     else:
         print(f"\r {repo_name}: Sin submodulos para actualizar.                 ", end=" " * 30)
         print("")
