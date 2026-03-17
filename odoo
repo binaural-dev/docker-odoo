@@ -383,7 +383,7 @@ def interactive_database_selection():
         "exec",
         "-e",
         f"PGPASSWORD={POSTGRES_PASSWORD}",
-        PROJECT_NAME,
+        f"{PROJECT_NAME}_db",
         "psql",
         "--host",
         f"{PROJECT_NAME}_db",
