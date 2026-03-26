@@ -334,17 +334,16 @@ class RestoreOrchestrator:
         print("Limpieza completada.")
 
 
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    raise SystemExit(
-        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
-    )
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import load_config, resolve_db_config, get_db_host
 
 
 if __name__ == "__main__":
 
-    load_dotenv()
+    config = load_config(BASE_PATH)
 
     parser = argparse.ArgumentParser(description="Script de restore de Odoo")
 
@@ -352,6 +351,11 @@ if __name__ == "__main__":
 
     restore_parser = subparsers.add_parser(
         "restore", help="Restaurar una base de datos y filestore desde un ZIP"
+    )
+
+    restore_parser.add_argument(
+        "instance",
+        help="Nombre de la instancia de Odoo",
     )
 
     restore_parser.add_argument(
@@ -380,14 +384,26 @@ if __name__ == "__main__":
         parser.print_help()
         sys.exit(1)
 
+    instance = args.instance
+    if instance not in config["instances"]:
+        print(f"Error: instancia '{instance}' no existe")
+        sys.exit(1)
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_port = db_conf["port"]
+    container_name = f"odoo-{instance}"
+
     # Construcción del orquestador
     restorer = RestoreOrchestrator(
         zip_path=args.z,
-        container_name=os.getenv("PROJECT_NAME"),
+        container_name=container_name,
         new_db_name=args.d,
-        db_user=os.getenv("POSTGRES_USER"),
-        db_host=os.getenv("POSTGRES_HOST"),
-        db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        db_user=db_user,
+        db_host=db_host,
+        db_port=db_port,
         container_filestore_base_path="/home/odoo/data/filestore",
         linux_dump_user="dump_user",
     )

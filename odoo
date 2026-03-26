@@ -1,21 +1,276 @@
 #!/usr/bin/env python3
 
+"""
+Multi-instance Odoo Docker management CLI.
+Reads instances.json and generates/manages Docker containers for multiple Odoo instances.
+"""
+
 import argparse
+import json
 import os
 import subprocess
 import sys
-
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    raise SystemExit(
-        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
-    )
 from pathlib import Path
+
+# Add .resources to path for generators
+BASE_PATH = str(Path(__file__).resolve().parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+
+from generators.config_loader import (
+    load_config,
+    resolve_instance_config,
+    resolve_db_config,
+    get_db_host,
+    get_unique_odoo_versions,
+    get_managed_databases,
+)
+from generators.dockerfile_generator import generate_dockerfiles
+from generators.compose_generator import generate_compose
+from generators.nginx_generator import generate_nginx_config
+
+COMPOSE_FILE = "docker-compose.generated.yml"
+
+
+def _docker_compose(*args):
+    """Run docker compose with the generated file."""
+    cmd = f"docker compose -f {COMPOSE_FILE} {' '.join(args)}"
+    print(cmd)
+    os.system(cmd)
+
+
+def _get_instance_services(config, instance=None):
+    """Get the list of docker compose service names for an instance (or all)."""
+    if instance:
+        if instance not in config["instances"]:
+            print(f"Error: Instancia '{instance}' no existe en instances.json")
+            print(f"Instancias disponibles: {', '.join(config['instances'].keys())}")
+            sys.exit(1)
+        return [f"odoo-{instance}"]
+    return [f"odoo-{name}" for name in config["instances"]]
+
+
+def _get_db_services(config, instance=None):
+    """Get managed DB services needed for an instance (or all)."""
+    if instance:
+        inst_conf = config["instances"][instance]
+        db_name = inst_conf["database"]
+        db_conf = config["databases"][db_name]
+        if db_conf.get("create_container", True):
+            return [f"db-{db_name}"]
+        return []
+    # All managed DBs
+    return [f"db-{name}" for name in get_managed_databases(config)]
+
+
+# ============================================================
+# Commands
+# ============================================================
+
+
+def build_odoo(config, no_cache):
+    """Generate all config files and build Docker images."""
+    print("\n=== Generando archivos de configuración ===\n")
+
+    # 1. Generate Dockerfiles for each unique Odoo version
+    unique_versions = get_unique_odoo_versions(config)
+    print(f"Versiones de Odoo detectadas: {', '.join(sorted(unique_versions))}")
+    dockerfile_map = generate_dockerfiles(BASE_PATH, unique_versions)
+
+    # 2. Generate docker-compose.generated.yml
+    generate_compose(BASE_PATH, config, dockerfile_map)
+
+    # 3. Generate nginx config
+    generate_nginx_config(BASE_PATH, config)
+
+    # 4. Build images
+    print("\n=== Construyendo imágenes Docker ===\n")
+    if no_cache:
+        _docker_compose("build", "--no-cache")
+    else:
+        _docker_compose("build")
+
+    print("\n✅ Build completado.\n")
+
+
+def start_odoo(config, instance=None):
+    """Start database(s), Odoo instance(s), and nginx."""
+    if instance:
+        print(f"\n=== Iniciando instancia: {instance} ===\n")
+    else:
+        print("\n=== Iniciando todas las instancias ===\n")
+
+    db_services = _get_db_services(config, instance)
+    odoo_services = _get_instance_services(config, instance)
+
+    # Start managed DBs
+    if db_services:
+        print("→ Iniciando base(s) de datos...")
+        _docker_compose("up", "-d", *db_services)
+
+    # Start Odoo instances
+    print("\n→ Iniciando instancia(s) Odoo...")
+    _docker_compose("up", "-d", *odoo_services)
+
+    # Fix filestore permissions
+    for svc in odoo_services:
+        os.system(
+            f"docker exec -u root {svc} chown -R odoo:odoo /home/odoo/data 2>/dev/null || true"
+        )
+
+    # Start nginx
+    print("\n→ Iniciando Nginx...")
+    _docker_compose("up", "-d", "nginx")
+
+    # Show URLs
+    print("\n✅ Instancias en ejecución:\n")
+    instances_to_show = [instance] if instance else config["instances"].keys()
+    for name in instances_to_show:
+        port = config["instances"][name]["external_port"]
+        print(f"  • {name}: http://localhost:{port}")
+
+    print()
+
+
+def stop_odoo(config, instance=None):
+    """Stop Odoo instance(s) and optionally their databases."""
+    if instance:
+        print(f"\n=== Deteniendo instancia: {instance} ===\n")
+        odoo_services = _get_instance_services(config, instance)
+        _docker_compose("stop", *odoo_services)
+        # Check if the DB is still used by other running instances
+        db_name = config["instances"][instance]["database"]
+        db_conf = config["databases"][db_name]
+        if db_conf.get("create_container", True):
+            other_users = [
+                name for name, conf in config["instances"].items()
+                if conf["database"] == db_name and name != instance
+            ]
+            if not other_users:
+                print(f"\n→ Deteniendo base de datos {db_name} (sin otras instancias que la usen)...")
+                _docker_compose("stop", f"db-{db_name}")
+            else:
+                print(f"\n→ Base de datos {db_name} no se detiene (usada por: {', '.join(other_users)})")
+    else:
+        print("\n=== Deteniendo todas las instancias ===\n")
+        _docker_compose("down")
+
+    print("\n🛑 Detenido.\n")
+
+
+def restart_odoo(config, instance=None):
+    """Restart Odoo instance(s)."""
+    stop_odoo(config, instance)
+    start_odoo(config, instance)
+
+
+def remove_odoo(config, instance=None):
+    """Remove containers and volumes."""
+    if instance:
+        target = f"instancia '{instance}'"
+    else:
+        target = "TODAS las instancias y bases de datos"
+
+    do_continue = input(
+        f"⚠️  Esto eliminará {target} y sus datos. ¿Deseas continuar? (s/n): "
+    )
+    if do_continue.lower() != "s":
+        print("Operación cancelada.")
+        return
+
+    if instance:
+        odoo_services = _get_instance_services(config, instance)
+        for svc in odoo_services:
+            os.system(f"docker compose -f {COMPOSE_FILE} rm -s -v -f {svc}")
+    else:
+        _docker_compose("down", "-v", "--remove-orphans")
+
+    print("\n🛑 Eliminado.\n")
+
+
+def run_bash(config, instance):
+    """Open bash in an Odoo instance container."""
+    container = f"odoo-{instance}"
+    print(f"docker exec -u root -it {container} bash")
+    os.system(f"docker exec -u root -it {container} bash")
+
+
+def bash_update_modules(config, instance, dbname, modules="all"):
+    """Update Odoo modules in an instance."""
+    container = f"odoo-{instance}"
+    cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+    print(cmd)
+    os.system(cmd)
+
+
+def show_logs(config, instance=None):
+    """Show logs for instance(s)."""
+    if instance:
+        services = _get_instance_services(config, instance)
+        db_services = _get_db_services(config, instance)
+        all_services = db_services + services
+        _docker_compose("logs", "--tail=10", "-f", *all_services)
+    else:
+        _docker_compose("logs", "--tail=10", "-f")
+
+
+def list_containers(config):
+    """List running containers."""
+    _docker_compose("ps")
+
+
+def fix_filestore(config, instance=None):
+    """Fix filestore ownership."""
+    services = _get_instance_services(config, instance)
+    for svc in services:
+        print(f"→ Corrigiendo permisos en {svc}...")
+        os.system(
+            f"docker exec -u root {svc} chown -R odoo:odoo /home/odoo/data"
+        )
+    print("\n✅ Permisos corregidos.\n")
+
+
+def psql_connect(config, instance, dbname):
+    """Connect to psql in an instance."""
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    db_port = db_conf["port"]
+    container = f"odoo-{instance}"
+
+    os.system(
+        f"docker exec -it -e PGPASSWORD={db_password} {container} "
+        f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname}"
+    )
+
+
+def init_addons(config, instance=None):
+    """Clone required repositories for instance(s)."""
+    instances_to_init = [instance] if instance else list(config["instances"].keys())
+    sources_path = os.path.join(BASE_PATH, "src")
+
+    for inst_name in instances_to_init:
+        inst_conf = config["instances"][inst_name]
+        odoo_conf = resolve_instance_config(inst_conf, config)
+        addons = odoo_conf.get("addons", [])
+        odoo_version = inst_conf["odoo_version"]
+
+        print(f"\n=== Init para instancia: {inst_name} (Odoo {odoo_version}) ===")
+        for addon_path in addons:
+            # addon_path is like "src/enterprise" or "src/custom/bananera"
+            local_path = os.path.join(BASE_PATH, addon_path)
+            if os.path.isdir(local_path):
+                print(f"  ✓ {addon_path} ya existe")
+            else:
+                print(f"  → {addon_path} no encontrado. Créalo manualmente o clona el repositorio correspondiente en {local_path}")
+
+    print()
 
 
 def sync(repo_name, branch, show=False):
-    path = str(Path(__file__).resolve().parent)
+    """Sync submodules for a custom repository."""
+    path = BASE_PATH
     src_path = path + "/src/"
     repo_path = src_path + "custom/" + repo_name
     if not os.path.isdir(repo_path):
@@ -35,9 +290,6 @@ def sync(repo_name, branch, show=False):
     branch_now = values_lines[0].replace("On branch ", "")
 
     submodules = ["integra-addons", "third-party-addons", "odoo-venezuela"]
-    # Mapping from submodule names to their corresponding internal Git module directory names.
-    # This is necessary when the submodule's directory name in .gitmodules differs from the name used in the codebase.
-    # For example, "odoo-venezuela" is referred to as "homo-addons" in the .gitmodules file.
     submodule_gitmodules_map = {"odoo-venezuela": "homo-addons"}
     print(
         "\r %s: Cambiando a %s                           " % (repo_name, branch),
@@ -121,368 +373,112 @@ def sync(repo_name, branch, show=False):
     subprocess.run(["git", "stash", "pop"], stdout=stdout, stderr=stderr)
 
 
-def run_bash():
-    PROJECT_NAME = os.getenv("PROJECT_NAME")
-    print(f"docker exec -u root -it {PROJECT_NAME} bash")
-    os.system(f"docker exec -u root -it {PROJECT_NAME} bash")
-
-
-def bash_update_modules(dbname: str, modules: str = "all"):
-    PROJECT_NAME = os.getenv("PROJECT_NAME")
-    print(
-        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
-    )
-    os.system(
-        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
-    )
-
-
-def build_odoo(no_cache):
-    ODOO_VERSION = os.getenv("ODOO_VERSION")
-    RESOURCES_DIR = "/.resources"
-    file_path = str(Path(__file__).resolve().parent)
-
-    if not os.path.exists(file_path + "/.env"):
-        print("Error #1: The file .env does not exist")
-        return
-
-    if not ODOO_VERSION:
-        print("Error #2: ODOO_VERSION is not defined")
-        return
-
-    try:
-        with open(file_path + RESOURCES_DIR + "/Dockerfile", "w") as Dockerfile:
-            dockerfile_path = (
-                file_path
-                + RESOURCES_DIR
-                + "/dockerfiles/"
-                + ODOO_VERSION
-                + "_Dockerfile"
-            )
-            dockerfile_template_path = (
-                file_path + RESOURCES_DIR + "/Dockerfile.template"
-            )
-
-            if not os.path.exists(dockerfile_path):
-                raise BaseException(
-                    f"Error #3: Dockerfile for {ODOO_VERSION} does not exist"
-                )
-
-            if not os.path.exists(dockerfile_template_path):
-                raise BaseException("Error #3: Dockerfile.template does not exist")
-
-            with open(dockerfile_path, "r") as dockerfile_version:
-                Dockerfile.write(dockerfile_version.read())
-                Dockerfile.write(
-                    "\n"
-                )  # Opcional: agregar un salto de línea entre los archivos
-
-            with open(dockerfile_template_path, "r") as dockerfile_template:
-                Dockerfile.write(dockerfile_template.read())
-                Dockerfile.write(
-                    "\n"
-                )  # Opcional: agregar un salto de línea entre los archivos
-
-    except FileNotFoundError as e:
-        print(e)
-    if no_cache:
-        print("Construyendo Odoo sin caché...")
-        os.system("docker compose -f docker-compose.app.yml build --no-cache")
-    else:
-        print("Construyendo Odoo con caché...")
-        os.system("docker compose -f docker-compose.app.yml build")
-
-
-def init_addons():
-    ORG_NAME = os.getenv("ORG_NAME") or "binaural-dev"
-    required_sources = {
-        "binaural": [
-            f"{ORG_NAME}/enterprise",
-            f"{ORG_NAME}/integra-addons",
-            f"{ORG_NAME}/third-party-addons",
-            f"{ORG_NAME}/odoo-venezuela",
-        ],
-        "external": [f"{ORG_NAME}/odoo-venezuela"],
-        "enterprise": [f"{ORG_NAME}/enterprise"],
-    }
-    ENV_TYPE = os.getenv("ENV_TYPE")
-    print("Clonando Repositorios")
-    ODOO_VERSION = os.getenv("ODOO_VERSION")
-    SOURCES = os.path.join(Path(__file__).resolve().parent, "src")
-
-    for repository in required_sources[ENV_TYPE]:
-        name = repository.split("/")[1]
-        path = os.path.join(SOURCES, name)
-        if not os.path.isdir(os.path.join(SOURCES, name)):
-            os.system(
-                f"git clone -b '{ODOO_VERSION}' git@github.com:{repository}.git {path}"
-            )
-        else:
-            print(f"{repository} exists")
-
-
-def fix_filestore_ownership_odoo():
-    print("\n=== Corrección de permisos de propiedad filestore Odoo ===\n")
-
-    PROJECT_NAME = os.getenv("PROJECT_NAME")
-
-    cmd_app = (
-        f"docker exec -u root -it {PROJECT_NAME} chown -R odoo:odoo /home/odoo/data"
-    )
-    print(cmd_app)
-    os.system(cmd_app)
-    print()
-
-
-def start_odoo():
-    print("\n=== Iniciando Odoo ===\n")
-
-    # Levantar base de datos
-    print("→ Iniciando base de datos...")
-    cmd_db = "docker compose -f docker-compose.db.yml up -d"
-    print(cmd_db)
-    os.system(cmd_db)
-
-    # Levantar aplicación Odoo
-    print("\n→ Iniciando aplicación Odoo...")
-    cmd_app = "docker compose -f docker-compose.app.yml up -d"
-    print(cmd_app)
-    os.system(cmd_app)
-
-    fix_filestore_ownership_odoo()
-
-    print("\n✅ Odoo y base de datos están en ejecución.\n")
-
-    print(f"\n✅ URL: http://localhost:{os.getenv('EXTERNAL_PORT_ODOO')}\n")
-
-    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
-        print("→ Iniciando pgAdmin...")
-        cmd_pgadmin = "docker compose -f docker-compose.pgadmin.yml up -d"
-        print(cmd_pgadmin)
-        os.system(cmd_pgadmin)
-        print("\n✅ pgAdmin está en ejecución.\n")
-
-        print(
-            f"""
-        → Recuerda agregar la conexión a la base de datos (Un nuevo server) en pgAdmin usando los siguientes detalles:
-
-            * Host (Host name/address): db
-            * Puerto (Port): {os.getenv("PGADMIN_EXTERNAL_PORT")}
-            * Usuario (Username): {os.getenv("POSTGRES_USER")}
-            * Contraseña (Password): {os.getenv("POSTGRES_PASSWORD")}
-            * Base de datos central (Maintenance database): {os.getenv("POSTGRES_DB")}
-        """
-        )
-
-
-def stop_odoo():
-    print("\n=== Deteniendo Odoo ===\n")
-
-    # Detener aplicación Odoo
-    print("→ Deteniendo aplicación Odoo...")
-    cmd_app = "docker compose -f docker-compose.app.yml down"
-    print(cmd_app)
-    os.system(cmd_app)
-
-    # Detener base de datos
-    print("\n→ Deteniendo base de datos...")
-    cmd_db = "docker compose -f docker-compose.db.yml down"
-    print(cmd_db)
-    os.system(cmd_db)
-
-    print("\n🛑 Odoo y base de datos han sido detenidos.\n")
-
-    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
-        print("→ Deteniendo pgAdmin...")
-        cmd_pgadmin = "docker compose -f docker-compose.pgadmin.yml down"
-        print(cmd_pgadmin)
-        os.system(cmd_pgadmin)
-        print("\n🛑 pgAdmin ha sido detenido.\n")
-
-
-def remove_odoo():
-    print("\n=== Eliminando Odoo ===\n")
-
-    do_continue = input(
-        "⚠️  Esto eliminará todos los datos de Odoo y la base de datos. ¿Deseas continuar? (s/n):  "
-    )
-
-    if do_continue.lower() == "s":
-        print("Continuando con la eliminación...")
-    else:
-        print("Operación cancelada.")
-        sys.exit()
-        return
-
-    # Detener aplicación Odoo
-    print("→ Eliminando aplicación Odoo...")
-    cmd_app = "docker compose -f docker-compose.app.yml down -v --remove-orphans"
-    print(cmd_app)
-    os.system(cmd_app)
-
-    # Detener base de datos
-    print("\n→ Eliminando base de datos...")
-    cmd_db = "docker compose -f docker-compose.db.yml down -v --remove-orphans"
-    print(cmd_db)
-    os.system(cmd_db)
-
-    print("\n🛑 Odoo y base de datos han sido eliminados.\n")
-
-    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
-        print("→ Eliminando pgAdmin...")
-        cmd_pgadmin = (
-            "docker compose -f docker-compose.pgadmin.yml down -v --remove-orphans"
-        )
-        print(cmd_pgadmin)
-        os.system(cmd_pgadmin)
-        print("\n🛑 pgAdmin ha sido eliminado.\n")
-
-
-def restart_odoo():
-    print("\n=== Reiniciando Odoo ===\n")
-
-    # Detener aplicación Odoo
-    stop_odoo()
-
-    # Iniciar aplicación Odoo
-    start_odoo()
-
-    print("\n✅ Odoo y base de datos reiniciados correctamente.\n")
-
-
-def list_containers():
-    cmd = "docker compose -f docker-compose.app.yml ps"
-    os.system(cmd)
-
-
-def show_logs():
-    cmd_db = "docker compose -f docker-compose.db.yml logs --tail=10 -f"
-    cmd_app = "docker compose -f docker-compose.app.yml logs --tail=10 -f"
-
-    # Abrir dos terminales independientes
-    os.system(cmd_app)
-    os.system(cmd_db)
-
-
-def psql(d):
-    print(d)
-    PROJECT_NAME = os.getenv("PROJECT_NAME")
-    POSTGRES_USER = os.getenv("POSTGRES_USER")
-    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-    os.system(
-        f"docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d {d}"
-    )
+# ============================================================
+# Main CLI
+# ============================================================
 
 
 def main():
-    # Cargar las variables de entorno
-    load_dotenv()
+    os.chdir(BASE_PATH)
 
-    # Crear el parser
-    parser = argparse.ArgumentParser(description="Script para controlar Odoo.")
-
-    subparsers = parser.add_subparsers(dest="action", help="Acciones")
-    subparsers.add_parser("start", help="Ejecuta Odoo")
-    subparsers.add_parser("stop", help="Detiene Odoo")
-
-    subparsers.add_parser("restart", help="Reiniciar Odoo")
-
-    subparsers.add_parser(
-        "fix-files", help="Arreglar permisos de propiedad de filestore"
+    parser = argparse.ArgumentParser(
+        description="Multi-instance Odoo Docker management CLI."
     )
+    subparsers = parser.add_subparsers(dest="action", help="Comandos disponibles")
 
-    subparsers.add_parser("bash", help="Bash")
+    # build
+    build_p = subparsers.add_parser("build", help="Genera configs y construye imágenes Docker")
+    build_p.add_argument("--no-cache", action="store_true", help="Construir sin caché")
 
-    subparsers.add_parser("init", help="Clone repositories")
+    # start
+    start_p = subparsers.add_parser("start", help="Inicia instancia(s) de Odoo")
+    start_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional, sin argumento inicia todas)")
 
-    # Subparser para el comando "logs"
-    subparsers.add_parser("logs", help="Muestra los últimos 10 logs en tiempo real")
+    # stop
+    stop_p = subparsers.add_parser("stop", help="Detiene instancia(s) de Odoo")
+    stop_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
-    subparsers.add_parser("list", help="Lista los contenedores en ejecución")
+    # restart
+    restart_p = subparsers.add_parser("restart", help="Reinicia instancia(s) de Odoo")
+    restart_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
-    subparsers.add_parser(
-        "remove", help="Elimina los contenedores de Odoo y la base de datos"
-    )
+    # bash
+    bash_p = subparsers.add_parser("bash", help="Abre bash en un contenedor Odoo")
+    bash_p.add_argument("instance", help="Nombre de instancia")
 
-    # Subparser para el comando "build"
-    build_parser = subparsers.add_parser("build", help="Construye Odoo")
-    build_parser.add_argument(
-        "--no-cache", action="store_true", help="Construir sin usar caché"
-    )
+    # logs
+    logs_p = subparsers.add_parser("logs", help="Muestra logs en tiempo real")
+    logs_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
-    psql_parser = subparsers.add_parser("psql", help="psql")
-    psql_parser.add_argument("-d", required=True, help="Database name")
+    # list
+    subparsers.add_parser("list", help="Lista contenedores en ejecución")
 
-    sync_parser = subparsers.add_parser("sync", help="Sync Submodules")
-    sync_parser.add_argument("r", help="Repository")
-    sync_parser.add_argument("b", help="Branch")
-    sync_parser.add_argument("--v", action="store_true", default=False, help="Git log")
+    # remove
+    remove_p = subparsers.add_parser("remove", help="Elimina contenedores y volúmenes")
+    remove_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
-    update_parser = subparsers.add_parser("update", help="Update Modules")
-    update_parser.add_argument("-d", required=True, help="Database name")
-    update_parser.add_argument(
-        "-m",
-        default="all",
-        help="Modules to update, default all. Use comma to separate multiple modules",
-    )
+    # fix-files
+    fix_p = subparsers.add_parser("fix-files", help="Corrige permisos del filestore")
+    fix_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
-    # Parsear los argumentos
+    # psql
+    psql_p = subparsers.add_parser("psql", help="Conectar a PostgreSQL")
+    psql_p.add_argument("instance", help="Nombre de instancia")
+    psql_p.add_argument("-d", required=True, help="Nombre de la base de datos")
+
+    # update
+    update_p = subparsers.add_parser("update", help="Actualizar módulos de Odoo")
+    update_p.add_argument("instance", help="Nombre de instancia")
+    update_p.add_argument("-d", required=True, help="Nombre de la base de datos")
+    update_p.add_argument("-m", default="all", help="Módulos a actualizar (separados por coma)")
+
+    # init
+    init_p = subparsers.add_parser("init", help="Inicializar addons/repositorios")
+    init_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+
+    # sync
+    sync_p = subparsers.add_parser("sync", help="Sincroniza submódulos de un repositorio")
+    sync_p.add_argument("r", help="Repositorio")
+    sync_p.add_argument("b", help="Branch")
+    sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
+
     args = parser.parse_args()
 
-    # Ejecutar la acción correspondiente
-    if args.action == "start":
-        start_odoo()
-        return True
-    if args.action == "stop":
-        stop_odoo()
-        return True
-    if args.action == "restart":
-        restart_odoo()
-        return True
+    if not args.action:
+        parser.print_help()
+        return
 
-    if args.action == "fix-files":
-        fix_filestore_ownership_odoo()
-        return True
+    # Load config for all commands except sync (which doesn't need it)
+    if args.action != "sync":
+        config = load_config(BASE_PATH)
 
+    # Dispatch
     if args.action == "build":
-        build_odoo(args.no_cache)
-        return True
-
-    if args.action == "bash":
-        run_bash()
-        return True
-
-    if args.action == "update":
-        bash_update_modules(args.d, args.m)
-        return True
-
-    if args.action == "init":
-        init_addons()
-        return True
-
-    if args.action == "psql":
-        psql(args.d)
-        return True
-
-    if args.action == "sync":
+        build_odoo(config, args.no_cache)
+    elif args.action == "start":
+        start_odoo(config, args.instance)
+    elif args.action == "stop":
+        stop_odoo(config, args.instance)
+    elif args.action == "restart":
+        restart_odoo(config, args.instance)
+    elif args.action == "bash":
+        run_bash(config, args.instance)
+    elif args.action == "logs":
+        show_logs(config, args.instance)
+    elif args.action == "list":
+        list_containers(config)
+    elif args.action == "remove":
+        remove_odoo(config, args.instance)
+    elif args.action == "fix-files":
+        fix_filestore(config, args.instance)
+    elif args.action == "psql":
+        psql_connect(config, args.instance, args.d)
+    elif args.action == "update":
+        bash_update_modules(config, args.instance, args.d, args.m)
+    elif args.action == "init":
+        init_addons(config, args.instance)
+    elif args.action == "sync":
         sync(args.r, args.b, show=args.v)
-        return True
-
-    if args.action == "logs":
-        show_logs()
-        return True
-
-    if args.action == "list":
-        list_containers()
-        return True
-
-    if args.action == "remove":
-        remove_odoo()
-        return True
-
-    parser.print_help()
-
-    return False
 
 
 if __name__ == "__main__":
