@@ -1,0 +1,95 @@
+{
+  "odoo_configs": {
+    "19.0_default": {
+      "admin_password": "admin",
+      "workers": 2,
+      "without_demo": true,
+      "list_db": true,
+      "proxy_mode": true,
+      "limit_memory_soft": 16000000000,
+      "limit_memory_hard": 17000000000,
+      "max_cron_threads": 1,
+      "limit_time_real_cron": 0,
+      "limit_time_real": 3600,
+      "limit_time_cpu": 60,
+      "db_maxconn": 200,
+      "unaccent": false,
+      "server_wide_modules": "",
+      "addons": [
+        "src/enterprise"
+      ]
+    },
+    "17.0_default": {
+      "admin_password": "admin",
+      "workers": 2,
+      "without_demo": true,
+      "list_db": true,
+      "proxy_mode": true,
+      "limit_memory_soft": 16000000000,
+      "limit_memory_hard": 17000000000,
+      "max_cron_threads": 1,
+      "limit_time_real_cron": 0,
+      "limit_time_real": 3600,
+      "limit_time_cpu": 60,
+      "db_maxconn": 200,
+      "unaccent": false,
+      "server_wide_modules": "",
+      "addons": [
+        "src/enterprise"
+      ]
+    }
+  },
+  "databases": {
+    "pg16": {
+      "postgres_version": 16,
+      "port": 5432,
+      "user": "odoo",
+      "password": "odoo",
+      "config": "postgresql.conf"
+    },
+    "external_pg16": {
+      "create_container": false,
+      "postgres_version": 16,
+      "host": "192.168.1.100",
+      "port": 5432,
+      "user": "odoo",
+      "password": "odoo"
+    }
+  },
+  "instances": {
+    "bananera": {
+      "odoo_version": "19.0",
+      "external_port": 8070,
+      "database": "pg16",
+      "odoo_config": "19.0_default",
+      "overwrite_odoo_config": {
+        "workers": 4,
+        "limit_memory_soft": 32000000000,
+        "limit_memory_hard": 34000000000,
+        "addons": [
+          "src/enterprise",
+          "src/custom/bananera"
+        ],
+        "db_name": "bananera_prod"
+      }
+    },
+    "client-b": {
+      "odoo_version": "17.0",
+      "external_port": 8071,
+      "database": "external_pg16",
+      "odoo_config": "17.0_default",
+      "overwrite_odoo_config": {
+        "addons": [
+          "src/enterprise",
+          "src/custom/client-b"
+        ]
+      }
+    }
+  },
+  "pgadmin": {
+    "enabled": false,
+    "port": 5050,
+    "email": "admin@admin.com",
+    "password": "admin"
+  }
+}

@@ -1,6 +1,12 @@
 .env
+instances.json
 src
 .resources/Dockerfile
+.resources/Dockerfile.*
+!.resources/Dockerfile.template
 .resources/dbconfigs/pg_hba.conf
+.resources/nginx_configs/generated.conf
+docker-compose.generated.yml
 **/.vscode/
 venv
+__pycache__

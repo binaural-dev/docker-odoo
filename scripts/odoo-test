@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
 
 import os
+import sys
 import click
-from dotenv import load_dotenv
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import load_config
 
 
 @click.command()
-@click.argument("args", nargs=-1)
-def run_command(args):
-    load_dotenv()
-    PROJECT_NAME = os.getenv("PROJECT_NAME", "")
-    database = "testing"
-    container = "docker exec -uodoo -it " + PROJECT_NAME
-    test_tags = "/binaural_accountant"
+@click.argument("instance")
+@click.option("-d", default="testing", help="Database name")
+@click.option("-t", "--test-tags", default="/binaural_accountant", help="Test tags")
+@click.option("-i", "--install", default="l10n_ve,binaural_rate,account,binaural_accountant", help="Modules to install")
+def run_command(instance, d, test_tags, install):
+    config = load_config(BASE_PATH)
+    if instance not in config["instances"]:
+        click.echo(f"Error: instancia '{instance}' no existe")
+        sys.exit(1)
 
-    modules = ["l10n_ve", "binaural_rate", "account", "binaural_accountant"]
-    modules_str = ','.join(modules)
+    container = f"odoo-{instance}"
     command = (
-        f"{container} odoo --test-tags {test_tags} -d {database} -i {modules_str} "
+        f"docker exec -uodoo -it {container} odoo --test-tags {test_tags} -d {d} -i {install} "
         "--without-demo=True --stop-after-init -c /home/odoo/.config/odoo.conf"
     )
     os.system(command)
