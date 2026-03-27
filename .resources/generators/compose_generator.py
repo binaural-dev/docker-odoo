@@ -191,7 +191,7 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
         f"      ADMIN_PASSWORD: {odoo_conf.get('admin_password', 'admin')}",
         "      SMTP_SERVER: mailhog",
         "      SMTP_PORT: 1025",
-        f"      DBFILTER: {odoo_conf.get('dbfilter', '')}",
+        f"      DBFILTER: {odoo_conf.get('db_filter', '')}",
         f"      SERVER_WIDE_MODULES: {odoo_conf.get('server_wide_modules', '')}",
         f"      WORKERS: {odoo_conf.get('workers', 2)}",
         f"      LIST_DB: {odoo_conf.get('list_db', True)}",

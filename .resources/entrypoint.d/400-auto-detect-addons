@@ -26,6 +26,13 @@ if INSTANCE_ADDONS:
             # Install requirements.txt if present
             requirement_file = os.path.join(full_path, "requirements.txt")
             if os.path.exists(requirement_file):
+                print()
+                print()
+                print()
+                print("Installing requirements for addon: %s" % full_path)
+                print()
+                print()
+                print()
                 subprocess.check_call([
                     "pip", "install", "--no-cache-dir", "-r", requirement_file,
                 ])
@@ -56,6 +63,13 @@ else:
             module_path = os.path.join(CUSTOM, d)
             requirement_file = os.path.join(module_path, "requirements.txt")
             if os.path.exists(requirement_file):
+                print()
+                print()
+                print()
+                print("Installing requirements for custom repository: %s" % full_path)
+                print()
+                print()
+                print()
                 subprocess.check_call(
                     [
                         "pip",
