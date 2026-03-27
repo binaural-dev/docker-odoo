@@ -116,7 +116,8 @@ def get_db_host(db_name, db_conf):
     """
     create_container = db_conf.get("create_container", True)
     if create_container:
-        return f"db-{db_name}"
+        # return f"db-{db_name}"
+        return "host.docker.internal"
     return db_conf["host"]
 
 
