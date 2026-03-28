@@ -1,0 +1,15 @@
+<odoo>
+    <record id="action_stock_critical_dashboard" model="ir.actions.act_window">
+        <field name="name">Tablero de Stock Crítico</field>
+        <field name="res_model">product.template</field>
+        <field name="view_mode">kanban,list,form</field>
+        <field name="domain">[('is_stock_critical', '=', True)]</field>
+        <field name="context">{'search_default_categ_id': 1}</field>
+    </record>
+
+    <menuitem id="menu_stock_critical_dashboard" 
+              name="Stock Crítico" 
+              parent="stock.menu_warehouse_report" 
+              sequence="15" 
+              action="action_stock_critical_dashboard"/>
+</odoo>

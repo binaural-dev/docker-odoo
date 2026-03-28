@@ -1,0 +1,32 @@
+# Forzar LF para todos los archivos de texto por defecto
+* text=auto eol=lf
+
+# Scripts de shell — siempre LF
+*.sh        text eol=lf
+*.py        text eol=lf
+
+# Archivos Docker — siempre LF
+Dockerfile* text eol=lf
+
+# Scripts sin extensión del proyecto — siempre LF
+odoo                            text eol=lf
+.resources/build                text eol=lf
+.resources/entrypoint.sh        text eol=lf
+.resources/bin/direxec          text eol=lf
+.resources/entrypoint.d/*       text eol=lf
+.resources/build.d/*            text eol=lf
+.resources/conf.d/*             text eol=lf
+scripts/odoo-pw                 text eol=lf
+scripts/odoo-test               text eol=lf
+scripts/odoo-update             text eol=lf
+scripts/odoo-backups.old.sh     text eol=lf
+scripts/odoo_backup             text eol=lf
+scripts/odoo_restore            text eol=lf
+scripts/migrate-module          text eol=lf
+scripts/coverage                text eol=lf
+
+# Archivos binarios — sin conversión
+*.png binary
+*.jpg binary
+*.ico binary
+*.dump binary

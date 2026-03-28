@@ -1,0 +1,13 @@
+<odoo>
+    <record id="view_product_template_form_inherit_stock_alert" model="ir.ui.view">
+        <field name="name">product.template.form.inherit.stock.alert</field>
+        <field name="model">product.template</field>
+        <field name="inherit_id" ref="stock.view_template_property_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//group[@name='stock_property']" position="inside">
+                <field name="minimum_stock_alert"/>
+                <field name="is_stock_critical" invisible="1"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
