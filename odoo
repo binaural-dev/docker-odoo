@@ -4,6 +4,7 @@ import argparse
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -11,132 +12,544 @@ except ModuleNotFoundError:
     raise SystemExit(
         "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
     )
-from pathlib import Path
 
 
-def sync(repo_name, branch, show=False):
+# ==========================================
+# ASISTENTES INTERACTIVOS PARA SYNC
+# ==========================================
+def interactive_sync_repo_selection(src_path):
+    """Permite seleccionar de forma interactiva un repositorio Git en src o src/custom"""
+    parents = []
+    if os.path.exists(src_path):
+        parents.append({"display": "src/", "path": src_path})
+
+    custom_path = os.path.join(src_path, "custom")
+    if os.path.exists(custom_path):
+        parents.append({"display": "src/custom/", "path": custom_path})
+
+    if not parents:
+        print(f"❌ No se encontraron las rutas esperadas en {src_path}")
+        sys.exit(1)
+
+    print("\n--- ASISTENTE DE SINCRONIZACIÓN ---")
+    print("\n📁 ¿Dónde está el repositorio que deseas sincronizar?:")
+    for i, p in enumerate(parents, 1):
+        print(f"  {i}. {p['display']}")
+
+    parent_choice = input("\n👉 Selecciona la ruta (Enter para cancelar): ").strip()
+    if not parent_choice:
+        print("Operación cancelada.")
+        sys.exit(0)
+
+    try:
+        parent_idx = int(parent_choice) - 1
+        if parent_idx < 0 or parent_idx >= len(parents):
+            raise ValueError
+        selected_parent = parents[parent_idx]
+    except ValueError:
+        print("❌ Selección inválida.")
+        sys.exit(1)
+
+    # Buscar repositorios Git en la ruta elegida
+    repos = []
+    parent_full_path = selected_parent["path"]
+    for d in sorted(os.listdir(parent_full_path)):
+        full_path = os.path.join(parent_full_path, d)
+        if os.path.isdir(full_path) and os.path.isdir(os.path.join(full_path, ".git")):
+            repos.append(d)
+
+    if not repos:
+        print(
+            f"❌ No se encontraron repositorios Git en '{selected_parent['display']}'."
+        )
+        sys.exit(1)
+
+    print(f"\n📦 Repositorios disponibles en {selected_parent['display']}:")
+    for i, r in enumerate(repos, 1):
+        print(f"  {i}. {r}")
+
+    repo_choice = input("\n👉 Selecciona el número del repositorio: ").strip()
+    try:
+        repo_idx = int(repo_choice) - 1
+        if 0 <= repo_idx < len(repos):
+            repo_name = repos[repo_idx]
+            display_name = (
+                f"custom/{repo_name}"
+                if selected_parent["display"] == "src/custom/"
+                else repo_name
+            )
+            return {
+                "repo_name": display_name,
+                "repo_path": os.path.join(parent_full_path, repo_name),
+            }
+        else:
+            raise ValueError
+    except ValueError:
+        print("❌ Selección inválida.")
+        sys.exit(1)
+
+
+def interactive_sync_branch_selection(repo_path):
+    """Busca las ramas locales del repo y permite seleccionar o escribir una"""
+    print(f"\n📂 Buscando ramas locales...")
+    try:
+        result = subprocess.run(
+            ["git", "-C", repo_path, "branch", "--format=%(refname:short)"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        branches = [b.strip() for b in result.stdout.split("\n") if b.strip()]
+    except subprocess.CalledProcessError:
+        print("❌ Error al consultar las ramas de Git.")
+        sys.exit(1)
+
+    if not branches:
+        print("⚠️  No se encontraron ramas locales.")
+        manual_branch = input(
+            "👉 Escribe el nombre exacto de la rama a sincronizar: "
+        ).strip()
+        if manual_branch:
+            return manual_branch
+        sys.exit(1)
+
+    print("\n🌿 Ramas locales disponibles:")
+    for i, b in enumerate(branches, 1):
+        print(f"  {i}. {b}")
+
+    manual_idx = len(branches) + 1
+    print(f"  {manual_idx}. ✍️  Escribir una rama manualmente")
+
+    choice = input("\n👉 Selecciona el número o escribe el nombre de la rama: ").strip()
+    if not choice:
+        print("Operación cancelada.")
+        sys.exit(0)
+
+    try:
+        idx = int(choice) - 1
+        if idx == len(branches):
+            manual_branch = input("👉 Escribe el nombre exacto de la rama: ").strip()
+            if manual_branch:
+                return manual_branch
+            else:
+                print("❌ Operación cancelada por rama vacía.")
+                sys.exit(1)
+        elif 0 <= idx < len(branches):
+            return branches[idx]
+        else:
+            print("❌ Selección de número fuera de rango.")
+            sys.exit(1)
+    except ValueError:
+        print(f"💡 Resolviendo entrada manual: '{choice}'")
+        return choice
+
+
+# ==========================================
+# FUNCION SYNC PRINCIPAL
+# ==========================================
+def sync(repo_name_arg="interactive", branch="interactive", show=False):
     path = str(Path(__file__).resolve().parent)
-    src_path = path + "/src/"
-    repo_path = src_path + "custom/" + repo_name
-    if not os.path.isdir(repo_path):
-        print("No se encuentra el repositorio solicitado!")
-        return
+    src_path = os.path.join(path, "src")
+
+    # 1. Resolución de Repositorio (Interactiva o Difusa)
+    if repo_name_arg == "interactive":
+        repo_data = interactive_sync_repo_selection(src_path)
+        repo_name = repo_data["repo_name"]
+        repo_path = repo_data["repo_path"]
+    else:
+        direct_path = os.path.join(src_path, repo_name_arg)
+        custom_path = os.path.join(src_path, "custom", repo_name_arg)
+
+        if os.path.isdir(os.path.join(direct_path, ".git")):
+            repo_path = direct_path
+            repo_name = repo_name_arg
+        elif os.path.isdir(os.path.join(custom_path, ".git")):
+            repo_path = custom_path
+            repo_name = f"custom/{repo_name_arg}"
+        else:
+            found = False
+            custom_dir = os.path.join(src_path, "custom")
+            if os.path.exists(custom_dir):
+                for d in os.listdir(custom_dir):
+                    if (
+                        os.path.isdir(os.path.join(custom_dir, d, ".git"))
+                        and repo_name_arg.lower() in d.lower()
+                    ):
+                        repo_path = os.path.join(custom_dir, d)
+                        repo_name = f"custom/{d}"
+                        found = True
+                        print(
+                            f"💡 Resolviendo repositorio: '{repo_name_arg}' -> '{repo_name}'"
+                        )
+                        break
+            if not found:
+                print(
+                    f"❌ Error: No se encuentra un repositorio que coincida con '{repo_name_arg}'"
+                )
+                return
+
+    # 2. Selección de Rama
+    if branch == "interactive":
+        branch = interactive_sync_branch_selection(repo_path)
+
+    print(f"\n🚀 Iniciando sincronización...")
+    print(f"📁 Repositorio: {repo_name}")
+    print(f"🌿 Rama destino: {branch}\n")
+
     os.chdir(repo_path)
 
-    stdout = subprocess.DEVNULL
-    stderr = subprocess.STDOUT
+    stdout = subprocess.DEVNULL if not show else None
+    stderr = subprocess.STDOUT if not show else None
 
-    if show:
-        stdout = None
-        stderr = None
-    print("\r %s: Guardando cambios actuales... " % (repo_name), end=" " * 50)
+    print(f"\r {repo_name}: Guardando cambios actuales... ", end=" " * 30)
     value = subprocess.run(["git", "status"], capture_output=True)
     values_lines = value.stdout.decode().split("\n")
     branch_now = values_lines[0].replace("On branch ", "")
 
-    submodules = ["integra-addons", "third-party-addons", "odoo-venezuela"]
-    # Mapping from submodule names to their corresponding internal Git module directory names.
-    # This is necessary when the submodule's directory name in .gitmodules differs from the name used in the codebase.
-    # For example, "odoo-venezuela" is referred to as "homo-addons" in the .gitmodules file.
-    submodule_gitmodules_map = {"odoo-venezuela": "homo-addons"}
     print(
-        "\r %s: Cambiando a %s                           " % (repo_name, branch),
-        end=" " * 50,
+        f"\r {repo_name}: Cambiando a {branch}                                ",
+        end=" " * 30,
     )
     subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
     subprocess.run(["git", "checkout", branch], stdout=stdout, stderr=stderr)
     subprocess.run(["git", "pull"], stdout=stdout, stderr=stderr)
-    print(
-        "\r %s: Actualizando %s                          " % (repo_name, branch),
-        end=" " * 50,
-    )
-    for submodule in submodules:
-        subprocess.run(
-            ["git", "reset", "HEAD", "--", submodule], stdout=stdout, stderr=stderr
-        )
-        subprocess.run(
-            ["git", "-C", submodule, "stash", "--include-untracked"],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        subprocess.run(
-            ["git", "submodule", "update", "--init", "--force", "--", submodule],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        print(
-            "\r %s: Obteniendo submodulos de %s                     "
-            % (repo_name, branch),
-            end=" " * 50,
-        )
 
-    print("")
-    for submodule in submodules:
-        if not show:
-            print("\r %s Sincronizando... " % (submodule), end="")
-        commit = ""
-        submodule_internal = submodule_gitmodules_map.get(submodule, submodule)
+    # 3. Detección Dinámica de Submodulos (.gitmodules)
+    submodules = []
+    if os.path.exists(".gitmodules"):
         try:
-            with open(
-                repo_path + "/.git/modules/" + submodule_internal + "/HEAD", "r"
-            ) as Modules:
-                line = Modules.readlines()[0]
-                if line.startswith("ref:"):
-                    commit = line.split("/")[2].replace("\n", "")
-                else:
-                    commit = line.replace("\n", "")
+            result = subprocess.run(
+                ["git", "config", "--file", ".gitmodules", "--get-regexp", "path"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            for line in result.stdout.strip().split("\n"):
+                if line:
+                    key, path_val = line.split(" ", 1)
+                    name = key.split(".")[1]
+                    submodules.append({"name": name, "path": path_val})
+        except subprocess.CalledProcessError:
+            pass
 
-            if not commit:
+    if submodules:
+        print(
+            f"\r {repo_name}: Actualizando {len(submodules)} submodulos detectados... ",
+            end=" " * 30,
+        )
+        for sub in submodules:
+            sub_path = sub["path"]
+            subprocess.run(
+                ["git", "reset", "HEAD", "--", sub_path], stdout=stdout, stderr=stderr
+            )
+            subprocess.run(
+                ["git", "-C", sub_path, "stash", "--include-untracked"],
+                stdout=stdout,
+                stderr=stderr,
+            )
+            subprocess.run(
+                ["git", "submodule", "update", "--init", "--force", "--", sub_path],
+                stdout=stdout,
+                stderr=stderr,
+            )
+
+        print("")
+
+        # 4. Sincronización de carpetas compartidas globales
+        for sub in submodules:
+            os.chdir(repo_path)
+            sub_name = sub["name"]
+            sub_path = sub["path"]
+
+            try:
+                commit_res = subprocess.run(
+                    ["git", "rev-parse", f"HEAD:{sub_path}"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                required_hash = commit_res.stdout.strip()
+            except subprocess.CalledProcessError:
                 continue
-            submodule_path = src_path + submodule
-            os.chdir(submodule_path)
-            subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
-            subprocess.run(["git", "fetch"], stdout=stdout, stderr=stderr)
-            response = subprocess.run(["git", "checkout", commit], capture_output=True)
-            success = response.stderr.decode()
 
-            if commit[:8] not in success and commit[:7] not in success:
-                print(commit.encode())
-                print(success.encode())
-                print("ERROR")
-                raise Exception("Error")
+            if not required_hash:
+                continue
+
+            global_candidates = [
+                os.path.join(src_path, sub_path),
+                os.path.join(src_path, sub_name),
+                os.path.join(src_path, "custom", sub_path),
+                os.path.join(src_path, "custom", sub_name),
+            ]
+
+            global_repo = None
+            for cand in global_candidates:
+                if os.path.isdir(cand) and os.path.isdir(os.path.join(cand, ".git")):
+                    global_repo = cand
+                    break
+
+            if not global_repo:
+                if show:
+                    print(
+                        f"  -> Omite {sub_name}: No se encontró como directorio global en src/"
+                    )
+                continue
 
             if not show:
-                print(
-                    "\r %s ( %s ) Sincronizado ✅" % (submodule, commit), end=" " * 30
-                )
-        except Exception as a:
-            print(a)
-            if not show:
-                print(
-                    "\r %s ( %s ) Sincronizado Fallido ❌" % (submodule, commit),
-                    end=" " * 30,
-                )
+                print(f"\r {sub_name} Sincronizando directorio global... ", end="")
 
-        if not show:
-            print("")
+            os.chdir(global_repo)
+            try:
+                subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
+                subprocess.run(["git", "fetch"], stdout=stdout, stderr=stderr)
+
+                # Intento 1: Checkout directo (Fast Path)
+                subprocess.run(
+                    ["git", "checkout", required_hash], stdout=stdout, stderr=stderr
+                )
+                current_hash = subprocess.run(
+                    ["git", "rev-parse", "HEAD"], capture_output=True, text=True
+                ).stdout.strip()
+
+                # Intento 2: Plan de rescate (Targeted Fetch) si la rama fue borrada
+                if current_hash != required_hash:
+                    if not show:
+                        print(
+                            f"\r {sub_name} Intentando rescate de hash en origin... ",
+                            end="",
+                        )
+
+                    rescue_fetch = subprocess.run(
+                        ["git", "fetch", "origin", required_hash],
+                        stdout=stdout,
+                        stderr=stderr,
+                    )
+
+                    if rescue_fetch.returncode == 0:
+                        subprocess.run(
+                            ["git", "checkout", required_hash],
+                            stdout=stdout,
+                            stderr=stderr,
+                        )
+                        current_hash = subprocess.run(
+                            ["git", "rev-parse", "HEAD"], capture_output=True, text=True
+                        ).stdout.strip()
+
+                # Verificación final
+                if current_hash != required_hash:
+                    print(
+                        f"\nERROR: No se pudo hacer checkout a {required_hash[:7]} en {global_repo}"
+                    )
+                    raise Exception("Checkout error")
+
+                if not show:
+                    print(
+                        f"\r {sub_name} ( {required_hash[:7]} ) Sincronizado ✅"
+                        + " " * 30
+                    )
+
+            except Exception as e:
+                if show:
+                    print(e)
+                if not show:
+                    print(
+                        f"\r {sub_name} ( {required_hash[:7]} ) Sincronizado Fallido ❌"
+                        + " " * 30
+                    )
+    else:
+        print(
+            f"\r {repo_name}: Sin submodulos para actualizar.                 ",
+            end=" " * 30,
+        )
+        print("")
 
     os.chdir(repo_path)
     subprocess.run(["git", "checkout", branch_now], stdout=stdout, stderr=stderr)
     subprocess.run(["git", "stash", "pop"], stdout=stdout, stderr=stderr)
+    print("\n✅ Proceso de sincronización finalizado.\n")
 
 
-def run_bash():
+# ==========================================
+# ASISTENTES INTERACTIVOS PARA UPDATE
+# ==========================================
+def interactive_database_selection():
     PROJECT_NAME = os.getenv("PROJECT_NAME")
-    print(f"docker exec -u root -it {PROJECT_NAME} bash")
-    os.system(f"docker exec -u root -it {PROJECT_NAME} bash")
+    POSTGRES_USER = os.getenv("POSTGRES_USER")
+    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+
+    print(f"\n🔍 Buscando bases de datos en el servidor...")
+    cmd = [
+        "docker",
+        "exec",
+        "-e",
+        f"PGPASSWORD={POSTGRES_PASSWORD}",
+        f"{PROJECT_NAME}_db",
+        "psql",
+        "--host",
+        f"{PROJECT_NAME}_db",
+        "-U",
+        POSTGRES_USER,
+        "-d",
+        "postgres",
+        "-t",
+        "-c",
+        "SELECT datname FROM pg_database WHERE datistemplate = false AND datname != 'postgres';",
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        databases = [db.strip() for db in result.stdout.split("\n") if db.strip()]
+    except subprocess.CalledProcessError:
+        print(
+            "❌ Error al consultar las bases de datos. ¿Están los contenedores encendidos?"
+        )
+        sys.exit(1)
+
+    if not databases:
+        print("❌ No se encontraron bases de datos de Odoo.")
+        sys.exit(1)
+
+    print("\n🗄️  Bases de datos disponibles:")
+    for i, db in enumerate(databases, 1):
+        print(f"  {i}. {db}")
+
+    db_choice = input(
+        "\n👉 Selecciona el número de la base de datos (Enter para cancelar): "
+    ).strip()
+    if not db_choice:
+        print("Operación cancelada.")
+        sys.exit(0)
+
+    try:
+        db_idx = int(db_choice) - 1
+        if db_idx < 0 or db_idx >= len(databases):
+            raise ValueError
+        return databases[db_idx]
+    except ValueError:
+        print("❌ Selección inválida. Saliendo...")
+        sys.exit(1)
 
 
-def bash_update_modules(dbname: str, modules: str = "all"):
+def get_parent_directories(base_path):
+    parents = []
+    if os.path.exists(base_path):
+        for d in sorted(os.listdir(base_path)):
+            full_path = os.path.join(base_path, d)
+            if os.path.isdir(full_path) and not d.startswith(".") and d != "custom":
+                parents.append({"display": f"src/{d}", "full_path": full_path})
+
+    custom_path = os.path.join(base_path, "custom")
+    if os.path.exists(custom_path):
+        for d in sorted(os.listdir(custom_path)):
+            full_path = os.path.join(custom_path, d)
+            if os.path.isdir(full_path) and not d.startswith("."):
+                parents.append({"display": f"src/custom/{d}", "full_path": full_path})
+
+    return parents
+
+
+def interactive_module_selection():
+    base_path = os.path.join(str(Path(__file__).resolve().parent), "src")
+    parents = get_parent_directories(base_path)
+
+    if not parents:
+        print(f"❌ No se encontraron carpetas padre en '{base_path}'.")
+        sys.exit(1)
+
+    print("\n--- ASISTENTE DE ACTUALIZACIÓN DE MÓDULOS ---")
+    print("\n📁 Carpetas padre disponibles:")
+    for i, p in enumerate(parents, 1):
+        print(f"  {i}. {p['display']}")
+
+    parent_choice = input(
+        "\n👉 Selecciona el número de la carpeta padre (Enter para cancelar): "
+    )
+    if not parent_choice.strip():
+        print("Operación cancelada.")
+        sys.exit(0)
+
+    try:
+        parent_idx = int(parent_choice.strip()) - 1
+        if parent_idx < 0 or parent_idx >= len(parents):
+            raise ValueError
+        selected_parent = parents[parent_idx]
+    except ValueError:
+        print("❌ Selección inválida. Saliendo...")
+        sys.exit(1)
+
+    print(f"\n📂 Escaneando módulos en '{selected_parent['display']}'...")
+    modules = []
+    parent_full_path = selected_parent["full_path"]
+
+    for d in os.listdir(parent_full_path):
+        mod_path = os.path.join(parent_full_path, d)
+        if os.path.isdir(mod_path) and os.path.exists(
+            os.path.join(mod_path, "__manifest__.py")
+        ):
+            modules.append(d)
+
+    modules.sort()
+
+    if not modules:
+        print(f"❌ No se encontraron módulos en '{selected_parent['display']}'.")
+        sys.exit(1)
+
+    print("\n📦 Módulos disponibles:")
+    for i, mod in enumerate(modules, 1):
+        print(f"  {i}. {mod}")
+
+    print("\n💡 Ingresa los números separados por espacios o comas (Ej: 1, 4, 5)")
+    print("💡 O escribe 'all' para actualizar TODOS los módulos listados.")
+    mod_choices = input("👉 Módulos a actualizar: ").strip()
+
+    if not mod_choices:
+        print("❌ Ningún módulo seleccionado. Saliendo...")
+        sys.exit(1)
+
+    if mod_choices.lower() == "all":
+        return ",".join(modules)
+
+    selected_modules = []
+    raw_numbers = mod_choices.replace(",", " ").split()
+
+    for num_str in raw_numbers:
+        try:
+            mod_idx = int(num_str.strip()) - 1
+            if 0 <= mod_idx < len(modules):
+                if modules[mod_idx] not in selected_modules:
+                    selected_modules.append(modules[mod_idx])
+            else:
+                print(f"  [!] Número {num_str} fuera de rango.")
+        except ValueError:
+            print(f"  [!] '{num_str}' no es un número válido.")
+
+    if not selected_modules:
+        print("❌ Ningún módulo seleccionado.")
+        sys.exit(1)
+
+    return ",".join(selected_modules)
+
+
+def bash_update_modules(dbname: str = "interactive", modules: str = "interactive"):
+    if dbname == "interactive":
+        dbname = interactive_database_selection()
+
+    if modules == "interactive":
+        modules = interactive_module_selection()
+
     PROJECT_NAME = os.getenv("PROJECT_NAME")
-    print(
-        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
-    )
-    os.system(
-        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
-    )
+
+    print(f"\n🚀 Ejecutando actualización en BD: {dbname}")
+    print(f"📦 Módulos: {modules}\n")
+
+    cmd = f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+    print(cmd)
+    os.system(cmd)
 
 
+# ==========================================
+# RESTO DE FUNCIONES DEL SISTEMA
+# ==========================================
 def build_odoo(no_cache):
     ODOO_VERSION = os.getenv("ODOO_VERSION")
     RESOURCES_DIR = "/.resources"
@@ -173,15 +586,11 @@ def build_odoo(no_cache):
 
             with open(dockerfile_path, "r") as dockerfile_version:
                 Dockerfile.write(dockerfile_version.read())
-                Dockerfile.write(
-                    "\n"
-                )  # Opcional: agregar un salto de línea entre los archivos
+                Dockerfile.write("\n")
 
             with open(dockerfile_template_path, "r") as dockerfile_template:
                 Dockerfile.write(dockerfile_template.read())
-                Dockerfile.write(
-                    "\n"
-                )  # Opcional: agregar un salto de línea entre los archivos
+                Dockerfile.write("\n")
 
     except FileNotFoundError as e:
         print(e)
@@ -223,9 +632,7 @@ def init_addons():
 
 def fix_filestore_ownership_odoo():
     print("\n=== Corrección de permisos de propiedad filestore Odoo ===\n")
-
     PROJECT_NAME = os.getenv("PROJECT_NAME")
-
     cmd_app = (
         f"docker exec -u root -it {PROJECT_NAME} chown -R odoo:odoo /home/odoo/data"
     )
@@ -234,25 +641,26 @@ def fix_filestore_ownership_odoo():
     print()
 
 
+def run_bash():
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    print(f"docker exec -u root -it {PROJECT_NAME} bash")
+    os.system(f"docker exec -u root -it {PROJECT_NAME} bash")
+
+
 def start_odoo():
     print("\n=== Iniciando Odoo ===\n")
-
-    # Levantar base de datos
     print("→ Iniciando base de datos...")
     cmd_db = "docker compose -f docker-compose.db.yml up -d"
     print(cmd_db)
     os.system(cmd_db)
 
-    # Levantar aplicación Odoo
     print("\n→ Iniciando aplicación Odoo...")
     cmd_app = "docker compose -f docker-compose.app.yml up -d"
     print(cmd_app)
     os.system(cmd_app)
 
     fix_filestore_ownership_odoo()
-
     print("\n✅ Odoo y base de datos están en ejecución.\n")
-
     print(f"\n✅ URL: http://localhost:{os.getenv('EXTERNAL_PORT_ODOO')}\n")
 
     if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
@@ -261,35 +669,27 @@ def start_odoo():
         print(cmd_pgadmin)
         os.system(cmd_pgadmin)
         print("\n✅ pgAdmin está en ejecución.\n")
-
-        print(
-            f"""
+        print(f"""
         → Recuerda agregar la conexión a la base de datos (Un nuevo server) en pgAdmin usando los siguientes detalles:
-
             * Host (Host name/address): db
             * Puerto (Port): {os.getenv("PGADMIN_EXTERNAL_PORT")}
             * Usuario (Username): {os.getenv("POSTGRES_USER")}
             * Contraseña (Password): {os.getenv("POSTGRES_PASSWORD")}
             * Base de datos central (Maintenance database): {os.getenv("POSTGRES_DB")}
-        """
-        )
+        """)
 
 
 def stop_odoo():
     print("\n=== Deteniendo Odoo ===\n")
-
-    # Detener aplicación Odoo
     print("→ Deteniendo aplicación Odoo...")
     cmd_app = "docker compose -f docker-compose.app.yml down"
     print(cmd_app)
     os.system(cmd_app)
 
-    # Detener base de datos
     print("\n→ Deteniendo base de datos...")
     cmd_db = "docker compose -f docker-compose.db.yml down"
     print(cmd_db)
     os.system(cmd_db)
-
     print("\n🛑 Odoo y base de datos han sido detenidos.\n")
 
     if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
@@ -301,52 +701,97 @@ def stop_odoo():
 
 
 def remove_odoo():
-    print("\n=== Eliminando Odoo ===\n")
+    print("\n=== Menú de Eliminación ===")
+    print("  1. 💥 Eliminar TODO (Contenedores, Volúmenes y TODAS las bases de datos)")
+    print("  2. 🗑️  Eliminar solo UNA base de datos específica")
+    print("  3. ❌ Cancelar")
 
-    do_continue = input(
-        "⚠️  Esto eliminará todos los datos de Odoo y la base de datos. ¿Deseas continuar? (s/n):  "
-    )
+    choice = input("\n👉 Selecciona una opción (1/2/3): ").strip()
 
-    if do_continue.lower() == "s":
-        print("Continuando con la eliminación...")
-    else:
+    if choice == "3" or not choice:
         print("Operación cancelada.")
-        sys.exit()
-        return
+        sys.exit(0)
 
-    # Detener aplicación Odoo
-    print("→ Eliminando aplicación Odoo...")
-    cmd_app = "docker compose -f docker-compose.app.yml down -v --remove-orphans"
-    print(cmd_app)
-    os.system(cmd_app)
-
-    # Detener base de datos
-    print("\n→ Eliminando base de datos...")
-    cmd_db = "docker compose -f docker-compose.db.yml down -v --remove-orphans"
-    print(cmd_db)
-    os.system(cmd_db)
-
-    print("\n🛑 Odoo y base de datos han sido eliminados.\n")
-
-    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
-        print("→ Eliminando pgAdmin...")
-        cmd_pgadmin = (
-            "docker compose -f docker-compose.pgadmin.yml down -v --remove-orphans"
+    if choice == "1":
+        do_continue = input(
+            "\n⚠️  Esto eliminará TODOS los contenedores, volúmenes y bases de datos. ¿Deseas continuar? (s/n): "
         )
-        print(cmd_pgadmin)
-        os.system(cmd_pgadmin)
-        print("\n🛑 pgAdmin ha sido eliminado.\n")
+        if do_continue.lower() != "s":
+            print("Operación cancelada.")
+            return
+
+        print("\n→ Eliminando aplicación Odoo...")
+        cmd_app = "docker compose -f docker-compose.app.yml down -v --remove-orphans"
+        print(cmd_app)
+        os.system(cmd_app)
+
+        print("\n→ Eliminando base de datos...")
+        cmd_db = "docker compose -f docker-compose.db.yml down -v --remove-orphans"
+        print(cmd_db)
+        os.system(cmd_db)
+
+        if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
+            print("\n→ Eliminando pgAdmin...")
+            cmd_pgadmin = (
+                "docker compose -f docker-compose.pgadmin.yml down -v --remove-orphans"
+            )
+            print(cmd_pgadmin)
+            os.system(cmd_pgadmin)
+
+        print(
+            "\n🛑 Odoo y todas sus bases de datos han sido eliminados por completo.\n"
+        )
+
+    elif choice == "2":
+        # Reutilizamos tu función interactiva para obtener el nombre exacto
+        dbname = interactive_database_selection()
+
+        do_continue = input(
+            f"\n⚠️  ¿Estás SEGURO de que deseas eliminar permanentemente la base de datos '{dbname}' y su filestore? (s/n): "
+        )
+        if do_continue.lower() != "s":
+            print("Operación cancelada.")
+            return
+
+        PROJECT_NAME = os.getenv("PROJECT_NAME")
+        POSTGRES_USER = os.getenv("POSTGRES_USER")
+        POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+
+        print(f"\n⏳ Desconectando sesiones activas de '{dbname}'...")
+        # Forzamos la desconexión de cualquier proceso anclado a esta DB
+        terminate_cmd = f"docker exec -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d postgres -c \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{dbname}';\""
+        subprocess.run(
+            terminate_cmd,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        print(f"🗑️  Eliminando base de datos '{dbname}' de PostgreSQL...")
+        drop_cmd = f'docker exec -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d postgres -c "DROP DATABASE \\"{dbname}\\";"'
+        result = subprocess.run(drop_cmd, shell=True, capture_output=True, text=True)
+
+        if result.returncode == 0:
+            print(f"✅ Base de datos '{dbname}' eliminada con éxito.")
+        else:
+            print(f"❌ Error al eliminar la base de datos: {result.stderr}")
+
+        print(f"🧹 Limpiando el filestore huérfano...")
+        # Entramos como root al contenedor y borramos la carpeta específica de esa BD
+        rm_cmd = f"docker exec -u root {PROJECT_NAME} rm -rf /home/odoo/data/filestore/{dbname}"
+        os.system(rm_cmd)
+
+        print(f"\n✅ Proceso completado. La base de datos '{dbname}' ya no existe.\n")
+
+    else:
+        print("❌ Opción inválida. Operación cancelada.")
+        sys.exit(1)
 
 
 def restart_odoo():
     print("\n=== Reiniciando Odoo ===\n")
-
-    # Detener aplicación Odoo
     stop_odoo()
-
-    # Iniciar aplicación Odoo
     start_odoo()
-
     print("\n✅ Odoo y base de datos reiniciados correctamente.\n")
 
 
@@ -358,8 +803,6 @@ def list_containers():
 def show_logs():
     cmd_db = "docker compose -f docker-compose.db.yml logs --tail=10 -f"
     cmd_app = "docker compose -f docker-compose.app.yml logs --tail=10 -f"
-
-    # Abrir dos terminales independientes
     os.system(cmd_app)
     os.system(cmd_db)
 
@@ -375,36 +818,25 @@ def psql(d):
 
 
 def main():
-    # Cargar las variables de entorno
     load_dotenv()
 
-    # Crear el parser
     parser = argparse.ArgumentParser(description="Script para controlar Odoo.")
-
     subparsers = parser.add_subparsers(dest="action", help="Acciones")
+
     subparsers.add_parser("start", help="Ejecuta Odoo")
     subparsers.add_parser("stop", help="Detiene Odoo")
-
     subparsers.add_parser("restart", help="Reiniciar Odoo")
-
     subparsers.add_parser(
         "fix-files", help="Arreglar permisos de propiedad de filestore"
     )
-
     subparsers.add_parser("bash", help="Bash")
-
     subparsers.add_parser("init", help="Clone repositories")
-
-    # Subparser para el comando "logs"
     subparsers.add_parser("logs", help="Muestra los últimos 10 logs en tiempo real")
-
     subparsers.add_parser("list", help="Lista los contenedores en ejecución")
-
     subparsers.add_parser(
         "remove", help="Elimina los contenedores de Odoo y la base de datos"
     )
 
-    # Subparser para el comando "build"
     build_parser = subparsers.add_parser("build", help="Construye Odoo")
     build_parser.add_argument(
         "--no-cache", action="store_true", help="Construir sin usar caché"
@@ -413,23 +845,32 @@ def main():
     psql_parser = subparsers.add_parser("psql", help="psql")
     psql_parser.add_argument("-d", required=True, help="Database name")
 
+    # ==========================================
+    # MODIFICACIÓN EN EL PARSER
+    # ==========================================
     sync_parser = subparsers.add_parser("sync", help="Sync Submodules")
-    sync_parser.add_argument("r", help="Repository")
-    sync_parser.add_argument("b", help="Branch")
-    sync_parser.add_argument("--v", action="store_true", default=False, help="Git log")
-
-    update_parser = subparsers.add_parser("update", help="Update Modules")
-    update_parser.add_argument("-d", required=True, help="Database name")
-    update_parser.add_argument(
-        "-m",
-        default="all",
-        help="Modules to update, default all. Use comma to separate multiple modules",
+    sync_parser.add_argument(
+        "r",
+        nargs="?",
+        default="interactive",
+        help="Repository (ej. edc). Si se omite, abre menú.",
+    )
+    sync_parser.add_argument(
+        "b",
+        nargs="?",
+        default="interactive",
+        help="Branch (ej. staging). Si se omite, abre menú.",
+    )
+    sync_parser.add_argument(
+        "--v", action="store_true", default=False, help="Git log detallado"
     )
 
-    # Parsear los argumentos
+    update_parser = subparsers.add_parser("update", help="Update Modules")
+    update_parser.add_argument("-d", default="interactive", help="Database name.")
+    update_parser.add_argument("-m", default="interactive", help="Modules to update.")
+
     args = parser.parse_args()
 
-    # Ejecutar la acción correspondiente
     if args.action == "start":
         start_odoo()
         return True
@@ -439,51 +880,44 @@ def main():
     if args.action == "restart":
         restart_odoo()
         return True
-
     if args.action == "fix-files":
         fix_filestore_ownership_odoo()
         return True
-
     if args.action == "build":
         build_odoo(args.no_cache)
         return True
-
     if args.action == "bash":
         run_bash()
         return True
-
     if args.action == "update":
         bash_update_modules(args.d, args.m)
         return True
-
     if args.action == "init":
         init_addons()
         return True
-
     if args.action == "psql":
         psql(args.d)
         return True
-
     if args.action == "sync":
         sync(args.r, args.b, show=args.v)
         return True
-
     if args.action == "logs":
         show_logs()
         return True
-
     if args.action == "list":
         list_containers()
         return True
-
     if args.action == "remove":
         remove_odoo()
         return True
 
     parser.print_help()
-
     return False
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\n🛑 Proceso cancelado por el usuario.")
+        sys.exit(0)
