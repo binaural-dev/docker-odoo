@@ -1,5 +1,6 @@
 services:
   db:
+    shm_size: '126mb'
     command: ["postgres", "-c", "config_file=/etc/postgres/dbconfigs/postgresql.conf"]
     restart: always
     container_name: ${PROJECT_NAME}_db
