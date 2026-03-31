@@ -1,26 +1,39 @@
 #!/usr/bin/env python3
 
+import json
 import os
+import sys
 import click
-from dotenv import load_dotenv
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import load_config, resolve_db_config, get_db_host
 
 
 @click.command()
-@click.option("-d")
-@click.option("-l", default="admin")
-@click.argument("args", nargs=-1)
-def run_command(d, l, args):
-    load_dotenv()
-    PROJECT_NAME = os.getenv("PROJECT_NAME")
-    POSTGRES_USER = os.getenv("POSTGRES_USER")
-    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-    RESET_PASSWORD = os.getenv("RESET_PASSWORD")
-    password = f"'{RESET_PASSWORD}'"
+@click.argument("instance")
+@click.option("-d", required=True, help="Database name")
+@click.option("-l", default="admin", help="Login to reset")
+@click.option("-p", "--password", default="admin", help="New password")
+def run_command(instance, d, l, password):
+    config = load_config(BASE_PATH)
+    if instance not in config["instances"]:
+        click.echo(f"Error: instancia '{instance}' no existe")
+        sys.exit(1)
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    db_port = db_conf["port"]
+    container = f"odoo-{instance}"
+
+    pw = f"'{password}'"
     login = f"'{l}'"
-    POSTGRES_HOST = os.getenv("POSTGRES_HOST")
-    POSTGRES_PORT = os.getenv("EXTERNAL_PORT_POSTGRES")
     os.system(
-        f'docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {POSTGRES_HOST} --port {POSTGRES_PORT} -U {POSTGRES_USER} -d {d} -c "update res_users set password = {password}, login = {login} where id=2;"'
+        f'docker exec -it -e PGPASSWORD={db_password} {container} psql --host {db_host} --port {db_port} -U {db_user} -d {d} -c "update res_users set password = {pw}, login = {login} where id=2;"'
     )
 
 
