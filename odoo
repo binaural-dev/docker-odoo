@@ -378,6 +378,42 @@ def sync(repo_name, branch, show=False):
 # ============================================================
 
 
+def prompt_for_instance(config, action):
+    instances = list(config.get("instances", {}).keys())
+    if not instances:
+        print("No hay instancias configuradas.")
+        sys.exit(1)
+
+    allow_all_actions = {"start", "stop", "restart", "logs", "remove", "fix-files", "init"}
+    allow_all = action in allow_all_actions
+
+    print("\nInstancias disponibles:")
+    if allow_all:
+        print("  0. Todas las instancias")
+    
+    for i, name in enumerate(instances, 1):
+        print(f"  {i}. {name}")
+
+    min_val = 0 if allow_all else 1
+    
+    while True:
+        try:
+            choice = input(f"\nSelecciona una instancia ({min_val}-{len(instances)}): ")
+            if not choice.strip():
+                continue
+            idx = int(choice)
+            if allow_all and idx == 0:
+                return None
+            if 1 <= idx <= len(instances):
+                return instances[idx - 1]
+            print(f"Selección inválida. Debe ser un número entre {min_val} y {len(instances)}.")
+        except ValueError:
+            print("Por favor ingresa un número válido.")
+        except (KeyboardInterrupt, EOFError):
+            print("\nOperación cancelada.")
+            sys.exit(0)
+
+
 def main():
     os.chdir(BASE_PATH)
 
@@ -404,7 +440,7 @@ def main():
 
     # bash
     bash_p = subparsers.add_parser("bash", help="Abre bash en un contenedor Odoo")
-    bash_p.add_argument("instance", help="Nombre de instancia")
+    bash_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
     # logs
     logs_p = subparsers.add_parser("logs", help="Muestra logs en tiempo real")
@@ -423,13 +459,13 @@ def main():
 
     # psql
     psql_p = subparsers.add_parser("psql", help="Conectar a PostgreSQL")
-    psql_p.add_argument("instance", help="Nombre de instancia")
-    psql_p.add_argument("-d", required=True, help="Nombre de la base de datos")
+    psql_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    psql_p.add_argument("-d", default=None, help="Nombre de la base de datos (opcional si la instancia tiene una)")
 
     # update
     update_p = subparsers.add_parser("update", help="Actualizar módulos de Odoo")
-    update_p.add_argument("instance", help="Nombre de instancia")
-    update_p.add_argument("-d", required=True, help="Nombre de la base de datos")
+    update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    update_p.add_argument("-d", default=None, help="Nombre de la base de datos (opcional si la instancia tiene una)")
     update_p.add_argument("-m", default="all", help="Módulos a actualizar (separados por coma)")
 
     # init
@@ -452,6 +488,14 @@ def main():
     if args.action != "sync":
         config = load_config(BASE_PATH)
 
+        actions_with_instance = {
+            "start", "stop", "restart", "logs", "remove", 
+            "fix-files", "init", "bash", "psql", "update"
+        }
+        
+        if args.action in actions_with_instance and getattr(args, "instance", None) is None:
+            args.instance = prompt_for_instance(config, args.action)
+
     # Dispatch
     if args.action == "build":
         build_odoo(config, args.no_cache)
@@ -472,9 +516,11 @@ def main():
     elif args.action == "fix-files":
         fix_filestore(config, args.instance)
     elif args.action == "psql":
-        psql_connect(config, args.instance, args.d)
+        dbname = args.d if args.d else config["instances"][args.instance]["database"]
+        psql_connect(config, args.instance, dbname)
     elif args.action == "update":
-        bash_update_modules(config, args.instance, args.d, args.m)
+        dbname = args.d if args.d else config["instances"][args.instance]["database"]
+        bash_update_modules(config, args.instance, dbname, args.m)
     elif args.action == "init":
         init_addons(config, args.instance)
     elif args.action == "sync":
