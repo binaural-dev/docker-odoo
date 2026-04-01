@@ -245,6 +245,25 @@ def psql_connect(config, instance, dbname):
     )
 
 
+def reset_password(config, instance, dbname, login, password):
+    """Reset user password in database."""
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    db_port = db_conf["port"]
+    container = f"odoo-{instance}"
+
+    pw = f"'{password}'"
+    login_str = f"'{login}'"
+    print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
+    os.system(
+        f'docker exec -it -e PGPASSWORD={db_password} {container} psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -c "update res_users set password = {pw}, login = {login_str} where id=2;"'
+    )
+    print("✅ Contraseña actualizada.\n")
+
+
 def init_addons(config, instance=None):
     """Clone required repositories for instance(s)."""
     instances_to_init = [instance] if instance else list(config["instances"].keys())
@@ -544,6 +563,13 @@ def main():
     psql_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
     psql_p.add_argument("-d", required=True, help="Nombre de la base de datos")
 
+    # pw
+    pw_p = subparsers.add_parser("pw", help="Restablecer contraseña de un usuario")
+    pw_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    pw_p.add_argument("-d", required=True, help="Nombre de la base de datos")
+    pw_p.add_argument("-l", default="admin", help="Login a restablecer (por defecto: admin)")
+    pw_p.add_argument("-p", "--password", default="admin", help="Nueva contraseña (por defecto: admin)")
+
     # update
     update_p = subparsers.add_parser("update", help="Actualizar módulos de Odoo")
     update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
@@ -572,7 +598,7 @@ def main():
 
         actions_with_instance = {
             "start", "stop", "restart", "logs", "remove", 
-            "fix-files", "init", "bash", "psql", "update"
+            "fix-files", "init", "bash", "psql", "pw", "update"
         }
         
         if args.action in actions_with_instance and getattr(args, "instance", None) is None:
@@ -599,6 +625,8 @@ def main():
         fix_filestore(config, args.instance)
     elif args.action == "psql":
         psql_connect(config, args.instance, args.d)
+    elif args.action == "pw":
+        reset_password(config, args.instance, args.d, args.l, args.password)
     elif args.action == "update":
         bash_update_modules(config, args.instance, args.d, args.m)
     elif args.action == "init":
