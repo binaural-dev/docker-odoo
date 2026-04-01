@@ -245,6 +245,25 @@ def psql_connect(config, instance, dbname):
     )
 
 
+def reset_password(config, instance, dbname, login, password):
+    """Reset user password in database."""
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    db_port = db_conf["port"]
+    container = f"odoo-{instance}"
+
+    pw = f"'{password}'"
+    login_str = f"'{login}'"
+    print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
+    os.system(
+        f'docker exec -it -e PGPASSWORD={db_password} {container} psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -c "update res_users set password = {pw}, login = {login_str} where id=2;"'
+    )
+    print("✅ Contraseña actualizada.\n")
+
+
 def init_addons(config, instance=None):
     """Clone required repositories for instance(s)."""
     instances_to_init = [instance] if instance else list(config["instances"].keys())
@@ -378,6 +397,124 @@ def sync(repo_name, branch, show=False):
 # ============================================================
 
 
+def prompt_for_instance(config, action):
+    instances = list(config.get("instances", {}).keys())
+    if not instances:
+        print("No hay instancias configuradas.")
+        sys.exit(1)
+
+    allow_all_actions = {"start", "stop", "restart", "logs", "remove", "fix-files", "init"}
+    allow_all = action in allow_all_actions
+
+    options = []
+    if allow_all:
+        options.append((0, "Todas las instancias", None))
+    for i, name in enumerate(instances, 1):
+        options.append((i, name, name))
+
+    def fallback_prompt():
+        print("\nInstancias disponibles:")
+        for num, text, _ in options:
+            print(f"  {num}. {text}")
+        while True:
+            try:
+                choice = input("\nSelecciona una instancia: ").strip()
+                if not choice:
+                    continue
+                idx = int(choice)
+                for num, text, val in options:
+                    if num == idx:
+                        return val
+                print("Selección inválida.")
+            except ValueError:
+                print("Por favor ingresa un número válido.")
+            except (KeyboardInterrupt, EOFError):
+                print("\nOperación cancelada.")
+                sys.exit(0)
+
+    if not sys.stdin.isatty():
+        return fallback_prompt()
+
+    try:
+        import tty
+        import termios
+    except ImportError:
+        return fallback_prompt()
+
+    def getch():
+        fd = sys.stdin.fileno()
+        try:
+            old_settings = termios.tcgetattr(fd)
+        except Exception:
+            return sys.stdin.read(1)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == '\x1b':
+                ch += sys.stdin.read(2)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch
+
+    current_idx = 0
+    input_buffer = ""
+    lines_to_clear = len(options)
+
+    print("\nSelecciona una instancia (Usa las flechas, números y Enter para confirmar):")
+    
+    def render_menu():
+        sys.stdout.write("\r")
+        for i, (num, text, _) in enumerate(options):
+            prefix = "❯ " if i == current_idx else "  "
+            if i == current_idx:
+                sys.stdout.write(f"\033[92m{prefix}{num}. {text}\033[0m\033[K\n")
+            else:
+                sys.stdout.write(f"{prefix}{num}. {text}\033[K\n")
+        sys.stdout.write(f"Opción [ {input_buffer} ]: \033[K")
+        sys.stdout.flush()
+
+    sys.stdout.write("\033[?25l") # Ocultar cursor
+    try:
+        render_menu()
+        while True:
+            ch = getch()
+            if ch == '\x03': # Ctrl+C
+                raise KeyboardInterrupt
+            elif ch in ('\r', '\n'):
+                sys.stdout.write("\n")
+                break
+            elif ch == '\x1b[A': # Arriba
+                current_idx = (current_idx - 1) % len(options)
+                input_buffer = ""
+            elif ch == '\x1b[B': # Abajo
+                current_idx = (current_idx + 1) % len(options)
+                input_buffer = ""
+            elif ch in ('\x7f', '\b'): # Backspace
+                input_buffer = input_buffer[:-1]
+            elif len(ch) == 1 and ch.isdigit():
+                input_buffer += ch
+                try:
+                    num_val = int(input_buffer)
+                    for i, (num, text, _) in enumerate(options):
+                        if num == num_val:
+                            current_idx = i
+                            break
+                except ValueError:
+                    pass
+            
+            # Regresar cursor arriba
+            sys.stdout.write(f"\033[{lines_to_clear}F")
+            render_menu()
+            
+    except Exception:
+        sys.stdout.write("\033[?25h\nOperación cancelada.\n")
+        sys.exit(0)
+    finally:
+        sys.stdout.write("\033[?25h") # Mostrar cursor de nuevo
+        
+    return options[current_idx][2]
+
+
 def main():
     os.chdir(BASE_PATH)
 
@@ -404,7 +541,7 @@ def main():
 
     # bash
     bash_p = subparsers.add_parser("bash", help="Abre bash en un contenedor Odoo")
-    bash_p.add_argument("instance", help="Nombre de instancia")
+    bash_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
     # logs
     logs_p = subparsers.add_parser("logs", help="Muestra logs en tiempo real")
@@ -423,12 +560,19 @@ def main():
 
     # psql
     psql_p = subparsers.add_parser("psql", help="Conectar a PostgreSQL")
-    psql_p.add_argument("instance", help="Nombre de instancia")
+    psql_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
     psql_p.add_argument("-d", required=True, help="Nombre de la base de datos")
+
+    # pw
+    pw_p = subparsers.add_parser("pw", help="Restablecer contraseña de un usuario")
+    pw_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    pw_p.add_argument("-d", required=True, help="Nombre de la base de datos")
+    pw_p.add_argument("-l", default="admin", help="Login a restablecer (por defecto: admin)")
+    pw_p.add_argument("-p", "--password", default="admin", help="Nueva contraseña (por defecto: admin)")
 
     # update
     update_p = subparsers.add_parser("update", help="Actualizar módulos de Odoo")
-    update_p.add_argument("instance", help="Nombre de instancia")
+    update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
     update_p.add_argument("-d", required=True, help="Nombre de la base de datos")
     update_p.add_argument("-m", default="all", help="Módulos a actualizar (separados por coma)")
 
@@ -452,6 +596,14 @@ def main():
     if args.action != "sync":
         config = load_config(BASE_PATH)
 
+        actions_with_instance = {
+            "start", "stop", "restart", "logs", "remove", 
+            "fix-files", "init", "bash", "psql", "pw", "update"
+        }
+        
+        if args.action in actions_with_instance and getattr(args, "instance", None) is None:
+            args.instance = prompt_for_instance(config, args.action)
+
     # Dispatch
     if args.action == "build":
         build_odoo(config, args.no_cache)
@@ -473,6 +625,8 @@ def main():
         fix_filestore(config, args.instance)
     elif args.action == "psql":
         psql_connect(config, args.instance, args.d)
+    elif args.action == "pw":
+        reset_password(config, args.instance, args.d, args.l, args.password)
     elif args.action == "update":
         bash_update_modules(config, args.instance, args.d, args.m)
     elif args.action == "init":
