@@ -460,12 +460,12 @@ def main():
     # psql
     psql_p = subparsers.add_parser("psql", help="Conectar a PostgreSQL")
     psql_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
-    psql_p.add_argument("-d", default=None, help="Nombre de la base de datos (opcional si la instancia tiene una)")
+    psql_p.add_argument("-d", required=True, help="Nombre de la base de datos")
 
     # update
     update_p = subparsers.add_parser("update", help="Actualizar módulos de Odoo")
     update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
-    update_p.add_argument("-d", default=None, help="Nombre de la base de datos (opcional si la instancia tiene una)")
+    update_p.add_argument("-d", required=True, help="Nombre de la base de datos")
     update_p.add_argument("-m", default="all", help="Módulos a actualizar (separados por coma)")
 
     # init
@@ -516,11 +516,9 @@ def main():
     elif args.action == "fix-files":
         fix_filestore(config, args.instance)
     elif args.action == "psql":
-        dbname = args.d if args.d else config["instances"][args.instance]["database"]
-        psql_connect(config, args.instance, dbname)
+        psql_connect(config, args.instance, args.d)
     elif args.action == "update":
-        dbname = args.d if args.d else config["instances"][args.instance]["database"]
-        bash_update_modules(config, args.instance, dbname, args.m)
+        bash_update_modules(config, args.instance, args.d, args.m)
     elif args.action == "init":
         init_addons(config, args.instance)
     elif args.action == "sync":
