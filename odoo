@@ -387,31 +387,113 @@ def prompt_for_instance(config, action):
     allow_all_actions = {"start", "stop", "restart", "logs", "remove", "fix-files", "init"}
     allow_all = action in allow_all_actions
 
-    print("\nInstancias disponibles:")
+    options = []
     if allow_all:
-        print("  0. Todas las instancias")
-    
+        options.append((0, "Todas las instancias", None))
     for i, name in enumerate(instances, 1):
-        print(f"  {i}. {name}")
+        options.append((i, name, name))
 
-    min_val = 0 if allow_all else 1
-    
-    while True:
+    def fallback_prompt():
+        print("\nInstancias disponibles:")
+        for num, text, _ in options:
+            print(f"  {num}. {text}")
+        while True:
+            try:
+                choice = input("\nSelecciona una instancia: ").strip()
+                if not choice:
+                    continue
+                idx = int(choice)
+                for num, text, val in options:
+                    if num == idx:
+                        return val
+                print("Selección inválida.")
+            except ValueError:
+                print("Por favor ingresa un número válido.")
+            except (KeyboardInterrupt, EOFError):
+                print("\nOperación cancelada.")
+                sys.exit(0)
+
+    if not sys.stdin.isatty():
+        return fallback_prompt()
+
+    try:
+        import tty
+        import termios
+    except ImportError:
+        return fallback_prompt()
+
+    def getch():
+        fd = sys.stdin.fileno()
         try:
-            choice = input(f"\nSelecciona una instancia ({min_val}-{len(instances)}): ")
-            if not choice.strip():
-                continue
-            idx = int(choice)
-            if allow_all and idx == 0:
-                return None
-            if 1 <= idx <= len(instances):
-                return instances[idx - 1]
-            print(f"Selección inválida. Debe ser un número entre {min_val} y {len(instances)}.")
-        except ValueError:
-            print("Por favor ingresa un número válido.")
-        except (KeyboardInterrupt, EOFError):
-            print("\nOperación cancelada.")
-            sys.exit(0)
+            old_settings = termios.tcgetattr(fd)
+        except Exception:
+            return sys.stdin.read(1)
+        try:
+            tty.setraw(fd)
+            ch = sys.stdin.read(1)
+            if ch == '\x1b':
+                ch += sys.stdin.read(2)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        return ch
+
+    current_idx = 0
+    input_buffer = ""
+    lines_to_clear = len(options)
+
+    print("\nSelecciona una instancia (Usa las flechas, números y Enter para confirmar):")
+    
+    def render_menu():
+        sys.stdout.write("\r")
+        for i, (num, text, _) in enumerate(options):
+            prefix = "❯ " if i == current_idx else "  "
+            if i == current_idx:
+                sys.stdout.write(f"\033[92m{prefix}{num}. {text}\033[0m\033[K\n")
+            else:
+                sys.stdout.write(f"{prefix}{num}. {text}\033[K\n")
+        sys.stdout.write(f"Opción [ {input_buffer} ]: \033[K")
+        sys.stdout.flush()
+
+    sys.stdout.write("\033[?25l") # Ocultar cursor
+    try:
+        render_menu()
+        while True:
+            ch = getch()
+            if ch == '\x03': # Ctrl+C
+                raise KeyboardInterrupt
+            elif ch in ('\r', '\n'):
+                sys.stdout.write("\n")
+                break
+            elif ch == '\x1b[A': # Arriba
+                current_idx = (current_idx - 1) % len(options)
+                input_buffer = ""
+            elif ch == '\x1b[B': # Abajo
+                current_idx = (current_idx + 1) % len(options)
+                input_buffer = ""
+            elif ch in ('\x7f', '\b'): # Backspace
+                input_buffer = input_buffer[:-1]
+            elif len(ch) == 1 and ch.isdigit():
+                input_buffer += ch
+                try:
+                    num_val = int(input_buffer)
+                    for i, (num, text, _) in enumerate(options):
+                        if num == num_val:
+                            current_idx = i
+                            break
+                except ValueError:
+                    pass
+            
+            # Regresar cursor arriba
+            sys.stdout.write(f"\033[{lines_to_clear}F")
+            render_menu()
+            
+    except Exception:
+        sys.stdout.write("\033[?25h\nOperación cancelada.\n")
+        sys.exit(0)
+    finally:
+        sys.stdout.write("\033[?25h") # Mostrar cursor de nuevo
+        
+    return options[current_idx][2]
 
 
 def main():
