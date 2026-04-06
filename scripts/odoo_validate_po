@@ -1,0 +1,328 @@
+#!/usr/bin/env python3
+
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+
+
+def load_instances_config(base_path):
+    config_path = os.path.join(base_path, "instances.json")
+    if not os.path.exists(config_path):
+        raise ValueError("No se encontró instances.json en la raíz del proyecto")
+
+    with open(config_path, "r", encoding="utf-8") as config_file:
+        config = json.load(config_file)
+
+    if "instances" not in config or not isinstance(config["instances"], dict):
+        raise ValueError("El archivo instances.json no contiene una sección 'instances' válida")
+
+    return config
+
+
+class PoValidationManager:
+    def __init__(self, container, container_target_path, modules=None):
+        self.container = container
+        self.container_target_path = container_target_path
+        self.modules = modules or []
+
+    def run_validation(self):
+        print(f"Ejecutando validación de archivos .po en el contenedor '{self.container}'...")
+        print(f"Ruta objetivo en el contenedor: {self.container_target_path}")
+        if self.modules:
+            print(f"Módulos filtrados: {', '.join(self.modules)}")
+
+        # Script de Python que se ejecutará DENTRO del contenedor de Odoo para poder importar odoo.tools
+        python_script = """
+import os
+import sys
+import glob
+import re
+import traceback
+import polib
+
+target_path = __TARGET_PATH__
+modules = __MODULES__
+
+
+def _parse_line_from_error(error_message):
+    match = re.search(r'line\\s+(\\d+)', error_message, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _print_file_context(po_file, line_number, radius=3):
+    if not line_number:
+        return
+
+    try:
+        with open(po_file, 'r', encoding='utf-8', errors='replace') as fh:
+            lines = fh.readlines()
+    except Exception as context_err:
+        print(f'No se pudo leer el contexto del archivo: {context_err}')
+        return
+
+    if not lines:
+        return
+
+    start = max(1, line_number - radius)
+    end = min(len(lines), line_number + radius)
+    print(f'CONTEXTO ({start}-{end}):')
+    for line_idx in range(start, end + 1):
+        marker = '>>' if line_idx == line_number else '  '
+        print(f'{marker} {line_idx:>6}: {lines[line_idx - 1].rstrip()}')
+
+
+def _diagnose_po_failure(po_file, original_error):
+    module_re = re.compile(r"(module[s]?): (\\w+)")
+    model_re = re.compile(r'(model|model_terms):([\\w.]+),([\\w]+):(\\w+)\\.([^ ]+)')
+    code_re = re.compile(r'(code):([\\w/.]+)')
+    selection_re = re.compile(r'(selection):([\\w.]+),([\\w]+)')
+    constraint_re = re.compile(r'(sql_constraint|constraint):([\\w.]+)')
+
+    try:
+        po_data = polib.pofile(po_file)
+    except Exception as parse_error:
+        parse_error_text = str(parse_error)
+        return (
+            f'No se pudo parsear el archivo PO: {parse_error_text}',
+            _parse_line_from_error(parse_error_text) or _parse_line_from_error(original_error),
+            None,
+            None,
+        )
+
+    for entry in po_data:
+        entry_line = getattr(entry, 'linenum', None)
+        entry_comment = entry.comment or ''
+        if not module_re.match(entry_comment):
+            return (
+                'Entrada con comentario de módulo inválido o ausente. Odoo espera algo como "module: nombre_modulo".',
+                entry_line,
+                entry.msgid,
+                entry_comment,
+            )
+
+        for occurrence, _line_number in (entry.occurrences or []):
+            if model_re.match(occurrence):
+                continue
+            if code_re.match(occurrence):
+                continue
+            if selection_re.match(occurrence):
+                continue
+            if constraint_re.match(occurrence):
+                continue
+            return (
+                f'Ocurrencia no reconocida por Odoo: {occurrence}',
+                entry_line,
+                entry.msgid,
+                entry_comment,
+            )
+
+    return (
+        'No se encontró una causa exacta con diagnóstico adicional. Revisa traceback y cabecera/comentarios del entry.',
+        _parse_line_from_error(original_error),
+        None,
+        None,
+    )
+
+
+# Intentar importar la librería de Odoo
+try:
+    from odoo.tools import translate
+except ImportError:
+    print('❌ ERROR: No se pudo importar odoo.tools.translate desde dentro del contenedor.')
+    sys.exit(1)
+
+if not os.path.isdir(target_path):
+    print(f"❌ ERROR: La ruta '{target_path}' no existe dentro del contenedor.")
+    sys.exit(2)
+
+po_files = []
+missing_modules = []
+
+if modules:
+    for module_name in modules:
+        module_path = os.path.join(target_path, module_name)
+        if not os.path.isdir(module_path):
+            missing_modules.append(module_name)
+            continue
+        po_files.extend(glob.glob(os.path.join(module_path, 'i18n', '*.po')))
+
+    if missing_modules:
+        print('❌ ERROR: Los siguientes módulos no existen bajo la ruta objetivo:')
+        for module_name in missing_modules:
+            print(f'   - {module_name}')
+        sys.exit(2)
+else:
+    po_files = glob.glob(os.path.join(target_path, '**', 'i18n', '*.po'), recursive=True)
+
+po_files = sorted(set(po_files))
+
+if not po_files:
+    print(f'⚠️ No se encontraron archivos .po bajo la ruta: {target_path}')
+    sys.exit(0)
+
+malformed_files = []
+
+for po_file in po_files:
+    try:
+        with open(po_file, 'rb') as f:
+            reader = translate.PoFileReader(f)
+            # Forzamos a Odoo a leer todo el archivo para atrapar errores de parseo
+            list(reader)
+    except Exception as e:
+        error_text = str(e)
+        var = traceback.format_exc()
+        reason, line, msgid, comment = _diagnose_po_failure(po_file, error_text)
+        print('=' * 60)
+        print('❌ ERROR CRÍTICO DE SINTAXIS EN ARCHIVO PO')
+        print(f'ARCHIVO: {po_file}')
+        print(f'DETALLE: {error_text}')
+        print(f'DIAGNOSTICO: {reason}')
+        if line:
+            print(f'LINEA APROXIMADA: {line}')
+        if msgid:
+            print(f'MSGID: {msgid}')
+        if comment == '':
+            print('COMENTARIO ACTUAL: <vacio>')
+        elif comment:
+            print(f'COMENTARIO ACTUAL: {comment}')
+        _print_file_context(po_file, line)
+        print(f'TRACEBACK: {var}')
+        print('=' * 60)
+        malformed_files.append(po_file)
+
+if malformed_files:
+    print(f'🚨 Se encontraron {len(malformed_files)} archivos de traducción defectuosos.')
+    sys.exit(1)
+else:
+    print(f'✅ Todos los {len(po_files)} archivos .po analizados son correctos.')
+"""
+        python_script = python_script.replace("__TARGET_PATH__", json.dumps(self.container_target_path))
+        python_script = python_script.replace("__MODULES__", json.dumps(self.modules))
+
+        # Inyectamos y ejecutamos el código Python iterando sobre `docker exec`
+        cmd = [
+            "docker",
+            "exec",
+            "-i",
+            self.container,
+            "python3",
+            "-c",
+            python_script,
+        ]
+
+        result = subprocess.run(cmd)
+
+        if result.returncode == 0:
+            print(f"\n✔ Validación completada correctamente para el contenedor '{self.container}'.\n")
+        else:
+            print(f"\n✘ Falló la validación. Por favor corrige los archivos PO listados arriba.\n")
+            sys.exit(result.returncode)
+
+
+class ValidationOrchestrator:
+    def __init__(self, instance_name, target_path, modules=None):
+        self.instance_name = instance_name
+        self.target_path = target_path
+        self.modules = modules or []
+        self.container = self._resolve_container_name()
+
+    def _resolve_container_name(self):
+        config = load_instances_config(BASE_PATH)
+        if self.instance_name not in config["instances"]:
+            raise ValueError(f"La instancia '{self.instance_name}' no existe en instances.json")
+        return f"odoo-{self.instance_name}"
+
+    def _validate_container_running(self):
+        inspect_exists = subprocess.run(
+            ["docker", "inspect", self.container],
+            capture_output=True,
+            text=True,
+        )
+        if inspect_exists.returncode != 0:
+            raise RuntimeError(
+                f"El contenedor '{self.container}' no existe. Verifica la instancia y ejecuta ./odoo build/up."
+            )
+
+        inspect_running = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", self.container],
+            capture_output=True,
+            text=True,
+        )
+        if inspect_running.returncode != 0 or inspect_running.stdout.strip().lower() != "true":
+            raise RuntimeError(
+                f"El contenedor '{self.container}' no está en ejecución. Levántalo antes de validar PO."
+            )
+
+    def run(self):
+        print("\n=== Iniciando proceso de VALIDACIÓN DE ESPAÑOL (PO) ===")
+        self._validate_container_running()
+
+        manager = PoValidationManager(
+            container=self.container,
+            container_target_path=self.target_path,
+            modules=self.modules,
+        )
+
+        manager.run_validation()
+
+
+if __name__ == "__main__":
+    # 1. Configurar argumentos de línea de comandos
+    parser = argparse.ArgumentParser(description="Script para validar archivos de traducción .po en Odoo")
+    subparsers = parser.add_subparsers(dest="run", help="Acciones")
+
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validar la sintaxis de todos los archivos .po"
+    )
+    validate_parser.add_argument(
+        "instance",
+        help="Nombre de la instancia definida en instances.json (ej: integra-19.0)",
+    )
+
+    validate_parser.add_argument(
+        "-p",
+        "--path",
+        default="/home/odoo/src",
+        help="Ruta dentro del contenedor donde están los módulos (por defecto: /home/odoo/src)",
+    )
+
+    validate_parser.add_argument(
+        "-m",
+        "--module",
+        action="append",
+        dest="modules",
+        default=[],
+        help="Módulo a validar dentro de la ruta objetivo. Repetible: --module m1 --module m2",
+    )
+
+    args = parser.parse_args()
+
+    # Validación del subcomando
+    if args.run != "validate":
+        parser.print_help()
+        sys.exit(1)
+
+    # 2. Construcción del orquestador
+    try:
+        orchestrator = ValidationOrchestrator(
+            instance_name=args.instance,
+            target_path=args.path,
+            modules=args.modules,
+        )
+    except ValueError as e:
+        print(f"\nError de configuración: {str(e)}")
+        sys.exit(1)
+
+    # 3. Ejecución
+    try:
+        orchestrator.run()
+    except Exception as e:
+        print(f"\nError de ejecución: {str(e)}")
+        sys.exit(1)
