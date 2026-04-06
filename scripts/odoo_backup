@@ -1,0 +1,652 @@
+#!/usr/bin/env python3
+
+import argparse
+import subprocess
+import datetime
+import os
+import sys
+
+
+# ============================================================
+# 1. DumpManager: genera dump.sql dentro del contenedor
+# ============================================================
+class DumpManager:
+    def __init__(
+        self,
+        container_name,
+        dump_path,
+        db_name,
+        db_user,
+        db_host,
+        db_port,
+        copy_to_local_path,
+        linux_dump_user,
+        overwrite_existing=False,
+    ):
+        self.container = container_name
+        self.db_name = db_name
+        self.db_user = db_user
+        self.db_host = db_host
+        self.db_port = db_port
+        self.dump_path = dump_path
+        self.dump_folder = os.path.dirname(dump_path)
+        self.copy_to_local_path = copy_to_local_path
+        self.overwrite_existing = overwrite_existing
+        self.linux_dump_user = linux_dump_user  # Para crear y eliminar con este usuario. Asi evitamos eliminar archivos importantes.
+
+    def _create_dump_user(self):
+        print(
+            f"Creando usuario Linux para realizar dump dentro del contenedor {self.container} de forma segura."
+        )
+
+        # 1. Verificar si el usuario ya existe
+        check_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "bash",
+            "-c",
+            f"id -u {self.linux_dump_user} >/dev/null 2>&1",
+        ]
+
+        user_exists = subprocess.run(check_cmd).returncode == 0
+
+        if user_exists:
+            print(
+                f"Usuario '{self.linux_dump_user}' ya existe. No se creará nuevamente."
+            )
+            return
+
+        cmd = [
+            "docker",
+            "exec",
+            "-u",
+            "root",
+            self.container,
+            "useradd",
+            "-m",
+            "-s",
+            "/bin/bash",
+            self.linux_dump_user,
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        print(f"Usuario '{self.linux_dump_user}' creado correctamente.")
+
+    def create_dump_folder(self):
+        print(f"Creando carpeta de dumps dentro del contenedor {self.container}")
+
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-u",
+                self.linux_dump_user,
+                self.container,
+                "mkdir",
+                "-p",
+                self.dump_folder,
+            ],
+            check=True,
+        )
+
+    def generate_dump(self):
+        self._create_dump_user()
+
+        self.create_dump_folder()
+
+        print("Generando dump de la base de datos...")
+
+        inner_cmd = (
+            f"if [ -f '{self.dump_path}' ]; then "
+            f"echo 'ERROR: El archivo {self.dump_path} ya existe.' >&2; exit 1; "
+            f"else "
+            f"pg_dump -h {self.db_host} -p {self.db_port} -U {self.db_user} "
+            f"-F p -d {self.db_name} -f {self.dump_path} -b; "
+            f"fi"
+        )
+
+        overwriting_cmd = (
+            f"pg_dump -h {self.db_host} -p {self.db_port} -U {self.db_user} "
+            f"-F p -d {self.db_name} -f {self.dump_path} -b; "
+        )
+
+        dump_cmd = overwriting_cmd if self.overwrite_existing else inner_cmd
+
+        cmd = [
+            "docker",
+            "exec",
+            "-u",
+            self.linux_dump_user,
+            self.container,
+            "bash",
+            "-c",
+            dump_cmd,
+        ]
+
+        print(f"Generando dump.sql dentro del contenedor {self.container}")
+
+        print(f"Ejecutando comando: {' '.join(cmd)}")
+
+        subprocess.run(cmd, check=True)
+        return self.dump_path
+
+    def copy_dump_to_local(self):
+        print(
+            f"Copiando dump.sql desde el contenedor {self.container} a local path {self.copy_to_local_path}"
+        )
+
+        if os.path.exists(self.copy_to_local_path) and not self.overwrite_existing:
+            raise FileExistsError(
+                f"El archivo local {self.copy_to_local_path} ya existe. Debe ser eliminado o especificar otro path local."
+            )
+
+        subprocess.run(
+            ["mkdir", "-p", os.path.dirname(self.copy_to_local_path)], check=True
+        )
+
+        subprocess.run(
+            [
+                "docker",
+                "cp",
+                f"{self.container}:{self.dump_path}",
+                self.copy_to_local_path,
+            ],
+            check=True,
+        )
+
+
+# ============================================================
+# 2. FilestoreManager: copia el filestore dentro del contenedor
+# ============================================================
+class FilestoreManager:
+
+    def __init__(
+        self,
+        container_name,
+        container_filestore_path,
+        local_filestore_path,
+        overwrite_existing=False,
+    ):
+        self.container = container_name
+        self.container_filestore_path = container_filestore_path
+        self.local_filestore_path = local_filestore_path
+        self.overwrite_existing = overwrite_existing
+
+    def copy_filestore(self):
+        print(f"Copiando filestore dentro del contenedor {self.container}")
+
+        if os.path.exists(self.local_filestore_path) and not self.overwrite_existing:
+            raise FileExistsError(
+                f"La carpeta local {self.local_filestore_path} ya existe. Debe ser eliminada o especificar otro directorio local."
+            )
+
+        print(f"Desde {self.container_filestore_path} a {self.local_filestore_path}")
+
+        subprocess.run(["mkdir", "-p", self.local_filestore_path], check=True)
+
+        cmd = [
+            "docker",
+            "cp",
+            f"{self.container}:{self.container_filestore_path}/.",
+            self.local_filestore_path,
+        ]
+
+        subprocess.run(
+            cmd,
+            check=True,
+        )
+
+        print(f"Commando ejecutado: {' '.join(cmd)}")
+
+        return self.local_filestore_path
+
+
+# ============================================================
+# 3. ZipManager: crea el archivo ZIP dentro del contenedor
+# ============================================================
+class ZipManager:
+
+    def __init__(self, zip_path, content_paths: list, overwrite_existing=False):
+        self.zip_path = zip_path
+        self.zip_folder = os.path.dirname(zip_path)
+        self.zip_name = os.path.basename(zip_path)
+        self.content_paths = content_paths
+        self.overwrite_existing = overwrite_existing
+
+    def create_zip(self):
+        print(f"Creando carpeta para el ZIP en {self.zip_folder}")
+
+        if os.path.isfile(self.zip_path) and not self.overwrite_existing:
+            print(f"El archivo ZIP {self.zip_path} ya existe. Será sobrescrito.")
+            raise FileExistsError(f"El archivo ZIP {self.zip_path} ya existe.")
+
+        if not os.path.exists(self.zip_folder):
+            raise FileNotFoundError(f"La carpeta {self.zip_folder} no existe")
+
+        for path in self.content_paths:
+            if not os.path.exists(path):
+                raise FileNotFoundError(
+                    f"El path {path} no existe y no se puede agregar al ZIP"
+                )
+
+        base_dir = os.path.commonpath(self.content_paths)
+        relative_paths = [os.path.relpath(p, base_dir) for p in self.content_paths]
+
+        cmd = ["zip", "-r", self.zip_name] + relative_paths
+
+        print(f"Commando ZIP: \n\n{' '.join(cmd)}\n\n")
+
+        print(f"Creando ZIP {self.zip_name} con contenido: {self.content_paths}")
+        subprocess.run(cmd, check=True, cwd=base_dir)
+
+        return self.zip_path
+
+
+# ============================================================
+# 4. CleanupManager: elimina archivos temporales
+# ============================================================
+class CleanupManager:
+    def __init__(
+        self,
+        container_name=None,
+        local_paths_to_cleanup=None,
+        container_paths_to_cleanup=None,
+        confirm=False,
+        linux_dump_user=None,
+    ):
+        self.container = container_name
+        self.local_paths_to_cleanup = local_paths_to_cleanup
+        self.container_paths_to_cleanup = container_paths_to_cleanup
+        self.confirm = confirm
+        self.linux_dump_user = linux_dump_user
+
+    def _confirm(self, message):
+
+        if not self.confirm:
+            return True
+
+        response = input(f"{message} (s/n): ").strip().lower()
+        return response == "s"
+
+    def force_confirm(self):
+        self.confirm = True
+
+        return self
+
+    def container_cleanup(self):
+        print(
+            f"*** Limpiando archivos temporales dentro del contenedor {self.container}"
+        )
+
+        if not (
+            self.container_paths_to_cleanup and self.container and self.linux_dump_user
+        ):
+            return
+
+        continue_cleanup = self._confirm(
+            f"\n\n¿Está seguro de que desea eliminar los archivos temporales dentro del contenedor {self.container}?"
+            + "\n Esta acción no se puede deshacer."
+            + f"\n\nArchivos/Carpetas a eliminar: {self.container_paths_to_cleanup}\n\n"
+        )
+
+        if not continue_cleanup:
+            print("Limpieza de contenedor cancelada por el usuario.")
+            return
+
+        for path in self.container_paths_to_cleanup:
+            print(f"Eliminando archivo/carpeta temporal en contenedor: {path}")
+            subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    "-u",
+                    self.linux_dump_user,
+                    self.container,
+                    "rm",
+                    "-r",
+                    path,
+                ],
+                check=True,
+            )
+
+    def local_cleanup(self):
+        print("Limpiando archivos temporales locales")
+
+        if not self.local_paths_to_cleanup:
+            return
+
+        continue_cleanup = self._confirm(
+            f"\n\n¿Está seguro de que desea eliminar los archivos temporales locales?"
+            + "\n Esta acción no se puede deshacer."
+            + f"\n\nArchivos/Carpetas a eliminar: {self.local_paths_to_cleanup}\n\n"
+        )
+
+        if not continue_cleanup:
+            print("Limpieza local cancelada por el usuario.")
+            return
+
+        for path in self.local_paths_to_cleanup:
+
+            if not os.path.exists(path):
+                continue
+
+            if os.path.isfile(path):
+                print(f"Eliminando archivo temporal: {path}")
+                subprocess.run(["rm", "-f", path], check=True)
+
+                continue
+
+            if os.path.isdir(path):
+                print(f"Eliminando carpeta temporal: {path}")
+                subprocess.run(["rm", "-rf", path], check=True)
+
+    def deep_cleanup(self):
+        print("Iniciando limpieza profunda de archivos temporales")
+
+        self.container_cleanup()
+        self.local_cleanup()
+
+
+# ============================================================
+# 5. OdooBackupOrchestrator: clase mayor que usa todas las anteriores
+# ============================================================
+class OdooBackupOrchestrator:
+
+    def __init__(
+        self,
+        container_name,
+        db_name,
+        db_user,
+        db_host,
+        db_port,
+        backup_local_path,
+        db_container_dump_path,
+        linux_dump_user,
+        container_filestore_path=None,
+        overwrite_existing=False,
+    ):
+        self.backup_local_path = backup_local_path
+        self.container = container_name
+
+        self.db_name = db_name
+        self.db_user = db_user
+        self.db_host = db_host
+        self.db_port = db_port
+        self.container_filestore_path = (
+            f"{container_filestore_path}/{db_name}"
+            if container_filestore_path
+            else None
+        )
+        self.db_container_dump_path = db_container_dump_path
+        self.db_copy_to_local_path = f"{self.backup_local_path}/dump.sql"
+
+        self.local_filestore_path = f"{self.backup_local_path}/filestore"
+
+        self.overwrite_existing = overwrite_existing
+
+        self.linux_dump_user = linux_dump_user
+
+        self.dump_manager = DumpManager(
+            container_name=container_name,
+            dump_path=self.db_container_dump_path,
+            copy_to_local_path=self.db_copy_to_local_path,
+            db_name=db_name,
+            db_user=db_user,
+            db_host=db_host,
+            db_port=db_port,
+            overwrite_existing=self.overwrite_existing,
+            linux_dump_user=self.linux_dump_user,
+        )
+
+        self.cleanup_manager = CleanupManager(
+            container_name=self.container,
+            container_paths_to_cleanup=[self.db_container_dump_path],
+            local_paths_to_cleanup=[
+                self.db_copy_to_local_path,
+                self.local_filestore_path,
+            ],
+            linux_dump_user=self.linux_dump_user,
+        )
+
+        if self.container_filestore_path:
+            self.filestore_manager = FilestoreManager(
+                container_name=self.container,
+                container_filestore_path=self.container_filestore_path,
+                local_filestore_path=self.local_filestore_path,
+                overwrite_existing=self.overwrite_existing,
+            )
+        else:
+            self.filestore_manager = None
+
+        self.backup_zip_path = self._get_zip_path()
+        self.content_paths = [self.db_copy_to_local_path, self.local_filestore_path]
+
+        self.zip_manager = ZipManager(
+            zip_path=self.backup_zip_path,
+            content_paths=self.content_paths,
+            overwrite_existing=self.overwrite_existing,
+        )
+
+    # ---------------------------
+    # Generar nombre del ZIP
+    # ---------------------------
+    def _get_zip_path(self):
+        now = datetime.datetime.now()
+        timestamp = now.strftime("%Y-%m-%d_%H%M%S")
+
+        suffix = "_fs" if self.filestore_manager else "_nofs"
+
+        zip_name = f"{self.db_name}_{timestamp}{suffix}.zip"
+
+        zip_path = f"{self.backup_local_path}/{zip_name}"
+
+        return zip_path
+
+    def _get_database_dump(self):
+        self.dump_manager.generate_dump()
+        self.dump_manager.copy_dump_to_local()
+
+        return self.db_copy_to_local_path
+
+    def _get_filestore(self):
+
+        if self.filestore_manager:
+            self.filestore_manager.copy_filestore()
+            return self.local_filestore_path
+
+        cmd = [
+            "mkdir",
+            "-p",
+            self.local_filestore_path,
+        ]
+
+        subprocess.run(cmd, check=True)
+
+        return self.local_filestore_path
+
+    def _create_backup_zip(self):
+        zip_path = self._get_zip_path()
+
+        self.zip_manager.create_zip()
+
+        return zip_path
+
+    # ---------------------------
+    # Ejecutar proceso completo
+    # ---------------------------
+    def run_backup(self):
+        print("\n=== Iniciando proceso de backup ===")
+
+        # 1. Dump
+        self._get_database_dump()
+
+        # 2. Filestore (si aplica)
+        self._get_filestore()
+
+        # 3. Crear ZIP
+        self._create_backup_zip()
+
+        print(f"\n✔ Backup generado correctamente: {self.backup_zip_path}\n")
+
+        print(f"\n✔ Backup en: {self.backup_local_path}\n")
+
+        return self.backup_zip_path
+
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    raise SystemExit(
+        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
+    )
+
+
+def list_databases(db_user, db_host, db_port):
+    """
+    Devuelve una lista de bases de datos disponibles en PostgreSQL dentro del contenedor Docker.
+    Usa psql -lqt para obtenerlas.
+    """
+
+    cmd = [
+        "docker",
+        "exec",
+        os.getenv("PROJECT_NAME"),
+        "psql",
+        f"-U{db_user}",
+        f"-h{db_host}",
+        f"-p{db_port}",
+        "-lqt",
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PGPASSWORD": os.getenv("POSTGRES_PASSWORD")},
+    )
+
+    if result.returncode != 0:
+        print("Error al listar bases de datos:")
+        print(result.stderr)
+        sys.exit(1)
+
+    dbs = []
+    for line in result.stdout.splitlines():
+        parts = [p.strip() for p in line.split("|")]
+        if (
+            len(parts) >= 1
+            and parts[0]
+            and not parts[0].startswith("template")
+            and not parts[0].startswith("postgres")
+        ):
+            dbs.append(parts[0])
+
+    return dbs
+
+
+def choose_database(db_list):
+    """
+    Muestra las bases de datos y permite elegir una.
+    """
+    print("\nBases de datos disponibles:\n")
+    for i, db in enumerate(db_list, start=1):
+        print(f"{i}. {db}")
+
+    while True:
+        choice = input("\nSeleccione el número de la base de datos: ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(db_list):
+            return db_list[int(choice) - 1]
+        print("Selección inválida. Intente nuevamente.")
+
+
+def backup(db_name, backup_path, with_filestore=True, cleanup=True):
+    odoo_backup_orchestrator = OdooBackupOrchestrator(
+        container_name=os.getenv("PROJECT_NAME"),
+        db_name=db_name,
+        db_user=os.getenv("POSTGRES_USER"),
+        db_host=os.getenv("POSTGRES_HOST"),
+        db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        backup_local_path=backup_path,
+        db_container_dump_path="/tmp/odoo_database_backups/dump.sql",
+        container_filestore_path=(
+            "/home/odoo/data/filestore" if with_filestore else None
+        ),
+        overwrite_existing=True,
+        linux_dump_user="dump_user",
+    )
+
+    odoo_backup_orchestrator.run_backup()
+
+    if cleanup:
+        # 4. Cleanup
+        odoo_backup_orchestrator.cleanup_manager.deep_cleanup()
+
+
+if __name__ == "__main__":
+
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description="Script de backup de Odoo")
+
+    subparsers = parser.add_subparsers(dest="run", help="Acciones")
+
+    backup_parser = subparsers.add_parser(
+        "backup", help="Backup de la base de datos y filestore de Odoo"
+    )
+
+    backup_parser.add_argument(
+        "-d",
+        required=False,
+        help="Nombre de la base de datos (opcional). Si no se proporciona, se listarán las bases disponibles para elegir.",
+    )
+
+    backup_parser.add_argument(
+        "-p",
+        required=True,
+        help="Path local donde se guardará el backup",
+    )
+
+    backup_parser.add_argument(
+        "--no-fs",
+        action="store_true",
+        help="No hacer backup del filestore",
+        default=False,
+    )
+
+    backup_parser.add_argument(
+        "--no-cleanup",
+        action="store_true",
+        help="No eliminar archivos temporales después del backup",
+        default=False,
+    )
+
+    args = parser.parse_args()
+
+    if args.run != "backup":
+        parser.print_help()
+        sys.exit(1)
+
+    # Si no se pasa -d, listar y elegir
+    if not args.d:
+        print("No se especificó base de datos. Listando bases disponibles...")
+        dbs = list_databases(
+            db_user=os.getenv("POSTGRES_USER"),
+            db_host=os.getenv("POSTGRES_HOST"),
+            db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        )
+        if not dbs:
+            print("No se encontraron bases de datos.")
+            sys.exit(1)
+
+        chosen_db = choose_database(dbs)
+        print(f"\nBase de datos seleccionada: {chosen_db}")
+        args.d = chosen_db
+
+    backup(
+        db_name=args.d,
+        backup_path=args.p,
+        with_filestore=not args.no_fs,
+        cleanup=not args.no_cleanup,
+    )

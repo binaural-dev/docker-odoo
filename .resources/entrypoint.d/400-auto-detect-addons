@@ -14,28 +14,12 @@ RESOURCES = str(os.environ.get("RESOURCES"))
 
 addons = []
 
-# Handle enterprise: use enterprise in custom or in src
-ENTERPRISE_PATH = os.path.join(SOURCES, "enterprise")
-if os.path.isdir(ENTERPRISE_PATH):
-    addons.insert(0, os.path.join(ENTERPRISE_PATH))
-
-INTEGRA_PATH = os.path.join(SOURCES, "integra-addons")
-if os.path.isdir(INTEGRA_PATH):
-    addons.insert(0, os.path.join(INTEGRA_PATH))
-
-THIRD_PATH = os.path.join(SOURCES, "third-party-addons")
-if os.path.isdir(THIRD_PATH):
-    addons.insert(0, os.path.join(THIRD_PATH))
-
-# Odoo Venezuela public modules
-VENEZUELA_PATH = os.path.join(SOURCES, "odoo-venezuela")
-if os.path.isdir(VENEZUELA_PATH):
-    addons.insert(0, os.path.join(VENEZUELA_PATH))
-
+# Extrae los addons de las carpetas en /sources excepto custom
 for d in sorted(os.listdir(SOURCES)):
-    ext_path = os.path.join(SOURCES, d)
-    if os.path.isdir(ext_path) and d.startswith("ext_"):
-        addons.insert(0, ext_path)
+    full_path = os.path.join(SOURCES, d)
+    if os.path.isdir(full_path) and full_path != CUSTOM:
+        addons.insert(0, full_path)
+
 
 # Project repositories
 repo_addons = []

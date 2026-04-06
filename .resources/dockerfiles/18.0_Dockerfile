@@ -33,11 +33,10 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
         echo "Architecture not supported for wkhtmltox or unknown"; \
     fi; \
         rm -rf /var/lib/apt/lists/* /tmp/wkhtml.deb
-# Install nodejs
-RUN curl -s https://deb.nodesource.com/gpgkey/nodesource.gpg.key | gpg --dearmor | tee /usr/share/keyrings/nodesource.gpg >/dev/null \
-     && echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x `lsb_release -c -s` main" > /etc/apt/sources.list.d/nodesource.list \
-     && apt-get update \
-     && apt-get install -y nodejs
+
+# Install Node.js 20
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs
 
 # RUN npm install
 RUN npm install --force -g rtlcss@3.4.0 es-check@6.0.0 eslint@8.1.0 prettier@2.7.1 eslint-config-prettier@8.5.0 eslint-plugin-prettier@4.2.1

@@ -259,3 +259,29 @@ Cada vez que añades un nuevo repositorio a la carpeta custom, este será autom�
 Para entender completamente el funcionamiento del entorno, te recomendamos familiarizarte con los comandos de la terminal de Linux, Docker, Traefik y, por supuesto, Odoo.
 
 Si tienes alguna pregunta, no dudes en contactar con el equipo. Si no eres parte del equipo de desarrollo de Binaural, por favor utiliza los Issues en GitHub (siguiendo el código de conducta establecido).
+
+# 📘 Comandos Disponibles del Script de Gestión Odoo -> ./odoo
+
+Este script proporciona una interfaz de línea de comandos para administrar entornos Odoo basados en Docker. La siguiente tabla resume todos los comandos disponibles, su función y cuándo deben utilizarse.
+
+---
+
+## 📋 Tabla de Comandos
+
+| Comando | Descripción | Cuándo usarlo |
+|--------|-------------|----------------|
+| `start` | Inicia Odoo, PostgreSQL y pgAdmin (si aplica). | Primera ejecución, después de un `stop` o tras reiniciar el servidor. |
+| `stop` | Detiene los contenedores de Odoo y PostgreSQL. | Para liberar recursos o antes de un reinicio. |
+| `restart` | Reinicia completamente Odoo y la base de datos. | Tras cambios en configuración o errores persistentes. |
+| `fix-files` | Corrige permisos del filestore de Odoo. | Cuando Odoo no puede leer/escribir archivos. |
+| `bash` | Abre una consola dentro del contenedor Odoo. | Depuración o ejecución manual de comandos. |
+| `init` | Clona los repositorios necesarios según el entorno. | Primera instalación o regeneración de `src/`. |
+| `logs` | Muestra logs en tiempo real de Odoo y PostgreSQL. | Diagnóstico de errores o monitoreo. |
+| `list` | Lista los contenedores activos del entorno. | Verificar si Odoo está corriendo. |
+| `remove` | Elimina contenedores y volúmenes (incluye datos). | Reset total del entorno. |
+| `build` | Construye la imagen Docker de Odoo. | Cambios en Dockerfile o dependencias. |
+| `psql -d <dbname>` | Abre una consola PostgreSQL dentro del contenedor. | Consultas SQL o depuración de BD. |
+| `sync <repo> <branch> [--v]` | Sincroniza repositorios y submódulos. | Cambios de rama, actualizaciones o conflictos. |
+| `update -d <dbname> -m <modules>` | Actualiza módulos Odoo dentro del contenedor. | Desarrollo o despliegue de cambios. |
+
+---
