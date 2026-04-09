@@ -234,10 +234,10 @@ def _nginx_service(config):
         "    restart: always",
         "    container_name: odoo-nginx",
         "    image: nginx:latest",
-        "    depends_on:",
+        # "    depends_on:",
     ]
-    for container in odoo_containers:
-        lines.append(f"      - {container}")
+    # for container in odoo_containers:
+    #     lines.append(f"      - {container}")
 
     lines += [
         "    extra_hosts:",
