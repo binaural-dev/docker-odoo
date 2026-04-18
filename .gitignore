@@ -4,3 +4,4 @@ src
 .resources/dbconfigs/pg_hba.conf
 **/.vscode/
 venv
+./logs

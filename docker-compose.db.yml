@@ -17,6 +17,7 @@ services:
     volumes:
       - ./.resources/dbconfigs:/etc/postgres/dbconfigs
       - odoo-db:/var/lib/postgresql/data
+      - ./logs/db:/var/log/postgresql
     environment:
       - POSTGRES_DB=${POSTGRES_DB}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}

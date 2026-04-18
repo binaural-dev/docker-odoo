@@ -1,6 +1,6 @@
 services:
   odoo:
-    command: odoo --dev=all
+    command: odoo -c /home/odoo/.config --logfile=/var/log/odoo/odoo-server.log ${ODOO_EXTRA_ARGS:-}
     restart: always
     container_name: ${PROJECT_NAME}
     build:
@@ -14,9 +14,13 @@ services:
       - 1.1.1.1
     networks:
       binaural:
+    ports:
+      - "${ODOO_PORT_BIND_IP:-127.0.0.1}:8069:8069"
+      - "${ODOO_PORT_BIND_IP:-127.0.0.1}:8071:8071"
     volumes:
       - odoo-web:/var/lib/odoo
       - ./src:/home/odoo/src
+      - ./logs/odoo:/var/log/odoo
       - ./.resources/.coveragerc:/home/odoo/.coveragerc
       - odoo_data:/home/odoo/data
       - py3:/usr/local/lib/
@@ -74,8 +78,12 @@ services:
       - "${EXTERNAL_PORT_ODOO}:80"
     networks:
       binaural:
+    environment:
+      - NGINX_SERVER_NAME=${NGINX_SERVER_NAME:-_}
+      - NGINX_MAX_BODY_SIZE=${NGINX_MAX_BODY_SIZE:-200M}
+      - NGINX_PROXY_TIMEOUT=${NGINX_PROXY_TIMEOUT:-60s}
     volumes:
-      - ./.resources/nginx_configs/odoo.conf:/etc/nginx/conf.d/default.conf
+      - ./.resources/nginx_configs:/etc/nginx/templates
 
 volumes:
   odoo-web:

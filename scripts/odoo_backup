@@ -566,8 +566,8 @@ def backup(db_name, backup_path, with_filestore=True, cleanup=True):
         container_name=os.getenv("PROJECT_NAME"),
         db_name=db_name,
         db_user=os.getenv("POSTGRES_USER"),
-        db_host=os.getenv("POSTGRES_HOST"),
-        db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        db_host=os.getenv("INTERNAL_POSTGRES_HOST", "db"),
+        db_port=os.getenv("INTERNAL_POSTGRES_PORT", "5432"),
         backup_local_path=backup_path,
         db_container_dump_path="/tmp/odoo_database_backups/dump.sql",
         container_filestore_path=(
@@ -633,8 +633,8 @@ if __name__ == "__main__":
         print("No se especificó base de datos. Listando bases disponibles...")
         dbs = list_databases(
             db_user=os.getenv("POSTGRES_USER"),
-            db_host=os.getenv("POSTGRES_HOST"),
-            db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+            db_host=os.getenv("INTERNAL_POSTGRES_HOST", "db"),
+            db_port=os.getenv("INTERNAL_POSTGRES_PORT", "5432"),
         )
         if not dbs:
             print("No se encontraron bases de datos.")
