@@ -1,0 +1,4 @@
+# Requirements para pruebas de carga en Odoo
+odoo-client-lib==2.0.1
+locust>=2.43.3
+names==0.3.0
