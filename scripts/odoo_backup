@@ -208,40 +208,64 @@ class FilestoreManager:
 # ============================================================
 class ZipManager:
 
-    def __init__(self, zip_path, content_paths: list, overwrite_existing=False):
+    def __init__(self, zip_path, content_paths: list, overwrite_existing=False, verbose=True):
         self.zip_path = zip_path
         self.zip_folder = os.path.dirname(zip_path)
         self.zip_name = os.path.basename(zip_path)
         self.content_paths = content_paths
         self.overwrite_existing = overwrite_existing
+        self.verbose = verbose
+        self.zip_initialized = False
 
-    def create_zip(self):
+    def _prepare_zip_file(self):
+        if self.zip_initialized:
+            return
+
+        if os.path.isfile(self.zip_path):
+            if not self.overwrite_existing:
+                print(f"El archivo ZIP {self.zip_path} ya existe. Será sobrescrito.")
+                raise FileExistsError(f"El archivo ZIP {self.zip_path} ya existe.")
+
+            os.remove(self.zip_path)
+
+        self.zip_initialized = True
+
+    def _get_base_dir(self, content_paths):
+        parent_paths = [os.path.dirname(path.rstrip(os.sep)) for path in content_paths]
+        return os.path.commonpath(parent_paths)
+
+    def add_paths_to_zip(self, content_paths):
         print(f"Creando carpeta para el ZIP en {self.zip_folder}")
-
-        if os.path.isfile(self.zip_path) and not self.overwrite_existing:
-            print(f"El archivo ZIP {self.zip_path} ya existe. Será sobrescrito.")
-            raise FileExistsError(f"El archivo ZIP {self.zip_path} ya existe.")
 
         if not os.path.exists(self.zip_folder):
             raise FileNotFoundError(f"La carpeta {self.zip_folder} no existe")
 
-        for path in self.content_paths:
+        for path in content_paths:
             if not os.path.exists(path):
                 raise FileNotFoundError(
                     f"El path {path} no existe y no se puede agregar al ZIP"
                 )
 
-        base_dir = os.path.commonpath(self.content_paths)
-        relative_paths = [os.path.relpath(p, base_dir) for p in self.content_paths]
+        self._prepare_zip_file()
 
-        cmd = ["zip", "-r", self.zip_name] + relative_paths
+        base_dir = self._get_base_dir(content_paths)
+        relative_paths = [os.path.relpath(path, base_dir) for path in content_paths]
+
+        cmd = ["zip", "-r", self.zip_path] + relative_paths
+
+        if not self.verbose:
+            print("Modo silencioso activado: no se mostrarán los archivos siendo agregados al ZIP. \n")
+            cmd.insert(1, "-q")
 
         print(f"Commando ZIP: \n\n{' '.join(cmd)}\n\n")
 
-        print(f"Creando ZIP {self.zip_name} con contenido: {self.content_paths}")
+        print(f"Actualizando ZIP {self.zip_name} con contenido: {content_paths}")
         subprocess.run(cmd, check=True, cwd=base_dir)
 
         return self.zip_path
+
+    def create_zip(self):
+        return self.add_paths_to_zip(self.content_paths)
 
 
 # ============================================================
@@ -253,12 +277,14 @@ class CleanupManager:
         container_name=None,
         local_paths_to_cleanup=None,
         container_paths_to_cleanup=None,
+        cleanup_enabled=True,
         confirm=False,
         linux_dump_user=None,
     ):
         self.container = container_name
         self.local_paths_to_cleanup = local_paths_to_cleanup
         self.container_paths_to_cleanup = container_paths_to_cleanup
+        self.cleanup_enabled = cleanup_enabled
         self.confirm = confirm
         self.linux_dump_user = linux_dump_user
 
@@ -275,10 +301,19 @@ class CleanupManager:
 
         return self
 
+    def _remove_tracked_path(self, tracked_paths, path):
+        if not tracked_paths or not path:
+            return tracked_paths
+
+        return [tracked_path for tracked_path in tracked_paths if tracked_path != path]
+
     def container_cleanup(self):
         print(
             f"*** Limpiando archivos temporales dentro del contenedor {self.container}"
         )
+
+        if not self.cleanup_enabled:
+            return
 
         if not (
             self.container_paths_to_cleanup and self.container and self.linux_dump_user
@@ -310,9 +345,61 @@ class CleanupManager:
                 ],
                 check=True,
             )
+            
+
+    def cleanup_container_path(self, path):
+        if not self.cleanup_enabled:
+            return
+
+        if not (path and self.container and self.linux_dump_user):
+            return
+
+        print(f"Eliminando archivo/carpeta temporal en contenedor: {path}")
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-u",
+                self.linux_dump_user,
+                self.container,
+                "rm",
+                "-rf",
+                path,
+            ],
+            check=True,
+        )
+
+        self.container_paths_to_cleanup = self._remove_tracked_path(
+            self.container_paths_to_cleanup, path
+        )
+
+    def cleanup_local_path(self, path):
+        if not self.cleanup_enabled:
+            return
+
+        if not path or not os.path.exists(path):
+            return
+
+        if os.path.isfile(path):
+            print(f"Eliminando archivo temporal: {path}")
+            subprocess.run(["rm", "-f", path], check=True)
+            self.local_paths_to_cleanup = self._remove_tracked_path(
+                self.local_paths_to_cleanup, path
+            )
+            return
+
+        if os.path.isdir(path):
+            print(f"Eliminando carpeta temporal: {path}")
+            subprocess.run(["rm", "-rf", path], check=True)
+            self.local_paths_to_cleanup = self._remove_tracked_path(
+                self.local_paths_to_cleanup, path
+            )
 
     def local_cleanup(self):
         print("Limpiando archivos temporales locales")
+
+        if not self.cleanup_enabled:
+            return
 
         if not self.local_paths_to_cleanup:
             return
@@ -328,25 +415,7 @@ class CleanupManager:
             return
 
         for path in self.local_paths_to_cleanup:
-
-            if not os.path.exists(path):
-                continue
-
-            if os.path.isfile(path):
-                print(f"Eliminando archivo temporal: {path}")
-                subprocess.run(["rm", "-f", path], check=True)
-
-                continue
-
-            if os.path.isdir(path):
-                print(f"Eliminando carpeta temporal: {path}")
-                subprocess.run(["rm", "-rf", path], check=True)
-
-    def deep_cleanup(self):
-        print("Iniciando limpieza profunda de archivos temporales")
-
-        self.container_cleanup()
-        self.local_cleanup()
+            self.cleanup_local_path(path)
 
 
 # ============================================================
@@ -365,8 +434,12 @@ class OdooBackupOrchestrator:
         db_container_dump_path,
         linux_dump_user,
         container_filestore_path=None,
+        cleanup_enabled=True,
         overwrite_existing=False,
+        verbose=True,
     ):
+        self.verbose = verbose
+
         self.backup_local_path = backup_local_path
         self.container = container_name
 
@@ -379,12 +452,21 @@ class OdooBackupOrchestrator:
             if container_filestore_path
             else None
         )
+        
+        self.backup_filename = self._get_backup_filename()
+        self.backup_zip_path = self._get_zip_path()
+
+        self.tmp_backup_folder_local_path = f"{self.backup_local_path}/.tmp_{self.backup_filename.replace('.zip', '')}"
+        
         self.db_container_dump_path = db_container_dump_path
-        self.db_copy_to_local_path = f"{self.backup_local_path}/dump.sql"
+        self.db_copy_to_local_path = f"{self.tmp_backup_folder_local_path}/dump.sql"
+        
+        self.local_filestore_path = f"{self.tmp_backup_folder_local_path}/filestore"
 
-        self.local_filestore_path = f"{self.backup_local_path}/filestore"
-
+        self.content_paths_to_zip = [self.db_copy_to_local_path, self.local_filestore_path]
+        
         self.overwrite_existing = overwrite_existing
+        self.cleanup_enabled = cleanup_enabled
 
         self.linux_dump_user = linux_dump_user
 
@@ -404,9 +486,11 @@ class OdooBackupOrchestrator:
             container_name=self.container,
             container_paths_to_cleanup=[self.db_container_dump_path],
             local_paths_to_cleanup=[
-                self.db_copy_to_local_path,
-                self.local_filestore_path,
+                self.tmp_backup_folder_local_path,
+                # self.db_copy_to_local_path,
+                # self.local_filestore_path,
             ],
+            cleanup_enabled=self.cleanup_enabled,
             linux_dump_user=self.linux_dump_user,
         )
 
@@ -420,27 +504,30 @@ class OdooBackupOrchestrator:
         else:
             self.filestore_manager = None
 
-        self.backup_zip_path = self._get_zip_path()
-        self.content_paths = [self.db_copy_to_local_path, self.local_filestore_path]
 
         self.zip_manager = ZipManager(
             zip_path=self.backup_zip_path,
-            content_paths=self.content_paths,
+            content_paths=self.content_paths_to_zip,
             overwrite_existing=self.overwrite_existing,
+            verbose=self.verbose,
         )
 
     # ---------------------------
     # Generar nombre del ZIP
     # ---------------------------
-    def _get_zip_path(self):
+    
+    def _get_backup_filename(self):
         now = datetime.datetime.now()
         timestamp = now.strftime("%Y-%m-%d_%H%M%S")
 
-        suffix = "_fs" if self.filestore_manager else "_nofs"
+        suffix = "_fs" if self.container_filestore_path else "_nofs"
 
         zip_name = f"{self.db_name}_{timestamp}{suffix}.zip"
+        
+        return zip_name
 
-        zip_path = f"{self.backup_local_path}/{zip_name}"
+    def _get_zip_path(self):
+        zip_path = f"{self.backup_local_path}/{self.backup_filename}"
 
         return zip_path
 
@@ -449,6 +536,23 @@ class OdooBackupOrchestrator:
         self.dump_manager.copy_dump_to_local()
 
         return self.db_copy_to_local_path
+
+    def _cleanup_database_dump(self):
+        self.cleanup_manager.cleanup_local_path(self.db_copy_to_local_path)
+        self.cleanup_manager.cleanup_container_path(self.db_container_dump_path)
+
+    def _cleanup_filestore(self):
+        self.cleanup_manager.cleanup_local_path(self.local_filestore_path)
+        
+    def tmp_folder_cleanup(self):
+        print("Limpiando carpeta temporal local")
+
+        if not self.cleanup_enabled:
+            return
+
+        tmp_folder_path = self.tmp_backup_folder_local_path
+        if os.path.exists(tmp_folder_path):
+            self.cleanup_manager.cleanup_local_path(tmp_folder_path)
 
     def _get_filestore(self):
 
@@ -473,20 +577,33 @@ class OdooBackupOrchestrator:
 
         return zip_path
 
+    def _append_to_backup_zip(self, content_paths):
+        return self.zip_manager.add_paths_to_zip(content_paths)
+    
+    def ensure_local_backup_folder(self):
+        if not os.path.exists(self.backup_local_path):
+            print(f"Creando carpeta local para backup en {self.backup_local_path}")
+            os.makedirs(self.backup_local_path, exist_ok=True)
+
     # ---------------------------
     # Ejecutar proceso completo
     # ---------------------------
     def run_backup(self):
         print("\n=== Iniciando proceso de backup ===")
+        
+        self.ensure_local_backup_folder()
 
         # 1. Dump
-        self._get_database_dump()
+        dump_path = self._get_database_dump()
+        self._append_to_backup_zip([dump_path])
+        self._cleanup_database_dump()
 
         # 2. Filestore (si aplica)
-        self._get_filestore()
-
-        # 3. Crear ZIP
-        self._create_backup_zip()
+        filestore_path = self._get_filestore()
+        self._append_to_backup_zip([filestore_path])
+        self._cleanup_filestore()
+        
+        self.tmp_folder_cleanup()
 
         print(f"\n✔ Backup generado correctamente: {self.backup_zip_path}\n")
 
@@ -561,7 +678,7 @@ def choose_database(db_list):
         print("Selección inválida. Intente nuevamente.")
 
 
-def backup(db_name, backup_path, with_filestore=True, cleanup=True):
+def backup(db_name, backup_path, with_filestore=True, cleanup=True, verbose=True):
     odoo_backup_orchestrator = OdooBackupOrchestrator(
         container_name=os.getenv("PROJECT_NAME"),
         db_name=db_name,
@@ -573,15 +690,13 @@ def backup(db_name, backup_path, with_filestore=True, cleanup=True):
         container_filestore_path=(
             "/home/odoo/data/filestore" if with_filestore else None
         ),
+        cleanup_enabled=cleanup,
         overwrite_existing=True,
         linux_dump_user="dump_user",
+        verbose=verbose,
     )
 
     odoo_backup_orchestrator.run_backup()
-
-    if cleanup:
-        # 4. Cleanup
-        odoo_backup_orchestrator.cleanup_manager.deep_cleanup()
 
 
 if __name__ == "__main__":
@@ -594,6 +709,13 @@ if __name__ == "__main__":
 
     backup_parser = subparsers.add_parser(
         "backup", help="Backup de la base de datos y filestore de Odoo"
+    )
+    
+    backup_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Mostrar mensajes detallados durante el backup",
+        default=False,
     )
 
     backup_parser.add_argument(
@@ -649,4 +771,5 @@ if __name__ == "__main__":
         backup_path=args.p,
         with_filestore=not args.no_fs,
         cleanup=not args.no_cleanup,
+        verbose=args.verbose,
     )
