@@ -3,4 +3,10 @@ src
 .resources/Dockerfile
 .resources/dbconfigs/pg_hba.conf
 **/.vscode/
+.venv
 venv
+.tmp_ignored/
+backups
+.DS_Store
+__pycache__
+

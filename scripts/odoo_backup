@@ -5,6 +5,8 @@ import subprocess
 import datetime
 import os
 import sys
+import re
+import shlex
 
 
 # ============================================================
@@ -21,6 +23,8 @@ class DumpManager:
         db_port,
         copy_to_local_path,
         linux_dump_user,
+        target_pg_major,
+        pg_dump_bin="pg_dump",
         overwrite_existing=False,
     ):
         self.container = container_name
@@ -33,6 +37,63 @@ class DumpManager:
         self.copy_to_local_path = copy_to_local_path
         self.overwrite_existing = overwrite_existing
         self.linux_dump_user = linux_dump_user  # Para crear y eliminar con este usuario. Asi evitamos eliminar archivos importantes.
+        self.target_pg_major = str(target_pg_major)
+        self.pg_dump_bin = pg_dump_bin
+
+    def _get_pg_dump_major_in_container(self):
+        cmd = [
+            "docker",
+            "exec",
+            "-u",
+            self.linux_dump_user,
+            self.container,
+            self.pg_dump_bin,
+            "--version",
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise RuntimeError(
+                "No se pudo ejecutar el binario de pg_dump configurado "
+                f"('{self.pg_dump_bin}') dentro del contenedor {self.container}. "
+                f"Detalle: {stderr or 'sin detalle'}"
+            )
+
+        version_output = (result.stdout or "").strip()
+
+        version_match = re.search(r"PostgreSQL\)\s+(\d+)", version_output)
+        if not version_match:
+            version_match = re.search(r"(\d+)", version_output)
+
+        if not version_match:
+            raise RuntimeError(
+                "No se pudo interpretar la versión de pg_dump a partir de la salida: "
+                f"'{version_output}'"
+            )
+
+        return str(int(version_match.group(1)))
+
+    def _validate_pg_dump_major_compatibility(self):
+        pg_dump_major = self._get_pg_dump_major_in_container()
+
+        if pg_dump_major != self.target_pg_major:
+            raise RuntimeError(
+                "ERROR: incompatibilidad de major entre pg_dump y destino.\n\n"
+                "Por política del proyecto, el backup debe generarse con la misma\n"
+                "major que el PostgreSQL destino para evitar fallas al restaurar.\n\n"
+                f"- pg_dump detectado: {pg_dump_major}\n"
+                f"- major destino esperada: {self.target_pg_major}\n\n"
+                "Acción recomendada:\n"
+                "1) Ajustá --pg-dump-bin o --target-pg-major.\n"
+                f"2) Ingresá al contenedor: docker exec -it {self.container} bash\n"
+                "3) Instalá el cliente correcto:\n"
+                "   apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+                f"postgresql-client-{self.target_pg_major}\n"
+                "4) Reintentá con:\n"
+                f"   --pg-dump-bin /usr/lib/postgresql/{self.target_pg_major}/bin/pg_dump"
+            )
 
     def _create_dump_user(self):
         print(
@@ -93,22 +154,25 @@ class DumpManager:
 
     def generate_dump(self):
         self._create_dump_user()
+        self._validate_pg_dump_major_compatibility()
 
         self.create_dump_folder()
 
         print("Generando dump de la base de datos...")
 
+        pg_dump_bin = shlex.quote(self.pg_dump_bin)
+
         inner_cmd = (
             f"if [ -f '{self.dump_path}' ]; then "
             f"echo 'ERROR: El archivo {self.dump_path} ya existe.' >&2; exit 1; "
             f"else "
-            f"pg_dump -h {self.db_host} -p {self.db_port} -U {self.db_user} "
+            f"{pg_dump_bin} -h {self.db_host} -p {self.db_port} -U {self.db_user} "
             f"-F p -d {self.db_name} -f {self.dump_path} -b; "
             f"fi"
         )
 
         overwriting_cmd = (
-            f"pg_dump -h {self.db_host} -p {self.db_port} -U {self.db_user} "
+            f"{pg_dump_bin} -h {self.db_host} -p {self.db_port} -U {self.db_user} "
             f"-F p -d {self.db_name} -f {self.dump_path} -b; "
         )
 
@@ -433,6 +497,8 @@ class OdooBackupOrchestrator:
         backup_local_path,
         db_container_dump_path,
         linux_dump_user,
+        target_pg_major,
+        pg_dump_bin="pg_dump",
         container_filestore_path=None,
         cleanup_enabled=True,
         overwrite_existing=False,
@@ -480,6 +546,8 @@ class OdooBackupOrchestrator:
             db_port=db_port,
             overwrite_existing=self.overwrite_existing,
             linux_dump_user=self.linux_dump_user,
+            target_pg_major=target_pg_major,
+            pg_dump_bin=pg_dump_bin,
         )
 
         self.cleanup_manager = CleanupManager(
@@ -527,7 +595,9 @@ class OdooBackupOrchestrator:
         return zip_name
 
     def _get_zip_path(self):
-        zip_path = f"{self.backup_local_path}/{self.backup_filename}"
+        zip_path = os.path.abspath(
+            os.path.join(self.backup_local_path, self.backup_filename)
+        )
 
         return zip_path
 
@@ -589,7 +659,7 @@ class OdooBackupOrchestrator:
     # Ejecutar proceso completo
     # ---------------------------
     def run_backup(self):
-        print("\n=== Iniciando proceso de backup ===")
+        print("\n=== Iniciando proceso de backup ===\n")
         
         self.ensure_local_backup_folder()
 
@@ -605,9 +675,12 @@ class OdooBackupOrchestrator:
         
         self.tmp_folder_cleanup()
 
-        print(f"\n✔ Backup generado correctamente: {self.backup_zip_path}\n")
+        print(
+            "\n✔ Backup generado correctamente.\n"
+            f"   Archivo: {self.backup_zip_path}\n"
+        )
 
-        print(f"\n✔ Backup en: {self.backup_local_path}\n")
+        print(f"✔ Carpeta destino: {self.backup_local_path}\n")
 
         return self.backup_zip_path
 
@@ -620,6 +693,13 @@ except ModuleNotFoundError:
     )
 
 
+def get_required_env(name):
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Falta la variable de entorno requerida: {name}")
+    return value
+
+
 def list_databases(db_user, db_host, db_port):
     """
     Devuelve una lista de bases de datos disponibles en PostgreSQL dentro del contenedor Docker.
@@ -629,7 +709,7 @@ def list_databases(db_user, db_host, db_port):
     cmd = [
         "docker",
         "exec",
-        os.getenv("PROJECT_NAME"),
+        get_required_env("PROJECT_NAME"),
         "psql",
         f"-U{db_user}",
         f"-h{db_host}",
@@ -641,7 +721,7 @@ def list_databases(db_user, db_host, db_port):
         cmd,
         capture_output=True,
         text=True,
-        env={**os.environ, "PGPASSWORD": os.getenv("POSTGRES_PASSWORD")},
+        env={**os.environ, "PGPASSWORD": get_required_env("POSTGRES_PASSWORD")},
     )
 
     if result.returncode != 0:
@@ -678,13 +758,35 @@ def choose_database(db_list):
         print("Selección inválida. Intente nuevamente.")
 
 
-def backup(db_name, backup_path, with_filestore=True, cleanup=True, verbose=True):
+def normalize_pg_major(value):
+    normalized = str(value).strip()
+
+    if not normalized:
+        raise ValueError("--target-pg-major no puede estar vacío.")
+
+    if not normalized.isdigit():
+        raise ValueError(
+            "--target-pg-major debe ser un entero positivo (por ejemplo: 16 o 17)."
+        )
+
+    return str(int(normalized))
+
+
+def backup(
+    db_name,
+    backup_path,
+    target_pg_major,
+    pg_dump_bin="pg_dump",
+    with_filestore=True,
+    cleanup=True,
+    verbose=True,
+):
     odoo_backup_orchestrator = OdooBackupOrchestrator(
-        container_name=os.getenv("PROJECT_NAME"),
+        container_name=get_required_env("PROJECT_NAME"),
         db_name=db_name,
-        db_user=os.getenv("POSTGRES_USER"),
-        db_host=os.getenv("POSTGRES_HOST"),
-        db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        db_user=get_required_env("POSTGRES_USER"),
+        db_host=get_required_env("POSTGRES_HOST"),
+        db_port=get_required_env("EXTERNAL_PORT_POSTGRES"),
         backup_local_path=backup_path,
         db_container_dump_path="/tmp/odoo_database_backups/dump.sql",
         container_filestore_path=(
@@ -693,15 +795,20 @@ def backup(db_name, backup_path, with_filestore=True, cleanup=True, verbose=True
         cleanup_enabled=cleanup,
         overwrite_existing=True,
         linux_dump_user="dump_user",
+        target_pg_major=target_pg_major,
+        pg_dump_bin=pg_dump_bin,
         verbose=verbose,
     )
 
     odoo_backup_orchestrator.run_backup()
 
 
-if __name__ == "__main__":
-
+def main():
     load_dotenv()
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    default_backup_path = os.path.join(project_root, "backups")
 
     parser = argparse.ArgumentParser(description="Script de backup de Odoo")
 
@@ -726,8 +833,22 @@ if __name__ == "__main__":
 
     backup_parser.add_argument(
         "-p",
+        required=False,
+        default=default_backup_path,
+        help=f"Path local donde se guardará el backup (default: {default_backup_path})",
+    )
+
+    backup_parser.add_argument(
+        "--target-pg-major",
         required=True,
-        help="Path local donde se guardará el backup",
+        help="Major de PostgreSQL destino para validar compatibilidad del dump (ej: 16, 17)",
+    )
+
+    backup_parser.add_argument(
+        "--pg-dump-bin",
+        required=False,
+        default="pg_dump",
+        help="Binario pg_dump dentro del contenedor (default: pg_dump)",
     )
 
     backup_parser.add_argument(
@@ -754,9 +875,9 @@ if __name__ == "__main__":
     if not args.d:
         print("No se especificó base de datos. Listando bases disponibles...")
         dbs = list_databases(
-            db_user=os.getenv("POSTGRES_USER"),
-            db_host=os.getenv("POSTGRES_HOST"),
-            db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+            db_user=get_required_env("POSTGRES_USER"),
+            db_host=get_required_env("POSTGRES_HOST"),
+            db_port=get_required_env("EXTERNAL_PORT_POSTGRES"),
         )
         if not dbs:
             print("No se encontraron bases de datos.")
@@ -766,10 +887,47 @@ if __name__ == "__main__":
         print(f"\nBase de datos seleccionada: {chosen_db}")
         args.d = chosen_db
 
+    try:
+        target_pg_major = normalize_pg_major(args.target_pg_major)
+    except ValueError as error:
+        print(
+            "\nError de validación de argumentos:\n"
+            f"- {error}\n"
+        )
+        sys.exit(1)
+
+    pg_dump_bin = args.pg_dump_bin.strip()
+    if not pg_dump_bin:
+        print(
+            "\nError de validación de argumentos:\n"
+            "- --pg-dump-bin no puede estar vacío.\n"
+        )
+        sys.exit(1)
+
     backup(
         db_name=args.d,
         backup_path=args.p,
+        target_pg_major=target_pg_major,
+        pg_dump_bin=pg_dump_bin,
         with_filestore=not args.no_fs,
         cleanup=not args.no_cleanup,
         verbose=args.verbose,
     )
+
+
+if __name__ == "__main__":
+    verbose_mode = "--verbose" in sys.argv
+
+    try:
+        main()
+    except Exception as exc:
+        if verbose_mode:
+            raise
+
+        print(
+            "\nError durante el backup.\n"
+            f"Detalle: {exc}\n"
+            "Sugerencia: ejecutá con --verbose para ver el stack completo.\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)

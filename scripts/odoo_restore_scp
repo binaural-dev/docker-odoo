@@ -1,0 +1,1021 @@
+#!/usr/bin/env python3
+
+import argparse
+import csv
+import datetime
+import importlib
+import os
+import posixpath
+import re
+import shlex
+import subprocess
+import sys
+
+
+class EnvConfig:
+	def __init__(self, container_name, db_user, db_host, db_port):
+		self.container_name = container_name
+		self.db_user = db_user
+		self.db_host = db_host
+		self.db_port = db_port
+
+	@classmethod
+	def from_environment(cls):
+		container_name = os.getenv("PROJECT_NAME")
+		db_user = os.getenv("POSTGRES_USER")
+		db_host = os.getenv("POSTGRES_HOST")
+		db_port = os.getenv("EXTERNAL_PORT_POSTGRES")
+
+		missing = []
+		if not container_name:
+			missing.append("PROJECT_NAME")
+		if not db_user:
+			missing.append("POSTGRES_USER")
+		if not db_host:
+			missing.append("POSTGRES_HOST")
+		if not db_port:
+			missing.append("EXTERNAL_PORT_POSTGRES")
+
+		if missing:
+			raise RuntimeError(
+				"Faltan variables de entorno requeridas: " + ", ".join(missing)
+			)
+
+		return cls(
+			container_name=container_name,
+			db_user=db_user,
+			db_host=db_host,
+			db_port=db_port,
+		)
+
+
+def format_date(value):
+	if not value:
+		return ""
+	return value.strftime("%Y-%m-%d")
+
+
+def format_size_human(size_bytes):
+	if size_bytes is None:
+		return ""
+
+	units = ["B", "KB", "MB", "GB", "TB"]
+	size = float(size_bytes)
+	for unit in units:
+		if size < 1024 or unit == units[-1]:
+			if unit == "B":
+				return f"{int(size)} {unit}"
+			return f"{size:.1f} {unit}"
+		size /= 1024
+
+
+def describe_days_until_cleanup(days_until_cleanup):
+	if days_until_cleanup > 1:
+		return f"faltan {days_until_cleanup} días"
+	if days_until_cleanup == 1:
+		return "falta 1 día"
+	if days_until_cleanup == 0:
+		return "se elimina hoy"
+
+	overdue_days = abs(days_until_cleanup)
+	if overdue_days == 1:
+		return "eliminable desde hace 1 día"
+	return f"eliminable desde hace {overdue_days} días"
+
+
+def compute_cleanup_on(expires_on, delay_days=0):
+	return expires_on + datetime.timedelta(days=delay_days + 1)
+
+
+def classify_cleanup_status(expires_on, cleanup_on, today):
+	if today < expires_on:
+		return "vigente"
+	if today == expires_on:
+		return "vence hoy"
+	if today < cleanup_on:
+		return "en gracia"
+	if today == cleanup_on:
+		return "eliminable hoy"
+	return "eliminable"
+
+
+class LifecycleCsvLogger:
+	FIELDNAMES = [
+		"timestamp",
+		"event_type",
+		"resource_type",
+		"resource_name",
+		"expires_on",
+		"cleanup_on",
+		"size_bytes",
+		"size_human",
+		"source_path",
+		"target_path",
+		"details",
+	]
+
+	def __init__(self, csv_path):
+		self.csv_path = csv_path
+
+	def _ensure_parent_and_header(self):
+		parent_dir = os.path.dirname(self.csv_path)
+		if parent_dir:
+			os.makedirs(parent_dir, exist_ok=True)
+
+		file_exists = os.path.isfile(self.csv_path)
+		needs_header = (not file_exists) or os.path.getsize(self.csv_path) == 0
+		if not needs_header:
+			return
+
+		with open(self.csv_path, "a", newline="", encoding="utf-8") as csv_file:
+			writer = csv.DictWriter(csv_file, fieldnames=self.FIELDNAMES)
+			writer.writeheader()
+
+	def log_event(
+		self,
+		event_type,
+		resource_type,
+		resource_name,
+		expires_on=None,
+		cleanup_on=None,
+		size_bytes=None,
+		source_path="",
+		target_path="",
+		details="",
+		timestamp=None,
+	):
+		self._ensure_parent_and_header()
+		timestamp = timestamp or datetime.datetime.now()
+		row = {
+			"timestamp": timestamp.isoformat(timespec="seconds"),
+			"event_type": event_type,
+			"resource_type": resource_type,
+			"resource_name": resource_name,
+			"expires_on": format_date(expires_on),
+			"cleanup_on": format_date(cleanup_on),
+			"size_bytes": "" if size_bytes is None else str(size_bytes),
+			"size_human": format_size_human(size_bytes),
+			"source_path": source_path,
+			"target_path": target_path,
+			"details": details,
+		}
+
+		with open(self.csv_path, "a", newline="", encoding="utf-8") as csv_file:
+			writer = csv.DictWriter(csv_file, fieldnames=self.FIELDNAMES)
+			writer.writerow(row)
+
+
+class SCPDownloadManager:
+	def __init__(self, host, user, remote_path, download_path, port=22, identity_file=None):
+		self.host = host
+		self.user = user
+		self.remote_path = remote_path
+		self.download_path = download_path
+		self.port = port
+		self.identity_file = identity_file
+
+	@staticmethod
+	def _normalize_remote_dir(remote_path):
+		if not remote_path:
+			raise ValueError("--remote-path no puede estar vacío")
+
+		normalized = remote_path.rstrip("/")
+		return normalized or "/"
+
+	def _build_scp_command(self):
+		cmd = ["scp", "-P", str(self.port)]
+		if self.identity_file:
+			cmd.extend(["-i", self.identity_file])
+		return cmd
+
+	def _build_ssh_command(self, remote_command):
+		cmd = ["ssh", "-p", str(self.port)]
+		if self.identity_file:
+			cmd.extend(["-i", self.identity_file])
+		cmd.extend([f"{self.user}@{self.host}", remote_command])
+		return cmd
+
+	def _format_remote_spec(self, remote_path):
+		return f"{self.user}@{self.host}:{shlex.quote(remote_path)}"
+
+	def _list_remote_zip_candidates(self):
+		remote_dir = self._normalize_remote_dir(self.remote_path)
+		quoted_remote_dir = shlex.quote(remote_dir)
+		remote_command = (
+			f"REMOTE_DIR={quoted_remote_dir}; "
+			"if [ ! -d \"$REMOTE_DIR\" ]; then "
+			"printf '%s\n' \"La carpeta remota no existe: $REMOTE_DIR\" >&2; exit 1; "
+			"fi; for file in \"$REMOTE_DIR\"/*.zip; do "
+			"if [ -f \"$file\" ]; then basename \"$file\"; fi; "
+			"done"
+		)
+
+		result = subprocess.run(
+			self._build_ssh_command(remote_command),
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+	def resolve_remote_zip_path(self):
+		if self.remote_path.lower().endswith(".zip"):
+			return self.remote_path
+
+		candidate_filenames = self._list_remote_zip_candidates()
+		selected_filename = DatabaseNameBuilder.select_latest_backup_filename(
+			candidate_filenames
+		)
+		remote_dir = self._normalize_remote_dir(self.remote_path)
+		selected_remote_path = posixpath.join(remote_dir, selected_filename)
+
+		print(
+			"\nCarpeta remota detectada. "
+			f"ZIP más reciente seleccionado: {selected_remote_path}"
+		)
+
+		return selected_remote_path
+
+	def build_local_zip_path(self, local_zip_filename, source_zip_filename):
+		if not local_zip_filename.lower().endswith(".zip"):
+			raise ValueError("El nombre local del ZIP debe terminar en .zip")
+
+		if os.path.exists(self.download_path) and not os.path.isdir(self.download_path):
+			raise NotADirectoryError(
+				f"La ruta local de descarga no es una carpeta: {self.download_path}"
+			)
+
+		existing_dir = os.path.isdir(self.download_path)
+		if existing_dir:
+			source_backup_base = DatabaseNameBuilder.normalize_backup_base_name(
+				source_zip_filename
+			)
+			for existing_filename in os.listdir(self.download_path):
+				existing_zip_path = os.path.join(self.download_path, existing_filename)
+				if not os.path.isfile(existing_zip_path):
+					continue
+
+				try:
+					existing_backup_base = DatabaseNameBuilder.normalize_backup_base_name(
+						existing_filename
+					)
+				except ValueError:
+					continue
+
+				if existing_backup_base == source_backup_base:
+					raise FileExistsError(
+						"Ya existe un ZIP local correspondiente al mismo backup remoto. "
+						f"Abortando descarga: {existing_zip_path}"
+					)
+
+		os.makedirs(self.download_path, exist_ok=True)
+		local_zip_path = os.path.join(self.download_path, local_zip_filename)
+
+		if os.path.exists(local_zip_path):
+			raise FileExistsError(
+				"Ya existe un ZIP local con el mismo nombre. "
+				f"Abortando descarga: {local_zip_path}"
+			)
+
+		return local_zip_path
+
+	def download(self, remote_zip_path, local_zip_filename):
+		local_zip_path = self.build_local_zip_path(
+			local_zip_filename=local_zip_filename,
+			source_zip_filename=posixpath.basename(remote_zip_path),
+		)
+
+		cmd = self._build_scp_command()
+		cmd.extend([self._format_remote_spec(remote_zip_path), local_zip_path])
+
+		print(
+			"\nDescargando backup remoto: "
+			f"{self.user}@{self.host}:{remote_zip_path}"
+		)
+		print(f"Ruta local de descarga: {local_zip_path}\n")
+
+		subprocess.run(cmd, check=True)
+
+		if not os.path.isfile(local_zip_path):
+			raise FileNotFoundError(f"No se encontró el ZIP descargado: {local_zip_path}")
+
+		if os.path.getsize(local_zip_path) == 0:
+			raise RuntimeError(f"El ZIP descargado está vacío: {local_zip_path}")
+
+		return local_zip_path
+
+
+class DatabaseNameBuilder:
+	EXPIRY_PATTERN = re.compile(
+		r"^(?P<base>.+)__exp_"
+		r"(?P<end>\d{4}_\d{2}_\d{2})$"
+	)
+	EXPIRY_ZIP_PATTERN = re.compile(
+		r"^(?P<base>.+)__exp_"
+		r"(?P<end>\d{4}_\d{2}_\d{2})\.zip$",
+		re.IGNORECASE,
+	)
+	BACKUP_FILENAME_PATTERN = re.compile(
+		r"^(?P<base>.+)_"
+		r"(?P<date>\d{4}-\d{2}-\d{2})_"
+		r"(?P<time>\d{6})_"
+		r"(?P<filestore>fs|nofs)\.zip$"
+	)
+
+	@staticmethod
+	def _fmt_date(value):
+		return value.strftime("%Y_%m_%d")
+
+	@staticmethod
+	def _parse_end_date(value):
+		return datetime.datetime.strptime(value, "%Y_%m_%d").date()
+
+	@classmethod
+	def _raw_base_from_zip_filename(cls, zip_filename):
+		zip_filename = os.path.basename(zip_filename)
+		if not zip_filename.lower().endswith(".zip"):
+			raise ValueError("El archivo descargado debe ser .zip")
+
+		raw_base = zip_filename[: -len(".zip")]
+		if not raw_base:
+			raise ValueError("El nombre base quedó vacío luego de quitar .zip")
+
+		return raw_base
+
+	@classmethod
+	def _strip_existing_expiry_suffix(cls, raw_base):
+		match = cls.EXPIRY_PATTERN.match(raw_base)
+		if match:
+			return match.group("base")
+		return raw_base
+
+	@classmethod
+	def normalize_backup_base_name(cls, zip_filename):
+		raw_base = cls._raw_base_from_zip_filename(zip_filename)
+		return cls._strip_existing_expiry_suffix(raw_base)
+
+	@classmethod
+	def parse_backup_filename(cls, zip_filename):
+		match = cls.BACKUP_FILENAME_PATTERN.match(os.path.basename(zip_filename))
+		if not match:
+			return None
+
+		timestamp = datetime.datetime.strptime(
+			f"{match.group('date')}_{match.group('time')}",
+			"%Y-%m-%d_%H%M%S",
+		)
+
+		return {
+			"raw_base": cls._raw_base_from_zip_filename(zip_filename),
+			"timestamp": timestamp,
+		}
+
+	@classmethod
+	def select_latest_backup_filename(cls, candidate_filenames):
+		candidates = []
+		for filename in candidate_filenames:
+			parsed = cls.parse_backup_filename(filename)
+			if not parsed:
+				continue
+
+			candidates.append((parsed["timestamp"], filename))
+
+		if not candidates:
+			raise RuntimeError(
+				"No se encontraron ZIPs compatibles con el formato de odoo_backup "
+				"en la carpeta remota."
+			)
+
+		candidates.sort(key=lambda item: item[0], reverse=True)
+		return candidates[0][1]
+
+	@classmethod
+	def parse_zip_expiry(cls, zip_filename):
+		match = cls.EXPIRY_ZIP_PATTERN.match(os.path.basename(zip_filename))
+		if not match:
+			return None
+
+		return cls._parse_end_date(match.group("end"))
+
+	@classmethod
+	def parse_database_expiry(cls, db_name):
+		match = cls.EXPIRY_PATTERN.match(db_name)
+		if not match:
+			return None
+
+		return cls._parse_end_date(match.group("end"))
+
+	@classmethod
+	def build(cls, zip_path, retention_days=None, today=None):
+		today = today or datetime.date.today()
+
+		if retention_days is None:
+			raise ValueError(
+				"--retention-days es requerido para que el ZIP local y la DB "
+				"incluyan fecha de expiración"
+			)
+
+		if retention_days <= 0:
+			raise ValueError("retention_days debe ser mayor a cero")
+
+		raw_base = cls.normalize_backup_base_name(zip_path)
+		end_date = today + datetime.timedelta(days=retention_days)
+		resource_base_name = f"{raw_base}__exp_{cls._fmt_date(end_date)}"
+		local_zip_filename = f"{resource_base_name}.zip"
+		return resource_base_name, local_zip_filename, end_date
+
+
+class OdooRestoreScriptRunner:
+	def __init__(self, restore_script_path, workdir=None, psql_bin=None, verbose=False):
+		self.restore_script_path = restore_script_path
+		self.workdir = workdir
+		self.psql_bin = psql_bin
+		self.verbose = verbose
+
+	def run_restore(self, zip_path, db_name):
+		if not os.path.isfile(self.restore_script_path):
+			raise FileNotFoundError(
+				f"No se encontró el script de restore: {self.restore_script_path}"
+			)
+
+		cmd = [
+			sys.executable,
+			self.restore_script_path,
+			"restore",
+			"-z",
+			zip_path,
+			"-d",
+			db_name,
+		]
+
+		if self.workdir:
+			cmd.extend(["--workdir", self.workdir])
+		if self.psql_bin:
+			cmd.extend(["--psql-bin", self.psql_bin])
+		if self.verbose:
+			cmd.append("--verbose")
+
+		print("\nEjecutando restore con script existente odoo_restore...\n")
+		subprocess.run(cmd, check=True)
+
+
+class ExpiredDatabaseCleaner:
+	def __init__(self, env_config, logger=None):
+		self.env = env_config
+		self.logger = logger
+
+	def _run_psql(self, sql):
+		cmd = [
+			"docker",
+			"exec",
+			self.env.container_name,
+			"psql",
+			"-U",
+			self.env.db_user,
+			"-h",
+			self.env.db_host,
+			"-p",
+			str(self.env.db_port),
+			"-d",
+			"postgres",
+			"-tAc",
+			sql,
+		]
+
+		result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+		return result.stdout
+
+	def _list_user_databases(self):
+		output = self._run_psql(
+			"SELECT datname FROM pg_database WHERE datistemplate = false;"
+		)
+		return [line.strip() for line in output.splitlines() if line.strip()]
+
+	def get_recognized_databases(self, today=None):
+		today = today or datetime.date.today()
+		candidates = self._list_user_databases()
+
+		recognized = []
+		for db_name in candidates:
+			expires_on = DatabaseNameBuilder.parse_database_expiry(db_name)
+			if not expires_on:
+				continue
+
+			cleanup_on = compute_cleanup_on(expires_on, delay_days=0)
+			days_until_cleanup = (cleanup_on - today).days
+			recognized.append(
+				{
+					"resource_name": db_name,
+					"expires_on": expires_on,
+					"cleanup_on": cleanup_on,
+					"days_until_cleanup": days_until_cleanup,
+					"status": classify_cleanup_status(expires_on, cleanup_on, today),
+				}
+			)
+
+		return recognized
+
+	def print_recognized_databases(self, today=None):
+		today = today or datetime.date.today()
+		recognized = self.get_recognized_databases(today=today)
+		if not recognized:
+			print("\nNo se encontraron bases reconocidas con patrón de expiración.\n")
+			return recognized
+
+		print("\nBases reconocidas por patrón de expiración:")
+		for item in recognized:
+			print(
+				" - "
+				f"{item['resource_name']} | expira: {format_date(item['expires_on'])} | "
+				f"cleanup: {format_date(item['cleanup_on'])} | "
+				f"estado: {item['status']} | "
+				f"{describe_days_until_cleanup(item['days_until_cleanup'])}"
+			)
+
+		return recognized
+
+	def get_expired_databases(self, today=None):
+		recognized = self.get_recognized_databases(today=today)
+		return [item for item in recognized if item["days_until_cleanup"] <= 0]
+
+	def _log_deleted_database(self, db_name, expires_on, cleanup_on):
+		if not self.logger:
+			return
+
+		self.logger.log_event(
+			event_type="deleted",
+			resource_type="database",
+			resource_name=db_name,
+			expires_on=expires_on,
+			cleanup_on=cleanup_on,
+			target_path=db_name,
+			details="cleanup por expiración",
+		)
+
+	def drop_database(self, db_name):
+		if not DatabaseNameBuilder.EXPIRY_PATTERN.match(db_name):
+			raise ValueError(f"Nombre de base fuera de patrón permitido: {db_name}")
+
+		terminate_sql = (
+			"SELECT pg_terminate_backend(pid) "
+			"FROM pg_stat_activity "
+			f"WHERE datname = '{db_name}' "
+			"AND pid <> pg_backend_pid();"
+		)
+		self._run_psql(terminate_sql)
+
+		self._run_psql(f'DROP DATABASE IF EXISTS "{db_name}";')
+
+	def drop_expired_databases(self, today=None):
+		today = today or datetime.date.today()
+		self.print_recognized_databases(today=today)
+		expired_databases = self.get_expired_databases(today=today)
+		if not expired_databases:
+			print("\nNo se encontraron bases vencidas para eliminar.\n")
+			return []
+
+		print("\nBases vencidas detectadas:")
+		for item in expired_databases:
+			print(f" - {item['resource_name']}")
+
+		for item in expired_databases:
+			db_name = item["resource_name"]
+			print(f"Eliminando base vencida: {db_name}")
+			self.drop_database(db_name)
+			self._log_deleted_database(
+				db_name=db_name,
+				expires_on=item["expires_on"],
+				cleanup_on=item["cleanup_on"],
+			)
+
+		print()
+
+		return expired_databases
+
+
+class ExpiredZipCleaner:
+	def __init__(self, download_path, delay_cleanup_days=0, logger=None):
+		self.download_path = download_path
+		self.delay_cleanup_days = delay_cleanup_days
+		self.logger = logger
+
+	def get_recognized_zips(self, today=None):
+		today = today or datetime.date.today()
+
+		if not self.download_path:
+			return []
+
+		if not os.path.isdir(self.download_path):
+			print(
+				"\nNo se encontró la carpeta local de ZIPs para cleanup: "
+				f"{self.download_path}"
+			)
+			return []
+
+		recognized = []
+		for filename in os.listdir(self.download_path):
+			zip_path = os.path.join(self.download_path, filename)
+			if not os.path.isfile(zip_path):
+				continue
+
+			end_date = DatabaseNameBuilder.parse_zip_expiry(filename)
+			if not end_date:
+				continue
+
+			cleanup_date = compute_cleanup_on(
+				end_date,
+				delay_days=self.delay_cleanup_days,
+			)
+			days_until_cleanup = (cleanup_date - today).days
+			recognized.append(
+				{
+					"resource_name": filename,
+					"zip_path": zip_path,
+					"expires_on": end_date,
+					"cleanup_on": cleanup_date,
+					"days_until_cleanup": days_until_cleanup,
+					"status": classify_cleanup_status(end_date, cleanup_date, today),
+					"size_bytes": os.path.getsize(zip_path),
+				}
+			)
+
+		return recognized
+
+	def print_recognized_zips(self, today=None):
+		today = today or datetime.date.today()
+		recognized = self.get_recognized_zips(today=today)
+		if not recognized:
+			print("\nNo se encontraron ZIPs reconocidos con patrón de expiración.\n")
+			return recognized
+
+		print("\nZIPs reconocidos por patrón de expiración:")
+		for item in recognized:
+			print(
+				" - "
+				f"{item['zip_path']} | tamaño: {format_size_human(item['size_bytes'])} | "
+				f"expira: {format_date(item['expires_on'])} | "
+				f"cleanup: {format_date(item['cleanup_on'])} | "
+				f"estado: {item['status']} | "
+				f"{describe_days_until_cleanup(item['days_until_cleanup'])}"
+			)
+
+		return recognized
+
+	def get_expired_zips(self, today=None):
+		recognized = self.get_recognized_zips(today=today)
+		return [item for item in recognized if item["days_until_cleanup"] <= 0]
+
+	def _log_deleted_zip(self, zip_item):
+		if not self.logger:
+			return
+
+		self.logger.log_event(
+			event_type="deleted",
+			resource_type="zip",
+			resource_name=zip_item["resource_name"],
+			expires_on=zip_item["expires_on"],
+			cleanup_on=zip_item["cleanup_on"],
+			size_bytes=zip_item["size_bytes"],
+			source_path=zip_item["zip_path"],
+			target_path=zip_item["zip_path"],
+			details=(
+				"cleanup por expiración"
+				if self.delay_cleanup_days == 0
+				else f"cleanup por expiración con delay {self.delay_cleanup_days}"
+			),
+		)
+
+	def delete_expired_zips(self, today=None):
+		today = today or datetime.date.today()
+		self.print_recognized_zips(today=today)
+		expired_zips = self.get_expired_zips(today=today)
+		if not expired_zips:
+			print("\nNo se encontraron ZIPs vencidos para eliminar.\n")
+			return []
+
+		print("\nZIPs vencidos detectados:")
+		for item in expired_zips:
+			print(f" - {item['zip_path']}")
+
+		for item in expired_zips:
+			zip_path = item["zip_path"]
+			print(f"Eliminando ZIP vencido: {zip_path}")
+			os.remove(zip_path)
+			self._log_deleted_zip(item)
+
+		print()
+
+		return expired_zips
+
+
+class RestoreSCPOrchestrator:
+	def __init__(
+		self,
+		scp_manager,
+		db_name_builder,
+		restore_runner,
+		expired_db_cleaner,
+		expired_zip_cleaner,
+		logger=None,
+		retention_days=None,
+		cleanup_dbs=False,
+		cleanup_zips=False,
+	):
+		self.scp_manager = scp_manager
+		self.db_name_builder = db_name_builder
+		self.restore_runner = restore_runner
+		self.expired_db_cleaner = expired_db_cleaner
+		self.expired_zip_cleaner = expired_zip_cleaner
+		self.logger = logger
+		self.retention_days = retention_days
+		self.cleanup_dbs = cleanup_dbs
+		self.cleanup_zips = cleanup_zips
+
+	def _log_downloaded_zip(self, local_zip_path, remote_zip_path, end_date):
+		if not self.logger:
+			return
+
+		origin_detail = (
+			"descargado desde ZIP remoto exacto"
+			if self.scp_manager.remote_path.lower().endswith(".zip")
+			else "descargado desde carpeta remota"
+		)
+
+		self.logger.log_event(
+			event_type="downloaded",
+			resource_type="zip",
+			resource_name=os.path.basename(local_zip_path),
+			expires_on=end_date,
+			cleanup_on=compute_cleanup_on(
+				end_date,
+				delay_days=self.expired_zip_cleaner.delay_cleanup_days,
+			),
+			size_bytes=os.path.getsize(local_zip_path),
+			source_path=remote_zip_path,
+			target_path=local_zip_path,
+			details=origin_detail,
+		)
+
+	def _log_restored_database(self, db_name, local_zip_path, end_date):
+		if not self.logger:
+			return
+
+		self.logger.log_event(
+			event_type="restored",
+			resource_type="database",
+			resource_name=db_name,
+			expires_on=end_date,
+			cleanup_on=compute_cleanup_on(end_date, delay_days=0),
+			source_path=local_zip_path,
+			target_path=db_name,
+			details=f"restore desde ZIP {os.path.basename(local_zip_path)}",
+		)
+
+	def cleanup_expired_resources(self):
+		if self.cleanup_dbs:
+			self.expired_db_cleaner.drop_expired_databases()
+
+		if self.cleanup_zips and self.expired_zip_cleaner:
+			self.expired_zip_cleaner.delete_expired_zips()
+
+	def run(self):
+		remote_zip_path = self.scp_manager.resolve_remote_zip_path()
+		source_zip_filename = posixpath.basename(remote_zip_path)
+
+		db_name, local_zip_filename, end_date = self.db_name_builder.build(
+			source_zip_filename,
+			retention_days=self.retention_days,
+		)
+		local_zip_path = self.scp_manager.download(
+			remote_zip_path=remote_zip_path,
+			local_zip_filename=local_zip_filename,
+		)
+
+		print(f"\nBase de datos objetivo: {db_name}")
+		print(f"ZIP local persistido como: {local_zip_path}")
+		if end_date:
+			print(f"Disponibilidad de la base hasta: {end_date.strftime('%Y_%m_%d')}\n")
+		else:
+			print("Disponibilidad de la base: sin vencimiento\n")
+
+		self._log_downloaded_zip(local_zip_path, remote_zip_path, end_date)
+
+		self.restore_runner.run_restore(local_zip_path, db_name)
+		self._log_restored_database(db_name, local_zip_path, end_date)
+		self.cleanup_expired_resources()
+
+
+def parse_args():
+	parser = argparse.ArgumentParser(
+		description="Descarga un backup ZIP por SCP, ejecuta restore y opcionalmente limpia recursos expirados en Odoo"
+	)
+
+	parser.add_argument("--host", help="Host remoto para SCP")
+	parser.add_argument("--user", help="Usuario remoto para SCP")
+	parser.add_argument(
+		"--remote-path",
+		help=(
+			"Ruta remota del ZIP a descargar o carpeta remota desde donde se "
+			"resolverá el backup más reciente según el formato de odoo_backup"
+		),
+	)
+	parser.add_argument(
+		"--download-path",
+		help="Ruta local donde se descargará el archivo ZIP",
+	)
+	parser.add_argument(
+		"--port",
+		type=int,
+		default=22,
+		help="Puerto SSH para SCP (default: 22)",
+	)
+	parser.add_argument(
+		"--identity-file",
+		help="Ruta local de la clave privada SSH para SCP",
+	)
+	parser.add_argument(
+		"--retention-days",
+		type=int,
+		help=(
+			"Días de vigencia para agregar sufijo __exp_YYYY_MM_DD al nombre "
+			"de la DB y del ZIP local descargado"
+		),
+	)
+	parser.add_argument(
+		"--cleanup-dbs",
+		action="store_true",
+		help="Después del restore, elimina bases expiradas según su nombre",
+	)
+	parser.add_argument(
+		"--cleanup-zips",
+		action="store_true",
+		help="Después del restore, elimina ZIPs expirados según su nombre",
+	)
+	parser.add_argument(
+		"--delay-cleanup-zips-days",
+		type=int,
+		default=0,
+		help=(
+			"Días adicionales de gracia antes de eliminar ZIPs ya vencidos. "
+			"Solo aplica a --cleanup-zips y --cleanup-zips-only"
+		),
+	)
+	parser.add_argument(
+		"--log-csv-path",
+		help="Ruta del archivo CSV donde se registrará la trazabilidad de DBs y ZIPs",
+	)
+	parser.add_argument(
+		"--cleanup-dbs-only",
+		action="store_true",
+		help="Ejecuta solo limpieza de bases vencidas y omite descarga/restore",
+	)
+	parser.add_argument(
+		"--cleanup-zips-only",
+		action="store_true",
+		help="Ejecuta solo limpieza de ZIPs vencidos y omite descarga/restore",
+	)
+	parser.add_argument(
+		"--workdir",
+		help="Carpeta base donde odoo_restore creará sus temporales locales",
+	)
+	parser.add_argument(
+		"--psql-bin",
+		help="Ruta/comando del binario psql dentro del contenedor para odoo_restore",
+	)
+	parser.add_argument(
+		"--verbose",
+		action="store_true",
+		help="Habilita salida detallada en odoo_restore",
+	)
+
+	args = parser.parse_args()
+
+	if args.retention_days is not None and args.retention_days <= 0:
+		parser.error("--retention-days debe ser mayor a 0")
+
+	if args.delay_cleanup_zips_days < 0:
+		parser.error("--delay-cleanup-zips-days debe ser mayor o igual a 0")
+
+	cleanup_only_mode = args.cleanup_dbs_only or args.cleanup_zips_only
+
+	if cleanup_only_mode and (args.cleanup_dbs or args.cleanup_zips):
+		parser.error(
+			"Los flags --cleanup-dbs-only/--cleanup-zips-only no se pueden combinar "
+			"con --cleanup-dbs ni --cleanup-zips"
+		)
+
+	if cleanup_only_mode:
+		if args.cleanup_zips_only and not args.download_path:
+			parser.error("--download-path es requerido con --cleanup-zips-only")
+		return args
+
+	if not cleanup_only_mode:
+		missing = []
+		if not args.host:
+			missing.append("--host")
+		if not args.user:
+			missing.append("--user")
+		if not args.remote_path:
+			missing.append("--remote-path")
+		if not args.download_path:
+			missing.append("--download-path")
+		if args.retention_days is None:
+			missing.append("--retention-days")
+
+		if missing:
+			parser.error(
+				"Faltan argumentos requeridos para restore: " + ", ".join(missing)
+			)
+
+	return args
+
+
+def load_dotenv_if_available():
+	try:
+		dotenv_module = importlib.import_module("dotenv")
+	except ModuleNotFoundError:
+		return
+
+	dotenv_module.load_dotenv()
+
+
+def main():
+	load_dotenv_if_available()
+
+	args = parse_args()
+	logger = LifecycleCsvLogger(args.log_csv_path) if args.log_csv_path else None
+
+	expired_zip_cleaner = ExpiredZipCleaner(
+		download_path=args.download_path,
+		delay_cleanup_days=args.delay_cleanup_zips_days,
+		logger=logger,
+	)
+
+	if args.cleanup_zips_only and not args.cleanup_dbs_only:
+		print("\nModo cleanup selectivo: se omite descarga y restore.\n")
+		expired_zip_cleaner.delete_expired_zips()
+		return
+
+	env_config = EnvConfig.from_environment()
+	expired_db_cleaner = ExpiredDatabaseCleaner(env_config=env_config, logger=logger)
+
+	if args.cleanup_dbs_only or args.cleanup_zips_only:
+		print("\nModo cleanup selectivo: se omite descarga y restore.\n")
+  
+		today = datetime.date.today() + datetime.timedelta(days=3 + 7)
+		print(f"Today: {today}")
+
+		if args.cleanup_dbs_only:
+			expired_db_cleaner.drop_expired_databases(
+				today=today
+			)
+		if args.cleanup_zips_only:
+			expired_zip_cleaner.delete_expired_zips(
+				today=today
+			)
+		return
+
+	scripts_dir = os.path.dirname(os.path.abspath(__file__))
+	restore_script_path = os.path.join(scripts_dir, "odoo_restore")
+
+	scp_manager = SCPDownloadManager(
+		host=args.host,
+		user=args.user,
+		remote_path=args.remote_path,
+		download_path=args.download_path,
+		port=args.port,
+		identity_file=args.identity_file,
+	)
+
+	restore_runner = OdooRestoreScriptRunner(
+		restore_script_path=restore_script_path,
+		workdir=args.workdir,
+		psql_bin=args.psql_bin,
+		verbose=args.verbose,
+	)
+
+	orchestrator = RestoreSCPOrchestrator(
+		scp_manager=scp_manager,
+		db_name_builder=DatabaseNameBuilder,
+		restore_runner=restore_runner,
+		expired_db_cleaner=expired_db_cleaner,
+		expired_zip_cleaner=expired_zip_cleaner,
+		logger=logger,
+		retention_days=args.retention_days,
+		cleanup_dbs=args.cleanup_dbs,
+		cleanup_zips=args.cleanup_zips,
+	)
+
+	orchestrator.run()
+
+
+if __name__ == "__main__":
+	try:
+		main()
+	except subprocess.CalledProcessError as exc:
+		print(f"Error ejecutando comando externo: {exc}", file=sys.stderr)
+		raise SystemExit(exc.returncode)
+	except Exception as exc:
+		print(f"Error: {exc}", file=sys.stderr)
+		raise SystemExit(1)
