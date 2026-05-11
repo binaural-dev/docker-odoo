@@ -461,9 +461,15 @@ class OdooRestoreScriptRunner:
 
 
 class ExpiredDatabaseCleaner:
+	FILESTORE_BASE_PATH = "/home/odoo/data/filestore"
+
 	def __init__(self, env_config, logger=None):
 		self.env = env_config
 		self.logger = logger
+
+	def _run_container_command(self, command):
+		cmd = ["docker", "exec", self.env.container_name, *command]
+		subprocess.run(cmd, check=True)
 
 	def _run_psql(self, sql):
 		cmd = [
@@ -553,6 +559,23 @@ class ExpiredDatabaseCleaner:
 			details="cleanup por expiración",
 		)
 
+	def _log_deleted_filestore(self, db_name, expires_on, cleanup_on):
+		if not self.logger:
+			return
+
+		self.logger.log_event(
+			event_type="deleted",
+			resource_type="filestore",
+			resource_name=db_name,
+			expires_on=expires_on,
+			cleanup_on=cleanup_on,
+			target_path=self._get_filestore_path(db_name),
+			details="cleanup por expiración",
+		)
+
+	def _get_filestore_path(self, db_name):
+		return os.path.join(self.FILESTORE_BASE_PATH, db_name)
+
 	def drop_database(self, db_name):
 		if not DatabaseNameBuilder.EXPIRY_PATTERN.match(db_name):
 			raise ValueError(f"Nombre de base fuera de patrón permitido: {db_name}")
@@ -566,6 +589,13 @@ class ExpiredDatabaseCleaner:
 		self._run_psql(terminate_sql)
 
 		self._run_psql(f'DROP DATABASE IF EXISTS "{db_name}";')
+
+	def drop_filestore(self, db_name):
+		if not DatabaseNameBuilder.EXPIRY_PATTERN.match(db_name):
+			raise ValueError(f"Nombre de base fuera de patrón permitido: {db_name}")
+
+		filestore_path = self._get_filestore_path(db_name)
+		self._run_container_command(["rm", "-rf", filestore_path])
 
 	def drop_expired_databases(self, today=None):
 		today = today or datetime.date.today()
@@ -583,7 +613,14 @@ class ExpiredDatabaseCleaner:
 			db_name = item["resource_name"]
 			print(f"Eliminando base vencida: {db_name}")
 			self.drop_database(db_name)
+			print(f"Eliminando filestore vencido: {self._get_filestore_path(db_name)}")
+			self.drop_filestore(db_name)
 			self._log_deleted_database(
+				db_name=db_name,
+				expires_on=item["expires_on"],
+				cleanup_on=item["cleanup_on"],
+			)
+			self._log_deleted_filestore(
 				db_name=db_name,
 				expires_on=item["expires_on"],
 				cleanup_on=item["cleanup_on"],
