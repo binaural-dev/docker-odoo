@@ -411,10 +411,9 @@ class DatabaseNameBuilder:
 		today = today or datetime.date.today()
 
 		if retention_days is None:
-			raise ValueError(
-				"--retention-days es requerido para que el ZIP local y la DB "
-				"incluyan fecha de expiración"
-			)
+			raw_base = cls.normalize_backup_base_name(zip_path)
+			local_zip_filename = f"{raw_base}.zip"
+			return raw_base, local_zip_filename, None
 
 		if retention_days <= 0:
 			raise ValueError("retention_days debe ser mayor a cero")
@@ -784,9 +783,13 @@ class RestoreSCPOrchestrator:
 			resource_type="zip",
 			resource_name=os.path.basename(local_zip_path),
 			expires_on=end_date,
-			cleanup_on=compute_cleanup_on(
-				end_date,
-				delay_days=self.expired_zip_cleaner.delay_cleanup_days,
+			cleanup_on=(
+				compute_cleanup_on(
+					end_date,
+					delay_days=self.expired_zip_cleaner.delay_cleanup_days,
+				)
+				if end_date
+				else None
 			),
 			size_bytes=os.path.getsize(local_zip_path),
 			source_path=remote_zip_path,
@@ -803,7 +806,7 @@ class RestoreSCPOrchestrator:
 			resource_type="database",
 			resource_name=db_name,
 			expires_on=end_date,
-			cleanup_on=compute_cleanup_on(end_date, delay_days=0),
+			cleanup_on=compute_cleanup_on(end_date, delay_days=0) if end_date else None,
 			source_path=local_zip_path,
 			target_path=db_name,
 			details=f"restore desde ZIP {os.path.basename(local_zip_path)}",
@@ -876,7 +879,8 @@ def parse_args():
 		type=int,
 		help=(
 			"Días de vigencia para agregar sufijo __exp_YYYY_MM_DD al nombre "
-			"de la DB y del ZIP local descargado"
+			"de la DB y del ZIP local descargado. Si se omite, se restauran sin "
+			"fecha de expiración"
 		),
 	)
 	parser.add_argument(
@@ -957,8 +961,6 @@ def parse_args():
 			missing.append("--remote-path")
 		if not args.download_path:
 			missing.append("--download-path")
-		if args.retention_days is None:
-			missing.append("--retention-days")
 
 		if missing:
 			parser.error(
@@ -999,18 +1001,11 @@ def main():
 
 	if args.cleanup_dbs_only or args.cleanup_zips_only:
 		print("\nModo cleanup selectivo: se omite descarga y restore.\n")
-  
-		today = datetime.date.today() + datetime.timedelta(days=3 + 7)
-		print(f"Today: {today}")
 
 		if args.cleanup_dbs_only:
-			expired_db_cleaner.drop_expired_databases(
-				today=today
-			)
+			expired_db_cleaner.drop_expired_databases()
 		if args.cleanup_zips_only:
-			expired_zip_cleaner.delete_expired_zips(
-				today=today
-			)
+			expired_zip_cleaner.delete_expired_zips()
 		return
 
 	scripts_dir = os.path.dirname(os.path.abspath(__file__))
