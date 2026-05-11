@@ -40,14 +40,16 @@ class DumpManager:
         self.target_pg_major = str(target_pg_major)
         self.pg_dump_bin = pg_dump_bin
 
-    def _get_pg_dump_major_in_container(self):
+    def _get_pg_dump_major_in_container(self, pg_dump_bin=None):
+        pg_dump_bin = pg_dump_bin or self.pg_dump_bin
+
         cmd = [
             "docker",
             "exec",
             "-u",
             self.linux_dump_user,
             self.container,
-            self.pg_dump_bin,
+            pg_dump_bin,
             "--version",
         ]
 
@@ -57,7 +59,7 @@ class DumpManager:
             stderr = (result.stderr or "").strip()
             raise RuntimeError(
                 "No se pudo ejecutar el binario de pg_dump configurado "
-                f"('{self.pg_dump_bin}') dentro del contenedor {self.container}. "
+                f"('{pg_dump_bin}') dentro del contenedor {self.container}. "
                 f"Detalle: {stderr or 'sin detalle'}"
             )
 
@@ -75,25 +77,73 @@ class DumpManager:
 
         return str(int(version_match.group(1)))
 
+    def _ensure_target_pg_dump_client(self):
+        target_bin = f"/usr/lib/postgresql/{self.target_pg_major}/bin/pg_dump"
+        package_name = f"postgresql-client-{self.target_pg_major}"
+
+        print(
+            "Intentando remediación automática de cliente PostgreSQL para backup:\n"
+            f"- Major requerida: {self.target_pg_major}\n"
+            f"- Paquete objetivo: {package_name}\n"
+            f"- Binario objetivo: {target_bin}"
+        )
+
+        verify_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "bash",
+            "-lc",
+            f"[ -x '{target_bin}' ] && '{target_bin}' --version",
+        ]
+
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+
+        if verify_result.returncode != 0:
+            print(
+                f"No se encontró {target_bin}. Instalando {package_name} dentro del contenedor {self.container}..."
+            )
+            install_cmd = [
+                "docker",
+                "exec",
+                "-u",
+                "root",
+                self.container,
+                "bash",
+                "-lc",
+                "apt-get update && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+                f"{package_name}",
+            ]
+
+            subprocess.run(install_cmd, check=True)
+
+        detected_major = self._get_pg_dump_major_in_container(pg_dump_bin=target_bin)
+        if detected_major != self.target_pg_major:
+            raise RuntimeError(
+                "Falló la remediación automática del cliente pg_dump.\n"
+                f"- Major esperada: {self.target_pg_major}\n"
+                f"- Major detectada en {target_bin}: {detected_major}\n"
+                "Prueba forzar manualmente --pg-dump-bin con un binario compatible."
+            )
+
+        self.pg_dump_bin = target_bin
+        print(
+            "✔ Remediación automática completada. "
+            f"Se usará pg_dump en: {self.pg_dump_bin}"
+        )
+
     def _validate_pg_dump_major_compatibility(self):
         pg_dump_major = self._get_pg_dump_major_in_container()
 
         if pg_dump_major != self.target_pg_major:
-            raise RuntimeError(
-                "ERROR: incompatibilidad de major entre pg_dump y destino.\n\n"
-                "Por política del proyecto, el backup debe generarse con la misma\n"
-                "major que el PostgreSQL destino para evitar fallas al restaurar.\n\n"
-                f"- pg_dump detectado: {pg_dump_major}\n"
-                f"- major destino esperada: {self.target_pg_major}\n\n"
-                "Acción recomendada:\n"
-                "1) Ajustá --pg-dump-bin o --target-pg-major.\n"
-                f"2) Ingresá al contenedor: docker exec -it {self.container} bash\n"
-                "3) Instalá el cliente correcto:\n"
-                "   apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
-                f"postgresql-client-{self.target_pg_major}\n"
-                "4) Reintentá con:\n"
-                f"   --pg-dump-bin /usr/lib/postgresql/{self.target_pg_major}/bin/pg_dump"
+            print(
+                "Incompatibilidad detectada entre pg_dump y major destino.\n"
+                f"- pg_dump detectado en {self.pg_dump_bin}: major {pg_dump_major}\n"
+                f"- major destino esperada: {self.target_pg_major}\n"
+                "Se intentará instalar/verificar automáticamente el cliente requerido."
             )
+            self._ensure_target_pg_dump_client()
 
     def _create_dump_user(self):
         print(
@@ -161,6 +211,7 @@ class DumpManager:
         print("Generando dump de la base de datos...")
 
         pg_dump_bin = shlex.quote(self.pg_dump_bin)
+        print(f"Usando pg_dump para generar dump: {self.pg_dump_bin}")
 
         inner_cmd = (
             f"if [ -f '{self.dump_path}' ]; then "
@@ -445,7 +496,7 @@ class CleanupManager:
             return
 
         if os.path.isfile(path):
-            print(f"Eliminando archivo temporal: {path}")
+            print(f"Eliminando archivo: {path}")
             subprocess.run(["rm", "-f", path], check=True)
             self.local_paths_to_cleanup = self._remove_tracked_path(
                 self.local_paths_to_cleanup, path
@@ -453,14 +504,14 @@ class CleanupManager:
             return
 
         if os.path.isdir(path):
-            print(f"Eliminando carpeta temporal: {path}")
+            print(f"Eliminando carpeta: {path}")
             subprocess.run(["rm", "-rf", path], check=True)
             self.local_paths_to_cleanup = self._remove_tracked_path(
                 self.local_paths_to_cleanup, path
             )
 
     def local_cleanup(self):
-        print("Limpiando archivos temporales locales")
+        print("Limpiando archivos locales")
 
         if not self.cleanup_enabled:
             return
@@ -469,7 +520,7 @@ class CleanupManager:
             return
 
         continue_cleanup = self._confirm(
-            f"\n\n¿Está seguro de que desea eliminar los archivos temporales locales?"
+            f"\n\n¿Está seguro de que desea eliminar los archivos locales?"
             + "\n Esta acción no se puede deshacer."
             + f"\n\nArchivos/Carpetas a eliminar: {self.local_paths_to_cleanup}\n\n"
         )
@@ -848,7 +899,11 @@ def main():
         "--pg-dump-bin",
         required=False,
         default="pg_dump",
-        help="Binario pg_dump dentro del contenedor (default: pg_dump)",
+        help=(
+            "Binario pg_dump dentro del contenedor (default: pg_dump). "
+            "Si la major no coincide con --target-pg-major, se intentará remediación automática "
+            "con /usr/lib/postgresql/{major}/bin/pg_dump."
+        ),
     )
 
     backup_parser.add_argument(

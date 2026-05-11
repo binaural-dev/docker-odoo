@@ -273,6 +273,66 @@ class DatabaseRestoreManager:
             *args,
         ]
 
+    def _ensure_psql_client_major(self, required_major):
+        required_major = int(required_major)
+        target_psql_bin = f"/usr/lib/postgresql/{required_major}/bin/psql"
+        package_name = f"postgresql-client-{required_major}"
+
+        print(
+            "Incompatibilidad detectada entre dump y psql actual. "
+            "Intentando remediación automática:\n"
+            f"- Major requerida: {required_major}\n"
+            f"- Paquete objetivo: {package_name}\n"
+            f"- Binario objetivo: {target_psql_bin}"
+        )
+
+        verify_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "bash",
+            "-lc",
+            f"[ -x '{target_psql_bin}' ] && '{target_psql_bin}' --version",
+        ]
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+
+        if verify_result.returncode != 0:
+            print(
+                f"No se encontró {target_psql_bin}. Instalando {package_name} dentro del contenedor {self.container}..."
+            )
+            install_cmd = [
+                "docker",
+                "exec",
+                "-u",
+                "root",
+                self.container,
+                "bash",
+                "-lc",
+                "apt-get update && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+                f"{package_name}",
+            ]
+            subprocess.run(install_cmd, check=True)
+
+        previous_psql_bin = self.psql_bin
+        self.psql_bin = target_psql_bin
+        psql_version = self._get_psql_binary_version()
+        psql_major = self._major_version(psql_version)
+
+        if psql_major != required_major:
+            self.psql_bin = previous_psql_bin
+            raise RuntimeError(
+                "Falló la remediación automática del cliente psql.\n"
+                f"- Major esperada: {required_major}\n"
+                f"- Version detectada en {target_psql_bin}: {psql_version} (major {psql_major})\n"
+                "Prueba forzar manualmente --psql-bin con un binario compatible."
+            )
+
+        print(
+            "✔ Remediación automática completada. "
+            f"Se usará psql en: {self.psql_bin}"
+        )
+
     def _read_dumped_by_version(self):
         # Lee el encabezado del dump para detectar la versión de pg_dump que lo generó.
         with open(self.local_dump_path, "r", encoding="utf-8", errors="replace") as dump_file:
@@ -393,20 +453,18 @@ class DatabaseRestoreManager:
             )
 
         if dump_major != psql_major:
-            raise RuntimeError(
-                "Incompatibilidad entre cliente de dump y cliente de restore.\n\n"
-                "Política conservadora: pg_dump y psql deben compartir la misma major.\n\n"
-                f"- pg_dump detectado: {dump_version} (major {dump_major})\n"
-                f"- psql configurado: {psql_version} (major {psql_major})\n\n"
-                "Pasos sugeridos para remediar:\n"
-                "1) Entrá al contenedor:\n"
-                f"   docker exec -it {self.container} bash\n"
-                "2) Dentro del contenedor, instalá el cliente compatible:\n"
-                "   apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
-                f"postgresql-client-{dump_major}\n"
-                "3) Reintentá el restore con el binario correcto:\n"
-                f"   --psql-bin /usr/lib/postgresql/{dump_major}/bin/psql"
-            )
+            self._ensure_psql_client_major(required_major=dump_major)
+            psql_version = self._get_psql_binary_version()
+            psql_major = self._major_version(psql_version)
+
+            if dump_major != psql_major:
+                raise RuntimeError(
+                    "Incompatibilidad entre cliente de dump y cliente de restore.\n\n"
+                    "Política conservadora: pg_dump y psql deben compartir la misma major.\n\n"
+                    f"- pg_dump detectado: {dump_version} (major {dump_major})\n"
+                    f"- psql activo luego de remediación: {psql_version} (major {psql_major})\n\n"
+                    "Probá forzar manualmente --psql-bin con un binario compatible."
+                )
             
         print(
             "\n✔ Validación de compatibilidad exitosa.\n"
@@ -415,6 +473,7 @@ class DatabaseRestoreManager:
             f"- Servidor destino: major {destination_server_major} (versión {destination_server_version})\n"
             f"- Dump: major {dump_major} (versión {dump_version})\n"
             f"- PSQL: major {psql_major} (versión {psql_version})\n"
+            f"- Binario psql en uso: {self.psql_bin}\n"
         )
 
     def _create_dump_user(self):
@@ -748,7 +807,9 @@ def parse_args():
         default="psql",
         help=(
             "Ruta/comando del binario psql dentro del contenedor. "
-            "Ejemplo: /usr/lib/postgresql/14/bin/psql"
+            "Ejemplo: /usr/lib/postgresql/14/bin/psql. "
+            "Si la major del dump no coincide, se intentará remediación automática "
+            "con /usr/lib/postgresql/{major}/bin/psql."
         ),
     )
     restore_parser.add_argument(

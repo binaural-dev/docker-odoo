@@ -286,7 +286,15 @@ def build_parser():
 	parser.add_argument("--log-file-path", required=True, help="Ruta del archivo de log del proceso periodico")
 	parser.add_argument("--log-retention-days", type=int, required=True, help="Cantidad de dias para conservar el contenido del log antes de reiniciarlo")
 	parser.add_argument("--cleanup-keep", type=int, required=True,  help="Cantidad de backups mas recientes a conservar durante la limpieza")
-	parser.add_argument("--pg-dump-bin", required=True, default=None, help="Ruta al binario pg_dump a usar (opcional)")
+	parser.add_argument(
+		"--pg-dump-bin",
+		required=False,
+		default=None,
+		help=(
+			"Ruta al binario pg_dump a usar como override manual (opcional). "
+			"Si no coincide con --target-pg-major, odoo_backup intentará remediación automática."
+		),
+	)
 	parser.add_argument("--no-fs", action="store_true", help="Si se indica, no incluye el filestore en el backup")
 	parser.add_argument("--no-log-cleanup", action="store_true", help="Si se indica, desactiva la limpieza periodica del archivo de log")
 	return parser
