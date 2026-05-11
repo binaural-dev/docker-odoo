@@ -232,8 +232,6 @@ class FilestoreRestoreManager:
         cmd_fix_permissions = [
             "docker",
             "exec",
-            "-u",
-            "root",
             self.container,
             "chown",
             "-R",
