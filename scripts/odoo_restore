@@ -1,35 +1,239 @@
 #!/usr/bin/env python3
 
-import zipfile
-import tempfile
-import shutil
-import os
-import subprocess
 import argparse
+import importlib
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
+import uuid
+import zipfile
+import re
+from pathlib import Path, PurePosixPath
+
+
+class RestoreWorkspace:
+    def __init__(self, workdir_base):
+        self.workdir_base = os.path.abspath(os.path.expanduser(workdir_base))
+        os.makedirs(self.workdir_base, exist_ok=True)
+        self.local_restore_dir = tempfile.mkdtemp(
+            prefix="odoo_restore_", dir=self.workdir_base
+        )
+        self.container_restore_dir = f"/tmp/odoo_restore_{uuid.uuid4().hex}"
+        self.container_db_dump_path = f"{self.container_restore_dir}/dump.sql"
+
+    @staticmethod
+    def default_base_dir():
+        project_root = Path(__file__).resolve().parent.parent
+        return str(project_root / ".tmp_ignored")
 
 
 class ZipExtractor:
     def __init__(self, zip_path, extract_to):
         self.zip_path = zip_path
         self.temp_dir = extract_to
+        self.base_dir = Path(extract_to).resolve()
 
-    def extract(self):
-        print(f"Descomprimiendo ZIP en ruta local: {self.temp_dir}")
+    def _normalize_member_name(self, member_name):
+        # Normaliza el nombre interno del ZIP y bloquea rutas que intenten
+        # escapar del directorio temporal de restore.
+        member_path = PurePosixPath(member_name)
+        if member_path.is_absolute() or ".." in member_path.parts:
+            raise ValueError(f"Ruta inválida dentro del ZIP: {member_name}")
 
-        with zipfile.ZipFile(self.zip_path, "r") as z:
-            z.extractall(self.temp_dir)
+        normalized_parts = [part for part in member_path.parts if part not in ("", ".")]
+        if not normalized_parts:
+            return None
 
-        dump_path = os.path.join(self.temp_dir, "dump.sql")
-        filestore_path = os.path.join(self.temp_dir, "filestore")
+        return PurePosixPath(*normalized_parts).as_posix()
+
+    def _resolve_destination(self, relative_name):
+        # Convierte la ruta relativa del ZIP en una ruta absoluta local y
+        # confirma que siga quedando dentro del workdir temporal.
+        destination = (self.base_dir / relative_name).resolve()
+        if destination != self.base_dir and self.base_dir not in destination.parents:
+            raise ValueError(f"Destino inválido al extraer: {relative_name}")
+        return destination
+
+    def _copy_member(self, zip_file, member_info, relative_name):
+        # Extrae un archivo o carpeta puntual del ZIP al destino ya validado,
+        # evitando descomprimir todo el backup de una sola vez.
+        destination = self._resolve_destination(relative_name)
+
+        if member_info.is_dir():
+            destination.mkdir(parents=True, exist_ok=True)
+            return str(destination)
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with zip_file.open(member_info, "r") as source, open(destination, "wb") as target:
+            shutil.copyfileobj(source, target)
+
+        return str(destination)
+
+    def _get_dump_member(self, zip_file):
+        # Busca el dump principal dentro del ZIP. Primero intenta encontrar
+        # dump.sql en la raíz lógica; si no, acepta la coincidencia más corta.
+        fallback_member = None
+        fallback_name = None
+
+        for member_info in zip_file.infolist():
+            if member_info.is_dir():
+                continue
+
+            normalized_name = self._normalize_member_name(member_info.filename)
+            if not normalized_name:
+                continue
+
+            if normalized_name == "dump.sql":
+                return member_info, normalized_name
+
+            if PurePosixPath(normalized_name).name == "dump.sql":
+                if fallback_name is None or len(normalized_name) < len(fallback_name):
+                    fallback_member = member_info
+                    fallback_name = normalized_name
+
+        if fallback_member:
+            return fallback_member, fallback_name
+
+        raise FileNotFoundError("dump.sql no encontrado dentro del ZIP")
+
+    def _get_filestore_members(self, zip_file):
+        # Reúne todos los miembros que pertenecen a filestore/ para poder
+        # extraer solo esa carpeta cuando el dump ya fue restaurado.
+        members = []
+        for member_info in zip_file.infolist():
+            normalized_name = self._normalize_member_name(member_info.filename)
+            if not normalized_name:
+                continue
+
+            if normalized_name == "filestore" or normalized_name.startswith("filestore/"):
+                members.append((member_info, normalized_name))
+
+        return members
+
+    def extract_dump(self):
+        # Extrae únicamente dump.sql al workdir temporal, restaurando primero
+        # la base antes de tocar el filestore y así usar menos espacio local.
+        print(f"Extrayendo dump.sql en ruta local: {self.temp_dir}")
+
+        with zipfile.ZipFile(self.zip_path, "r") as zip_file:
+            member_info, _ = self._get_dump_member(zip_file)
+            dump_path = self._copy_member(zip_file, member_info, "dump.sql")
 
         if not os.path.isfile(dump_path):
             raise FileNotFoundError("dump.sql no encontrado dentro del ZIP")
 
-        return dump_path, filestore_path, self.temp_dir
+        return dump_path
+
+    def extract_filestore(self):
+        # Extrae filestore/ solo después del dump, manteniendo el restore por
+        # fases para no descomprimir todo el ZIP al mismo tiempo.
+        with zipfile.ZipFile(self.zip_path, "r") as zip_file:
+            filestore_members = self._get_filestore_members(zip_file)
+            if not filestore_members:
+                return None
+
+            print(f"Extrayendo filestore en ruta local: {self.temp_dir}")
+            for member_info, normalized_name in filestore_members:
+                self._copy_member(zip_file, member_info, normalized_name)
+
+        filestore_path = os.path.join(self.temp_dir, "filestore")
+        if not os.path.isdir(filestore_path):
+            return None
+
+        return filestore_path
+
+
+class CleanupManager:
+    def __init__(
+        self,
+        container_name=None,
+        local_paths_to_cleanup=None,
+        container_paths_to_cleanup=None,
+        cleanup_enabled=True,
+        linux_dump_user=None,
+    ):
+        self.container = container_name
+        self.local_paths_to_cleanup = local_paths_to_cleanup or []
+        self.container_paths_to_cleanup = container_paths_to_cleanup or []
+        self.cleanup_enabled = cleanup_enabled
+        self.linux_dump_user = linux_dump_user
+
+    def _remove_tracked_path(self, tracked_paths, path):
+        if not tracked_paths or not path:
+            return tracked_paths
+
+        return [tracked_path for tracked_path in tracked_paths if tracked_path != path]
+
+    def cleanup_local_path(self, path):
+        if not self.cleanup_enabled or not path or not os.path.exists(path):
+            return
+
+        try:
+            if os.path.isdir(path):
+                print(f"Eliminando carpeta temporal local: {path}")
+                subprocess.run(["rm", "-rf", path], check=True)
+            else:
+                print(f"Eliminando archivo temporal local: {path}")
+                subprocess.run(["rm", "-f", path], check=True)
+        except subprocess.CalledProcessError as exc:
+            print(f"Advertencia: no se pudo limpiar el path local {path}: {exc}")
+            return
+
+        self.local_paths_to_cleanup = self._remove_tracked_path(
+            self.local_paths_to_cleanup, path
+        )
+
+    def cleanup_container_path(self, path):
+        if not self.cleanup_enabled or not path:
+            return
+
+        if not (self.container and self.linux_dump_user):
+            return
+
+        try:
+            print(f"Eliminando archivo/carpeta temporal en contenedor: {path}")
+            subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    "-u",
+                    "root",
+                    self.container,
+                    "rm",
+                    "-rf",
+                    path,
+                ],
+                check=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            print(f"Advertencia: no se pudo limpiar el path en contenedor {path}: {exc}")
+            return
+
+        self.container_paths_to_cleanup = self._remove_tracked_path(
+            self.container_paths_to_cleanup, path
+        )
+
+    def cleanup(self):
+        if not self.cleanup_enabled:
+            return
+
+        for path in list(self.local_paths_to_cleanup):
+            self.cleanup_local_path(path)
+
+        for path in list(self.container_paths_to_cleanup):
+            self.cleanup_container_path(path)
 
 
 class DatabaseRestoreManager:
+    PG_DUMP_VERSION_PATTERN = re.compile(r"^-- Dumped by pg_dump version (?P<version>[0-9]+(?:\.[0-9]+)*)")
+    SOURCE_SERVER_VERSION_PATTERN = re.compile(
+        r"^-- Dumped from database version (?P<version>[0-9]+(?:\.[0-9]+)*)"
+    )
+    SERVER_VERSION_PATTERN = re.compile(r"^(?P<version>[0-9]+(?:\.[0-9]+)*)")
+    PSQL_VERSION_PATTERN = re.compile(r"(?P<version>[0-9]+(?:\.[0-9]+)*)")
+
     def __init__(
         self,
         container,
@@ -40,6 +244,8 @@ class DatabaseRestoreManager:
         local_dump_path,
         container_db_dump_path,
         linux_dump_user,
+        psql_bin,
+        verbose=False,
     ):
         self.container = container
         self.db_name = db_name
@@ -49,13 +255,232 @@ class DatabaseRestoreManager:
         self.local_dump_path = local_dump_path
         self.container_db_dump_path = container_db_dump_path
         self.linux_dump_user = linux_dump_user
+        self.psql_bin = psql_bin
+        self.verbose = verbose
+
+    def _psql_command(self, *args):
+        return [
+            "docker",
+            "exec",
+            self.container,
+            self.psql_bin,
+            "-U",
+            self.db_user,
+            "-h",
+            self.db_host,
+            "-p",
+            str(self.db_port),
+            *args,
+        ]
+
+    def _ensure_psql_client_major(self, required_major):
+        required_major = int(required_major)
+        target_psql_bin = f"/usr/lib/postgresql/{required_major}/bin/psql"
+        package_name = f"postgresql-client-{required_major}"
+
+        print(
+            "Incompatibilidad detectada entre dump y psql actual. "
+            "Intentando remediación automática:\n"
+            f"- Major requerida: {required_major}\n"
+            f"- Paquete objetivo: {package_name}\n"
+            f"- Binario objetivo: {target_psql_bin}"
+        )
+
+        verify_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "bash",
+            "-lc",
+            f"[ -x '{target_psql_bin}' ] && '{target_psql_bin}' --version",
+        ]
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+
+        if verify_result.returncode != 0:
+            print(
+                f"No se encontró {target_psql_bin}. Instalando {package_name} dentro del contenedor {self.container}..."
+            )
+            install_cmd = [
+                "docker",
+                "exec",
+                "-u",
+                "root",
+                self.container,
+                "bash",
+                "-lc",
+                "apt-get update && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+                f"{package_name}",
+            ]
+            subprocess.run(install_cmd, check=True)
+
+        previous_psql_bin = self.psql_bin
+        self.psql_bin = target_psql_bin
+        psql_version = self._get_psql_binary_version()
+        psql_major = self._major_version(psql_version)
+
+        if psql_major != required_major:
+            self.psql_bin = previous_psql_bin
+            raise RuntimeError(
+                "Falló la remediación automática del cliente psql.\n"
+                f"- Major esperada: {required_major}\n"
+                f"- Version detectada en {target_psql_bin}: {psql_version} (major {psql_major})\n"
+                "Prueba forzar manualmente --psql-bin con un binario compatible."
+            )
+
+        print(
+            "✔ Remediación automática completada. "
+            f"Se usará psql en: {self.psql_bin}"
+        )
+
+    def _read_dumped_by_version(self):
+        # Lee el encabezado del dump para detectar la versión de pg_dump que lo generó.
+        with open(self.local_dump_path, "r", encoding="utf-8", errors="replace") as dump_file:
+            for _ in range(50):
+                line = dump_file.readline()
+                if not line:
+                    break
+
+                match = self.PG_DUMP_VERSION_PATTERN.match(line.strip())
+                if match:
+                    return match.group("version")
+
+        return None
+
+    def _read_dumped_from_server_version(self):
+        # Lee el encabezado del dump para detectar la versión del servidor origen.
+        with open(self.local_dump_path, "r", encoding="utf-8", errors="replace") as dump_file:
+            for _ in range(50):
+                line = dump_file.readline()
+                if not line:
+                    break
+
+                match = self.SOURCE_SERVER_VERSION_PATTERN.match(line.strip())
+                if match:
+                    return match.group("version")
+
+        return None
+
+    def _get_destination_server_version(self):
+        cmd = self._psql_command("-d", "postgres", "-tAc", "SHOW server_version;")
+
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        version_text = result.stdout.strip()
+        match = self.SERVER_VERSION_PATTERN.match(version_text)
+        if not match:
+            raise RuntimeError(
+                f"No se pudo interpretar la versión del servidor PostgreSQL destino: {version_text}"
+            )
+
+        return match.group("version")
+
+    def _get_psql_binary_version(self):
+        cmd = ["docker", "exec", self.container, self.psql_bin, "--version"]
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        version_text = (result.stdout or result.stderr).strip()
+        match = self.PSQL_VERSION_PATTERN.search(version_text)
+        if not match:
+            raise RuntimeError(
+                "No se pudo interpretar la versión del binario psql configurado "
+                f"con --psql-bin ({self.psql_bin}). Salida recibida: {version_text}"
+            )
+
+        return match.group("version")
+
+    @staticmethod
+    def _major_version(version):
+        return int(version.split(".", 1)[0])
+
+    def validate_dump_compatibility(self):
+        print(
+            "\n=== Validación de compatibilidad del dump ===\n"
+            "Revisando relación entre:\n"
+            "- servidor origen\n"
+            "- servidor destino\n"
+            "- pg_dump que generó el backup\n"
+            "- psql usado para restaurar\n"
+        )
+        
+        source_server_version = self._read_dumped_from_server_version()
+        if not source_server_version:
+            raise RuntimeError(
+                "No se pudo validar de forma segura la compatibilidad del dump.\n\n"
+                "Falta este header en dump.sql:\n"
+                "-- Dumped from database version X\n\n"
+                "Sin esa línea no se puede conocer la versión del servidor origen."
+            )
+
+        dump_version = self._read_dumped_by_version()
+        if not dump_version:
+            raise RuntimeError(
+                "No se pudo validar de forma segura la compatibilidad operativa del restore.\n\n"
+                "Falta este header en dump.sql:\n"
+                "-- Dumped by pg_dump version Y\n\n"
+                "Sin esa línea no se puede verificar la major del cliente que generó el dump."
+            )
+
+        destination_server_version = self._get_destination_server_version()
+        psql_version = self._get_psql_binary_version()
+
+        source_server_major = self._major_version(source_server_version)
+        destination_server_major = self._major_version(destination_server_version)
+        dump_major = self._major_version(dump_version)
+        psql_major = self._major_version(psql_version)
+
+        if source_server_major > destination_server_major:
+            raise RuntimeError(
+                "El dump no es compatible con el PostgreSQL destino.\n\n"
+                "La major del servidor origen es más nueva que la del destino.\n"
+                f"- Origen: PostgreSQL {source_server_version} (major {source_server_major})\n"
+                f"- Destino: PostgreSQL {destination_server_version} (major {destination_server_major})\n\n"
+                "Regla práctica:\n"
+                "- Misma major: ideal\n"
+                "- Origen más viejo -> destino más nuevo: puede ser aceptable\n"
+                "- Origen más nuevo -> destino más viejo: NO es ruta segura\n\n"
+                "Recomendación: restaurá primero en un PostgreSQL de la major origen\n"
+                "y luego reexportá una versión migrada."
+            )
+
+        if dump_major > destination_server_major:
+            raise RuntimeError(
+                "El dump no es compatible con el PostgreSQL destino.\n\n"
+                "Aunque el servidor origen no sea más nuevo, un pg_dump de major\n"
+                "superior puede emitir SQL o configuración que el destino no entiende.\n\n"
+                f"- pg_dump detectado: {dump_version} (major {dump_major})\n"
+                f"- destino PostgreSQL: {destination_server_version} (major {destination_server_major})\n\n"
+                "Para una importación segura, regenerá el dump con pg_dump de la\n"
+                "misma major que el destino, o con una major no superior al destino."
+            )
+
+        if dump_major != psql_major:
+            self._ensure_psql_client_major(required_major=dump_major)
+            psql_version = self._get_psql_binary_version()
+            psql_major = self._major_version(psql_version)
+
+            if dump_major != psql_major:
+                raise RuntimeError(
+                    "Incompatibilidad entre cliente de dump y cliente de restore.\n\n"
+                    "Política conservadora: pg_dump y psql deben compartir la misma major.\n\n"
+                    f"- pg_dump detectado: {dump_version} (major {dump_major})\n"
+                    f"- psql activo luego de remediación: {psql_version} (major {psql_major})\n\n"
+                    "Probá forzar manualmente --psql-bin con un binario compatible."
+                )
+            
+        print(
+            "\n✔ Validación de compatibilidad exitosa.\n"
+            "Resumen de versiones:\n"
+            f"- Servidor origen: major {source_server_major} (versión {source_server_version})\n"
+            f"- Servidor destino: major {destination_server_major} (versión {destination_server_version})\n"
+            f"- Dump: major {dump_major} (versión {dump_version})\n"
+            f"- PSQL: major {psql_major} (versión {psql_version})\n"
+            f"- Binario psql en uso: {self.psql_bin}\n"
+        )
 
     def _create_dump_user(self):
         print(
             f"Creando usuario Linux para realizar dump dentro del contenedor {self.container} de forma segura."
         )
 
-        # 1. Verificar si el usuario ya existe
         check_cmd = [
             "docker",
             "exec",
@@ -87,31 +512,18 @@ class DatabaseRestoreManager:
         ]
 
         subprocess.run(cmd, check=True)
-
         print(f"Usuario '{self.linux_dump_user}' creado correctamente.")
 
     def create_database(self):
-
         self._create_dump_user()
 
         print(
             f"Creando nueva base de datos '{self.db_name}' dentro del contenedor {self.container}"
         )
 
-        check_cmd = [
-            "docker",
-            "exec",
-            self.container,
-            "psql",
-            "-U",
-            self.db_user,
-            "-h",
-            self.db_host,
-            "-p",
-            str(self.db_port),
-            "-tAc",
-            f"SELECT 1 FROM pg_database WHERE datname='{self.db_name}'",
-        ]
+        check_cmd = self._psql_command(
+            "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{self.db_name}'"
+        )
 
         result = subprocess.run(check_cmd, capture_output=True, text=True)
 
@@ -139,30 +551,32 @@ class DatabaseRestoreManager:
     def _copy_dump_to_container(self):
         print(f"Copiando dump.sql al contenedor {self.container}")
 
-        cmd_mkdir = [
-            "docker",
-            "exec",
-            "-u",
-            self.linux_dump_user,
-            self.container,
-            "mkdir",
-            "-p",
-            os.path.dirname(self.container_db_dump_path),
-        ]
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-u",
+                self.linux_dump_user,
+                self.container,
+                "mkdir",
+                "-p",
+                os.path.dirname(self.container_db_dump_path),
+            ],
+            check=True,
+        )
 
-        subprocess.run(cmd_mkdir, check=True)
-
-        cmd = [
-            "docker",
-            "cp",
-            self.local_dump_path,
-            f"{self.container}:{self.container_db_dump_path}",
-        ]
-
-        subprocess.run(cmd, check=True)
+        subprocess.run(
+            [
+                "docker",
+                "cp",
+                self.local_dump_path,
+                f"{self.container}:{self.container_db_dump_path}",
+            ],
+            check=True,
+        )
 
     def restore_dump(self):
-        print(f"Restaurando dump.sql en la base '{self.db_name}'")
+        print(f"Iniciando restore de dump.sql en la base '{self.db_name}'")
 
         self._copy_dump_to_container()
 
@@ -171,7 +585,7 @@ class DatabaseRestoreManager:
             "exec",
             "-i",
             self.container,
-            "psql",
+            self.psql_bin,
             "-U",
             self.db_user,
             "-h",
@@ -180,19 +594,33 @@ class DatabaseRestoreManager:
             str(self.db_port),
             "-d",
             self.db_name,
+            "-v",
+            "ON_ERROR_STOP=1",
             "-f",
             self.container_db_dump_path,
         ]
 
-        subprocess.run(cmd, check=True)
+        if not self.verbose:
+            cmd.insert(-2, "-q")
 
-        print("Command:", " ".join(cmd))
+        try:
+            if self.verbose:
+                print("Command:", " ".join(cmd))
+                subprocess.run(cmd, check=True)
+            else:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            if exc.stderr:
+                print(exc.stderr.strip(), file=sys.stderr)
+            elif exc.stdout:
+                print(exc.stdout.strip(), file=sys.stderr)
+            raise
 
+        print(f"Restore de dump.sql finalizado para la base '{self.db_name}'")
         return True
 
 
 class FilestoreRestoreManager:
-
     def __init__(
         self, container, local_filestore_path, container_filestore_path, linux_dump_user
     ):
@@ -202,7 +630,7 @@ class FilestoreRestoreManager:
         self.linux_dump_user = linux_dump_user
 
     def restore_filestore(self):
-        if not os.path.isdir(self.local_filestore_path):
+        if not self.local_filestore_path or not os.path.isdir(self.local_filestore_path):
             print("No se encontró filestore en el ZIP. Se omitirá.")
             return
 
@@ -220,26 +648,30 @@ class FilestoreRestoreManager:
             check=True,
         )
 
-        cmd = [
-            "docker",
-            "cp",
-            f"{self.local_filestore_path}/.",
-            f"{self.container}:{self.container_filestore_path}",
-        ]
+        subprocess.run(
+            [
+                "docker",
+                "cp",
+                f"{self.local_filestore_path}/.",
+                f"{self.container}:{self.container_filestore_path}",
+            ],
+            check=True,
+        )
 
-        subprocess.run(cmd, check=True)
-
-        cmd_fix_permissions = [
-            "docker",
-            "exec",
-            self.container,
-            "chown",
-            "-R",
-            "odoo:odoo",
-            self.container_filestore_path,
-        ]
-
-        subprocess.run(cmd_fix_permissions, check=True)
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-u",
+                "root",
+                self.container,
+                "chown",
+                "-R",
+                "odoo:odoo",
+                self.container_filestore_path,
+            ],
+            check=True,
+        )
 
 
 class RestoreOrchestrator:
@@ -253,6 +685,10 @@ class RestoreOrchestrator:
         db_port,
         container_filestore_base_path,
         linux_dump_user,
+        workdir_base,
+        psql_bin,
+        verbose=False,
+        cleanup_enabled=True,
     ):
         self.zip_path = zip_path
         self.container = container_name
@@ -261,18 +697,33 @@ class RestoreOrchestrator:
         self.db_host = db_host
         self.db_port = db_port
         self.container_filestore_base_path = container_filestore_base_path
-        self.container_db_dump_path = f"/tmp/odoo_restore_{self.new_db_name}/dump.sql"
-        self.extract_to = tempfile.mkdtemp(prefix="odoo_restore_")
         self.linux_dump_user = linux_dump_user
+        self.psql_bin = psql_bin
+        self.verbose = verbose
+        self.workspace = RestoreWorkspace(workdir_base=workdir_base)
+        self.cleanup_manager = CleanupManager(
+            container_name=self.container,
+            container_paths_to_cleanup=[self.workspace.container_restore_dir],
+            local_paths_to_cleanup=[self.workspace.local_restore_dir],
+            cleanup_enabled=cleanup_enabled,
+            linux_dump_user=self.linux_dump_user,
+        )
 
     def run(self):
-        print("\n=== Iniciando proceso de RESTORE ===")
+        print("\n=== Iniciando proceso de restore ===\n")
+        print(
+            "Contexto de ejecución:\n"
+            f"- Workdir base: {self.workspace.workdir_base}\n"
+            f"- Carpeta temporal local: {self.workspace.local_restore_dir}\n"
+        )
 
-        # 1. Extraer ZIP
-        extractor = ZipExtractor(zip_path=self.zip_path, extract_to=self.extract_to)
-        local_dump_path, local_filestore_path, temp_dir = extractor.extract()
+        extractor = ZipExtractor(
+            zip_path=self.zip_path,
+            extract_to=self.workspace.local_restore_dir,
+        )
 
-        # 2. Restaurar base de datos
+        local_dump_path = extractor.extract_dump()
+
         db_manager = DatabaseRestoreManager(
             container=self.container,
             db_name=self.new_db_name,
@@ -280,14 +731,19 @@ class RestoreOrchestrator:
             db_host=self.db_host,
             db_port=self.db_port,
             local_dump_path=local_dump_path,
-            container_db_dump_path=self.container_db_dump_path,
+            container_db_dump_path=self.workspace.container_db_dump_path,
             linux_dump_user=self.linux_dump_user,
+            psql_bin=self.psql_bin,
+            verbose=self.verbose,
         )
 
+        db_manager.validate_dump_compatibility()
         db_manager.create_database()
         db_manager.restore_dump()
+        self.cleanup_manager.cleanup_local_path(local_dump_path)
+        self.cleanup_manager.cleanup_container_path(self.workspace.container_restore_dir)
 
-        # 3. Restaurar filestore
+        local_filestore_path = extractor.extract_filestore()
         filestore_container_path = (
             f"{self.container_filestore_base_path}/{self.new_db_name}"
         )
@@ -298,103 +754,135 @@ class RestoreOrchestrator:
             container_filestore_path=filestore_container_path,
             linux_dump_user=self.linux_dump_user,
         )
-
         filestore_manager.restore_filestore()
 
-        print(
-            f"\n✔ Restore completado correctamente para la base '{self.new_db_name}'\n"
-        )
+        if local_filestore_path:
+            self.cleanup_manager.cleanup_local_path(local_filestore_path)
+
+        print(f"\n✔ Restore completado correctamente para la base '{self.new_db_name}'.\n")
 
     def cleanup(self):
+        print("\n=== Cleanup de temporales ===")
         print("Limpiando archivos temporales...")
-
-        rm_local_extracted_folder_cmd = ["rm", "-rf", self.extract_to]
-
-        subprocess.run(rm_local_extracted_folder_cmd, check=True)
-
-        print(f"Removed local temporary files extracted: {self.extract_to}")
-
-        rm_container_db_dump_cmd = [
-            "docker",
-            "exec",
-            "-u",
-            self.linux_dump_user,
-            self.container,
-            "rm",
-            "-r",
-            os.path.dirname(self.container_db_dump_path),
-        ]
-
-        subprocess.run(rm_container_db_dump_cmd, check=True)
-
-        print(
-            f"Removed temporary files dump sql from container: {self.container_db_dump_path}"
-        )
-
-        print("Limpieza completada.")
+        self.cleanup_manager.cleanup()
+        print("Limpieza completada.\n")
 
 
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    raise SystemExit(
-        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
-    )
+def load_dotenv_if_available():
+    try:
+        dotenv_module = importlib.import_module("dotenv")
+    except ModuleNotFoundError:
+        return
+
+    dotenv_module.load_dotenv()
 
 
-if __name__ == "__main__":
-
-    load_dotenv()
-
+def parse_args():
     parser = argparse.ArgumentParser(description="Script de restore de Odoo")
-
     subparsers = parser.add_subparsers(dest="run", help="Acciones")
 
     restore_parser = subparsers.add_parser(
         "restore", help="Restaurar una base de datos y filestore desde un ZIP"
     )
-
     restore_parser.add_argument(
         "-z",
         required=True,
         help="Ruta local del archivo ZIP del backup",
     )
-
     restore_parser.add_argument(
         "-d",
         required=True,
         help="Nombre de la nueva base de datos restaurada",
     )
-
+    restore_parser.add_argument(
+        "--workdir",
+        default=RestoreWorkspace.default_base_dir(),
+        help=(
+            "Carpeta base donde se crearán los temporales del restore. "
+            "Default: .tmp_ignored en la raíz del proyecto"
+        ),
+    )
+    restore_parser.add_argument(
+        "--psql-bin",
+        default="psql",
+        help=(
+            "Ruta/comando del binario psql dentro del contenedor. "
+            "Ejemplo: /usr/lib/postgresql/14/bin/psql. "
+            "Si la major del dump no coincide, se intentará remediación automática "
+            "con /usr/lib/postgresql/{major}/bin/psql."
+        ),
+    )
     restore_parser.add_argument(
         "--no-cleanup",
         action="store_true",
         help="No eliminar archivos temporales después del restore",
         default=False,
     )
-
-    args = parser.parse_args()
-
-    # Validación del subcomando
-    if args.run != "restore":
-        parser.print_help()
-        sys.exit(1)
-
-    # Construcción del orquestador
-    restorer = RestoreOrchestrator(
-        zip_path=args.z,
-        container_name=os.getenv("PROJECT_NAME"),
-        new_db_name=args.d,
-        db_user=os.getenv("POSTGRES_USER"),
-        db_host=os.getenv("POSTGRES_HOST"),
-        db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
-        container_filestore_base_path="/home/odoo/data/filestore",
-        linux_dump_user="dump_user",
+    restore_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Mostrar la salida completa de psql durante el restore",
+        default=False,
     )
 
-    # Ejecución del restore
-    restorer.run()
+    return parser.parse_args(), parser
 
-    # Cleanup opcional
-    if not args.no_cleanup:
+
+def get_required_env(name):
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Falta la variable de entorno requerida: {name}")
+    return value
+
+
+def main():
+    load_dotenv_if_available()
+    args, parser = parse_args()
+
+    if args.run != "restore":
+        parser.print_help()
+        raise SystemExit(1)
+
+    psql_bin = args.psql_bin.strip()
+    if not psql_bin:
+        raise RuntimeError("El flag --psql-bin no puede estar vacío")
+
+    restorer = RestoreOrchestrator(
+        zip_path=args.z,
+        container_name=get_required_env("PROJECT_NAME"),
+        new_db_name=args.d,
+        db_user=get_required_env("POSTGRES_USER"),
+        db_host=get_required_env("POSTGRES_HOST"),
+        db_port=get_required_env("EXTERNAL_PORT_POSTGRES"),
+        container_filestore_base_path="/home/odoo/data/filestore",
+        linux_dump_user="dump_user",
+        workdir_base=args.workdir,
+        psql_bin=psql_bin,
+        verbose=args.verbose,
+        cleanup_enabled=not args.no_cleanup,
+    )
+
+    try:
+        restorer.run()
+    finally:
         restorer.cleanup()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as exc:
+        print(
+            "\nError ejecutando comando externo.\n"
+            f"Detalle: {exc}\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(exc.returncode)
+    except Exception as exc:
+        print(
+            "\nError durante el proceso de restore.\n"
+            f"Detalle: {exc}\n"
+            "Sugerencia: ejecutá con --verbose para mayor contexto.\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)

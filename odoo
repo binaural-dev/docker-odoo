@@ -187,10 +187,10 @@ def build_odoo(no_cache):
         print(e)
     if no_cache:
         print("Construyendo Odoo sin caché...")
-        os.system("docker compose -f docker-compose.app.yml build --no-cache")
+        os.system("DOCKER_BUILDKIT=0 docker compose -f docker-compose.app.yml build --no-cache")
     else:
         print("Construyendo Odoo con caché...")
-        os.system("docker compose -f docker-compose.app.yml build")
+        os.system("DOCKER_BUILDKIT=0 docker compose -f docker-compose.app.yml build")
 
 
 def init_addons():
@@ -369,8 +369,9 @@ def psql(d):
     PROJECT_NAME = os.getenv("PROJECT_NAME")
     POSTGRES_USER = os.getenv("POSTGRES_USER")
     POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+    POSTGRES_HOST = os.getenv("POSTGRES_HOST")
     os.system(
-        f"docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d {d}"
+        f"docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {POSTGRES_HOST} -U {POSTGRES_USER} -d {d}"
     )
 
 
