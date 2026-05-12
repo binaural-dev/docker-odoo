@@ -80,7 +80,8 @@ RUN ARCH=$(dpkg --print-architecture) && \
     RUN apt-get update \
         && apt-get install -y python3-venv \
         && python3 -m venv /opt/venv \
-        && /opt/venv/bin/pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==0.4.7 pandas
+        && /opt/venv/bin/pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==0.4.7 pandas \
+        && chown -R odoo:odoo /opt/venv
     ENV PATH="/opt/venv/bin:$PATH"
 
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/19.0/requirements.txt /tmp/requirements.txt
@@ -109,4 +110,4 @@ RUN /usr/bin/python3 -m pip install pandas --break-system-packages
 
 RUN apt update && apt install -y python3-pandas
 
-ENV PYTHONPATH=/usr/lib/python3/dist-packages:$PYTHONPATH
+ENV PYTHONPATH=/opt/venv/lib/python3.12/site-packages:/usr/lib/python3/dist-packages:$PYTHONPATH
