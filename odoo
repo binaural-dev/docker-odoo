@@ -69,7 +69,7 @@ def _get_db_services(config, instance=None):
 
 def build_odoo(config, no_cache):
     """Generate all config files and build Docker images."""
-    print("\n=== Generando archivos de configuración ===\n")
+    print("\n\033[1;94m=== 🛠️  GENERANDO CONFIGURACIONES Y CONSTRUYENDO IMÁGENES ===\033[0m\n")
 
     # 1. Generate Dockerfiles for each unique Odoo version
     unique_versions = get_unique_odoo_versions(config)
@@ -95,9 +95,9 @@ def build_odoo(config, no_cache):
 def start_odoo(config, instance=None):
     """Start database(s), Odoo instance(s), and nginx."""
     if instance:
-        print(f"\n=== Iniciando instancia: {instance} ===\n")
+        print(f"\n\033[1;32m=== ▶️  INICIANDO INSTANCIA: {instance.upper()} ===\033[0m\n")
     else:
-        print("\n=== Iniciando todas las instancias ===\n")
+        print("\n\033[1;32m=== ▶️  INICIANDO TODAS LAS INSTANCIAS ===\033[0m\n")
 
     db_services = _get_db_services(config, instance)
     odoo_services = _get_instance_services(config, instance)
@@ -134,7 +134,7 @@ def start_odoo(config, instance=None):
 def stop_odoo(config, instance=None):
     """Stop Odoo instance(s) and optionally their databases."""
     if instance:
-        print(f"\n=== Deteniendo instancia: {instance} ===\n")
+        print(f"\n\033[1;33m=== ⏹️  DETENIENDO INSTANCIA: {instance.upper()} ===\033[0m\n")
         odoo_services = _get_instance_services(config, instance)
         _docker_compose("stop", *odoo_services)
         # Check if the DB is still used by other running instances
@@ -151,7 +151,7 @@ def stop_odoo(config, instance=None):
             else:
                 print(f"\n→ Base de datos {db_name} no se detiene (usada por: {', '.join(other_users)})")
     else:
-        print("\n=== Deteniendo todas las instancias ===\n")
+        print("\n\033[1;33m=== ⏹️  DETENIENDO TODAS LAS INSTANCIAS ===\033[0m\n")
         _docker_compose("down")
 
     print("\n🛑 Detenido.\n")
@@ -159,6 +159,10 @@ def stop_odoo(config, instance=None):
 
 def restart_odoo(config, instance=None):
     """Restart Odoo instance(s)."""
+    if instance:
+        print(f"\n\033[1;36m=== 🔄 REINICIANDO INSTANCIA: {instance.upper()} ===\033[0m\n")
+    else:
+        print("\n\033[1;36m=== 🔄 REINICIANDO TODAS LAS INSTANCIAS ===\033[0m\n")
     stop_odoo(config, instance)
     start_odoo(config, instance)
 
@@ -166,15 +170,14 @@ def restart_odoo(config, instance=None):
 def remove_odoo(config, instance=None):
     """Remove containers and volumes."""
     if instance:
-        target = f"instancia '{instance}'"
+        target = f"instancia '\033[91m{instance}\033[0m'"
     else:
-        target = "TODAS las instancias y bases de datos"
+        target = "\033[91mTODAS\033[0m las instancias y bases de datos"
 
-    do_continue = input(
-        f"⚠️  Esto eliminará {target} y sus datos. ¿Deseas continuar? (s/n): "
-    )
+    print(f"\n⚠️  \033[1mPELIGRO\033[0m: Esto eliminará {target} y sus volúmenes de datos.")
+    do_continue = input("¿Estás seguro de que deseas continuar? (s/N): ")
     if do_continue.lower() != "s":
-        print("Operación cancelada.")
+        print("\nOperación cancelada.")
         return
 
     if instance:
@@ -190,12 +193,21 @@ def remove_odoo(config, instance=None):
 def run_bash(config, instance):
     """Open bash in an Odoo instance container."""
     container = f"odoo-{instance}"
-    print(f"docker exec -u root -it {container} bash")
+    # Check if container is running
+    is_running = os.popen(f"docker inspect -f '{{{{.State.Running}}}}' {container} 2>/dev/null").read().strip()
+    
+    if is_running != "true":
+        print(f"\n❌ El contenedor '{container}' no está en ejecución.")
+        print(f"Prueba iniciando la instancia con: ./odoo start {instance}")
+        return
+
+    print(f"\n\033[1;34m=== 🐚 ABRIENDO BASH EN: {instance.upper()} ===\033[0m\n")
     os.system(f"docker exec -u root -it {container} bash")
 
 
 def bash_update_modules(config, instance, dbname, modules="all"):
     """Update Odoo modules in an instance."""
+    print(f"\n\033[1;35m=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     container = f"odoo-{instance}"
     cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
     print(cmd)
@@ -205,26 +217,34 @@ def bash_update_modules(config, instance, dbname, modules="all"):
 def show_logs(config, instance=None):
     """Show logs for instance(s)."""
     if instance:
+        print(f"\n\033[1;36m=== 📋 MOSTRANDO LOGS DE: {instance.upper()} ===\033[0m\n")
         services = _get_instance_services(config, instance)
         db_services = _get_db_services(config, instance)
         all_services = db_services + services
         _docker_compose("logs", "--tail=10", "-f", *all_services)
     else:
+        print("\n\033[1;36m=== 📋 MOSTRANDO TODOS LOS LOGS ===\033[0m\n")
         _docker_compose("logs", "--tail=10", "-f")
 
 
 def list_containers(config):
     """List running containers."""
+    print("\n\033[1;32m=== 🐳 CONTENEDORES EN EJECUCIÓN ===\033[0m\n")
     _docker_compose("ps")
 
 
 def fix_filestore(config, instance=None):
     """Fix filestore ownership."""
+    if instance:
+        print(f"\n\033[1;33m=== 🔧 CORRIGIENDO PERMISOS: {instance.upper()} ===\033[0m\n")
+    else:
+        print("\n\033[1;33m=== 🔧 CORRIGIENDO PERMISOS EN TODAS LAS INSTANCIAS ===\033[0m\n")
+    
     services = _get_instance_services(config, instance)
     for svc in services:
         print(f"→ Corrigiendo permisos en {svc}...")
         os.system(
-            f"docker exec -u root {svc} chown -R odoo:odoo /home/odoo/data"
+            f"docker exec -u root {svc} chown -R odoo:odoo /home/odoo/data 2>/dev/null || true"
         )
     print("\n✅ Permisos corregidos.\n")
 
@@ -239,14 +259,48 @@ def psql_connect(config, instance, dbname):
     db_port = db_conf["port"]
     container = f"odoo-{instance}"
 
+    print(f"\n\033[1;34m=== 🐘 CONECTANDO PSQL A: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     os.system(
         f"docker exec -it -e PGPASSWORD={db_password} {container} "
         f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname}"
     )
 
 
+def prompt_for_user(config, instance, dbname):
+    users = get_users(config, instance, dbname)
+    if not users:
+        return input(f"\nNo se pudieron auto-detectar usuarios. Ingresa el login del usuario: ").strip()
+    
+    options = [(u, u) for u in users]
+    return prompt_selection(options, f"Selecciona usuario en '{dbname}'")
+
+
+def prompt_for_repos():
+    repos = get_custom_repos()
+    if not repos:
+        print("\nNo se encontraron repositorios en src/custom/.")
+        sys.exit(1)
+    
+    options = [(r, r) for r in repos]
+    selected = prompt_selection(options, "Selecciona repositorios para sincronizar (Espacio para marcar, Enter para confirmar)", multi=True)
+    if not selected:
+        print("No se seleccionó ningún repositorio.")
+        sys.exit(0)
+    return selected
+
+
+def prompt_for_branch(repo_name=None):
+    title = f"Ingresa la rama para '{repo_name}'" if repo_name else "Ingresa la rama para sincronizar"
+    branch = input(f"\n{title}: ").strip()
+    if not branch:
+        print("La rama es requerida.")
+        sys.exit(1)
+    return branch
+
+
 def reset_password(config, instance, dbname, login, password):
     """Reset user password in database."""
+    print(f"\n\033[1;35m=== 🔑 RESTABLECIENDO CONTRASEÑA EN: {instance.upper()} (Usuario: {login}) ===\033[0m\n")
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
@@ -258,14 +312,21 @@ def reset_password(config, instance, dbname, login, password):
     pw = f"'{password}'"
     login_str = f"'{login}'"
     print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
+    
+    # Update password for the specific login
     os.system(
-        f'docker exec -it -e PGPASSWORD={db_password} {container} psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -c "update res_users set password = {pw}, login = {login_str} where id=2;"'
+        f'docker exec -it -e PGPASSWORD={db_password} {container} psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -c "update res_users set password = {pw} where login = {login_str};"'
     )
     print("✅ Contraseña actualizada.\n")
 
 
 def init_addons(config, instance=None):
     """Clone required repositories for instance(s)."""
+    if instance:
+        print(f"\n\033[1;35m=== 📦 INICIALIZANDO ADDONS EN: {instance.upper()} ===\033[0m\n")
+    else:
+        print("\n\033[1;35m=== 📦 INICIALIZANDO ADDONS EN TODAS LAS INSTANCIAS ===\033[0m\n")
+    
     instances_to_init = [instance] if instance else list(config["instances"].keys())
     sources_path = os.path.join(BASE_PATH, "src")
 
@@ -287,109 +348,42 @@ def init_addons(config, instance=None):
     print()
 
 
-def sync(repo_name, branch, show=False):
-    """Sync submodules for a custom repository."""
-    path = BASE_PATH
-    src_path = path + "/src/"
-    repo_path = src_path + "custom/" + repo_name
-    if not os.path.isdir(repo_path):
-        print("No se encuentra el repositorio solicitado!")
-        return
-    os.chdir(repo_path)
+def sync(repo_names, branch, show=False):
+    """Sync repositories and their submodules."""
+    print(f"\n\033[1;36m=== 🔄 SINCRONIZANDO REPOSITORIOS (Rama: {branch}) ===\033[0m\n")
+    if isinstance(repo_names, str):
+        repo_names = [repo_names]
 
-    stdout = subprocess.DEVNULL
-    stderr = subprocess.STDOUT
+    for repo_name in repo_names:
+        repo_path = os.path.join(BASE_PATH, "src", "custom", repo_name)
+        if not os.path.isdir(repo_path):
+            print(f"Error: Repositorio '{repo_name}' no encontrado en src/custom/")
+            continue
 
-    if show:
-        stdout = None
-        stderr = None
-    print("\r %s: Guardando cambios actuales... " % (repo_name), end=" " * 50)
-    value = subprocess.run(["git", "status"], capture_output=True)
-    values_lines = value.stdout.decode().split("\n")
-    branch_now = values_lines[0].replace("On branch ", "")
-
-    submodules = ["integra-addons", "third-party-addons", "odoo-venezuela"]
-    submodule_gitmodules_map = {"odoo-venezuela": "homo-addons"}
-    print(
-        "\r %s: Cambiando a %s                           " % (repo_name, branch),
-        end=" " * 50,
-    )
-    subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
-    subprocess.run(["git", "checkout", branch], stdout=stdout, stderr=stderr)
-    subprocess.run(["git", "pull"], stdout=stdout, stderr=stderr)
-    print(
-        "\r %s: Actualizando %s                          " % (repo_name, branch),
-        end=" " * 50,
-    )
-    for submodule in submodules:
-        subprocess.run(
-            ["git", "reset", "HEAD", "--", submodule], stdout=stdout, stderr=stderr
-        )
-        subprocess.run(
-            ["git", "-C", submodule, "stash", "--include-untracked"],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        subprocess.run(
-            ["git", "submodule", "update", "--init", "--force", "--", submodule],
-            stdout=stdout,
-            stderr=stderr,
-        )
-        print(
-            "\r %s: Obteniendo submodulos de %s                     "
-            % (repo_name, branch),
-            end=" " * 50,
-        )
-
-    print("")
-    for submodule in submodules:
-        if not show:
-            print("\r %s Sincronizando... " % (submodule), end="")
-        commit = ""
-        submodule_internal = submodule_gitmodules_map.get(submodule, submodule)
+        print(f"\n=== Sincronizando {repo_name} (Rama: {branch}) ===")
+        os.chdir(repo_path)
+        
+        stdout = subprocess.DEVNULL if not show else None
+        
         try:
-            with open(
-                repo_path + "/.git/modules/" + submodule_internal + "/HEAD", "r"
-            ) as Modules:
-                line = Modules.readlines()[0]
-                if line.startswith("ref:"):
-                    commit = line.split("/")[2].replace("\n", "")
-                else:
-                    commit = line.replace("\n", "")
-
-            if not commit:
-                continue
-            submodule_path = src_path + submodule
-            os.chdir(submodule_path)
-            subprocess.run(["git", "stash"], stdout=stdout, stderr=stderr)
-            subprocess.run(["git", "fetch"], stdout=stdout, stderr=stderr)
-            response = subprocess.run(["git", "checkout", commit], capture_output=True)
-            success = response.stderr.decode()
-
-            if commit[:8] not in success and commit[:7] not in success:
-                print(commit.encode())
-                print(success.encode())
-                print("ERROR")
-                raise Exception("Error")
-
-            if not show:
-                print(
-                    "\r %s ( %s ) Sincronizado ✅" % (submodule, commit), end=" " * 30
-                )
-        except Exception as a:
-            print(a)
-            if not show:
-                print(
-                    "\r %s ( %s ) Sincronizado Fallido ❌" % (submodule, commit),
-                    end=" " * 30,
-                )
-
-        if not show:
-            print("")
-
-    os.chdir(repo_path)
-    subprocess.run(["git", "checkout", branch_now], stdout=stdout, stderr=stderr)
-    subprocess.run(["git", "stash", "pop"], stdout=stdout, stderr=stderr)
+            print(f"→ Guardando cambios locales (stash)...")
+            subprocess.run(["git", "stash"], stdout=stdout)
+            
+            print(f"→ Cambiando a rama {branch}...")
+            subprocess.run(["git", "checkout", branch], stdout=stdout)
+            
+            print(f"→ Trayendo últimos cambios (pull)...")
+            subprocess.run(["git", "pull", "origin", branch], stdout=stdout)
+            
+            print(f"→ Actualizando submódulos (init --recursive)...")
+            # Using --init --recursive to ensure all levels are updated
+            subprocess.run(["git", "submodule", "update", "--init", "--recursive"], stdout=stdout)
+            
+            print(f"✅ {repo_name} sincronizado.")
+        except Exception as e:
+            print(f"❌ Error sincronizando {repo_name}: {e}")
+        finally:
+            os.chdir(BASE_PATH)
 
 
 # ============================================================
@@ -397,37 +391,129 @@ def sync(repo_name, branch, show=False):
 # ============================================================
 
 
-def prompt_for_instance(config, action):
-    instances = list(config.get("instances", {}).keys())
-    if not instances:
-        print("No hay instancias configuradas.")
-        sys.exit(1)
+def get_databases(config, instance):
+    """Fetch database names from the postgres container of an instance."""
+    try:
+        inst_conf = config["instances"][instance]
+        db_conf = resolve_db_config(inst_conf, config)
+        db_host = get_db_host(inst_conf["database"], db_conf)
+        db_user = db_conf["user"]
+        db_password = db_conf["password"]
+        db_port = db_conf["port"]
+        container = f"odoo-{instance}"
 
-    allow_all_actions = {"start", "stop", "restart", "logs", "remove", "fix-files", "init"}
-    allow_all = action in allow_all_actions
+        # Try to get databases from postgres
+        cmd = (
+            f"docker exec -e PGPASSWORD={db_password} {container} "
+            f"psql --host {db_host} --port {db_port} -U {db_user} -d postgres -At -c "
+            f"\"SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres', 'template1');\" 2>/dev/null"
+        )
+        output = subprocess.check_output(cmd, shell=True).decode().strip()
+        if output:
+            return sorted(output.split("\n"))
+    except Exception:
+        pass
+    return []
 
-    options = []
-    if allow_all:
-        options.append((0, "Todas las instancias", None))
-    for i, name in enumerate(instances, 1):
-        options.append((i, name, name))
+
+def get_users(config, instance, dbname):
+    """Fetch active users from a specific database."""
+    try:
+        inst_conf = config["instances"][instance]
+        db_conf = resolve_db_config(inst_conf, config)
+        db_host = get_db_host(inst_conf["database"], db_conf)
+        db_user = db_conf["user"]
+        db_password = db_conf["password"]
+        db_port = db_conf["port"]
+        container = f"odoo-{instance}"
+
+        cmd = (
+            f"docker exec -e PGPASSWORD={db_password} {container} "
+            f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -At -c "
+            f"\"SELECT login FROM res_users WHERE active = true ORDER BY login;\" 2>/dev/null"
+        )
+        output = subprocess.check_output(cmd, shell=True).decode().strip()
+        if output:
+            return sorted(output.split("\n"))
+    except Exception:
+        pass
+    return []
+
+
+def get_custom_repos():
+    """List directories in src/custom/."""
+    custom_path = os.path.join(BASE_PATH, "src", "custom")
+    if not os.path.isdir(custom_path):
+        return []
+    return sorted([
+        d for d in os.listdir(custom_path) 
+        if os.path.isdir(os.path.join(custom_path, d))
+    ])
+
+
+def get_custom_modules(config, instance):
+    """List custom modules found in the addons paths of an instance."""
+    try:
+        inst_conf = config["instances"][instance]
+        odoo_conf = resolve_instance_config(inst_conf, config)
+        addons_paths = odoo_conf.get("addons", [])
+        
+        modules = []
+        for path in addons_paths:
+            full_path = os.path.join(BASE_PATH, path)
+            if not os.path.isdir(full_path):
+                continue
+            for item in os.listdir(full_path):
+                item_path = os.path.join(full_path, item)
+                if os.path.isdir(item_path):
+                    if os.path.exists(os.path.join(item_path, "__manifest__.py")) or \
+                       os.path.exists(os.path.join(item_path, "__openerp__.py")):
+                        modules.append(item)
+        return sorted(list(set(modules)))
+    except Exception:
+        pass
+    return []
+
+
+def prompt_selection(options, title, multi=False):
+    """
+    Generic interactive selection menu.
+    options: list of (label, value) tuples.
+    title: string to display.
+    multi: boolean, if true allows multiple selection.
+    returns: selected value (or list of values if multi).
+    """
+    if not options:
+        return [] if multi else None
 
     def fallback_prompt():
-        print("\nInstancias disponibles:")
-        for num, text, _ in options:
-            print(f"  {num}. {text}")
+        print(f"\n{title}:")
+        for i, (text, _) in enumerate(options, 1):
+            print(f"  {i}. {text}")
+        if multi:
+            print("  (Ingresa números separados por coma, ej: 1,3,4 o 'all' para todos)")
         while True:
             try:
-                choice = input("\nSelecciona una instancia: ").strip()
+                choice = input("\nSelección: ").strip().lower()
                 if not choice:
+                    if multi: return []
                     continue
-                idx = int(choice)
-                for num, text, val in options:
-                    if num == idx:
-                        return val
+                if multi and choice == 'all':
+                    return [val for _, val in options]
+                if multi:
+                    indices = [int(x.strip()) for x in choice.replace(',', ' ').split() if x.strip()]
+                    selected = []
+                    for idx in indices:
+                        if 1 <= idx <= len(options):
+                            selected.append(options[idx-1][1])
+                    return selected
+                else:
+                    idx = int(choice)
+                    if 1 <= idx <= len(options):
+                        return options[idx-1][1]
                 print("Selección inválida.")
             except ValueError:
-                print("Por favor ingresa un número válido.")
+                print("Por favor ingresa un valor válido.")
             except (KeyboardInterrupt, EOFError):
                 print("\nOperación cancelada.")
                 sys.exit(0)
@@ -457,20 +543,52 @@ def prompt_for_instance(config, action):
         return ch
 
     current_idx = 0
+    selected_indices = set()
     input_buffer = ""
-    lines_to_clear = len(options)
+    
+    # Grid settings
+    try:
+        term_width = os.get_terminal_size().columns
+    except Exception:
+        term_width = 80
+        
+    max_text_len = max(len(text) for text, _ in options)
+    item_width = max_text_len + 10 # prefix + num + text + spacing
+    num_cols = max(1, term_width // item_width)
+    num_rows = (len(options) + num_cols - 1) // num_cols
+    lines_to_clear = num_rows + 1
 
-    print("\nSelecciona una instancia (Usa las flechas, números y Enter para confirmar):")
+    print(f"\n{title}:")
     
     def render_menu():
         sys.stdout.write("\r")
-        for i, (num, text, _) in enumerate(options):
-            prefix = "❯ " if i == current_idx else "  "
-            if i == current_idx:
-                sys.stdout.write(f"\033[92m{prefix}{num}. {text}\033[0m\033[K\n")
-            else:
-                sys.stdout.write(f"{prefix}{num}. {text}\033[K\n")
-        sys.stdout.write(f"Opción [ {input_buffer} ]: \033[K")
+        for row in range(num_rows):
+            line_content = ""
+            for col in range(num_cols):
+                idx = row + col * num_rows
+                if idx < len(options):
+                    text, _ = options[idx]
+                    num = f"{idx+1:2d}. "
+                    prefix = "❯ " if idx == current_idx else "  "
+                    if multi:
+                        mark = "[x] " if idx in selected_indices else "[ ] "
+                        prefix += mark
+                    
+                    item = f"{prefix}{num}{text}"
+                    # Padding to maintain columns
+                    padding = " " * (item_width - len(item))
+                    
+                    if idx == current_idx:
+                        line_content += f"\033[92m{item}\033[0m{padding}"
+                    else:
+                        line_content += f"{item}{padding}"
+            
+            sys.stdout.write(f"{line_content}\033[K\n")
+        
+        if multi:
+            sys.stdout.write(f"\033[90m(Espacio: sel, Enter: ok, A: todos, N: ninguno)\033[0m\033[K")
+        else:
+            sys.stdout.write(f"Opción (Número o flechas) [ {input_buffer} ]: \033[K")
         sys.stdout.flush()
 
     sys.stdout.write("\033[?25l") # Ocultar cursor
@@ -483,36 +601,114 @@ def prompt_for_instance(config, action):
             elif ch in ('\r', '\n'):
                 sys.stdout.write("\n")
                 break
+            elif ch == ' ': # Espacio
+                if multi:
+                    if current_idx in selected_indices:
+                        selected_indices.remove(current_idx)
+                    else:
+                        selected_indices.add(current_idx)
+            elif ch in ('a', 'A'):
+                if multi:
+                    selected_indices = set(range(len(options)))
+            elif ch in ('n', 'N'):
+                if multi:
+                    selected_indices.clear()
             elif ch == '\x1b[A': # Arriba
                 current_idx = (current_idx - 1) % len(options)
                 input_buffer = ""
             elif ch == '\x1b[B': # Abajo
                 current_idx = (current_idx + 1) % len(options)
                 input_buffer = ""
+            elif ch == '\x1b[C': # Derecha
+                current_idx = (current_idx + num_rows) % len(options)
+                input_buffer = ""
+            elif ch == '\x1b[D': # Izquierda
+                current_idx = (current_idx - num_rows) % len(options)
+                input_buffer = ""
             elif ch in ('\x7f', '\b'): # Backspace
                 input_buffer = input_buffer[:-1]
+                if input_buffer:
+                    try:
+                        num_val = int(input_buffer)
+                        if 1 <= num_val <= len(options):
+                            current_idx = num_val - 1
+                    except ValueError:
+                        pass
             elif len(ch) == 1 and ch.isdigit():
-                input_buffer += ch
+                new_buffer = input_buffer + ch
                 try:
-                    num_val = int(input_buffer)
-                    for i, (num, text, _) in enumerate(options):
-                        if num == num_val:
-                            current_idx = i
-                            break
+                    num_val = int(new_buffer)
+                    if 1 <= num_val <= len(options):
+                        input_buffer = new_buffer
+                        current_idx = num_val - 1
+                    else:
+                        # Si el número completo no es válido, intentar solo con el último dígito
+                        num_val = int(ch)
+                        if 1 <= num_val <= len(options):
+                            input_buffer = ch
+                            current_idx = num_val - 1
                 except ValueError:
                     pass
             
             # Regresar cursor arriba
             sys.stdout.write(f"\033[{lines_to_clear}F")
             render_menu()
+        
+        # Al salir, limpiar el menú de la pantalla para no ensuciar el log
+        sys.stdout.write(f"\033[{lines_to_clear}A") # Subir al inicio del menú
+        for _ in range(lines_to_clear + 1):
+            sys.stdout.write("\033[K\n") # Limpiar línea y bajar
+        sys.stdout.write(f"\033[{lines_to_clear + 1}F") # Regresar arriba de todo
             
-    except Exception:
-        sys.stdout.write("\033[?25h\nOperación cancelada.\n")
+    except (Exception, KeyboardInterrupt):
+        sys.stdout.write("\n\033[?25hOperación cancelada.\n")
         sys.exit(0)
     finally:
-        sys.stdout.write("\033[?25h") # Mostrar cursor de nuevo
+        sys.stdout.write("\033[?25h") # Mostrar cursor
         
-    return options[current_idx][2]
+    if multi:
+        return [options[i][1] for i in sorted(list(selected_indices))]
+    return options[current_idx][1]
+
+
+def prompt_for_instance(config, action):
+    instances = list(config.get("instances", {}).keys())
+    if not instances:
+        print("No hay instancias configuradas.")
+        sys.exit(1)
+
+    allow_all_actions = {"start", "stop", "restart", "logs", "remove", "fix-files", "init"}
+    allow_all = action in allow_all_actions
+
+    options = []
+    if allow_all:
+        options.append(("Todas las instancias", None))
+    for name in instances:
+        options.append((name, name))
+    
+    return prompt_selection(options, "Selecciona una instancia (Usa las flechas, números y Enter para confirmar)")
+
+
+def prompt_for_database(config, instance):
+    databases = get_databases(config, instance)
+    if not databases:
+        return input(f"\nNo se pudieron auto-detectar bases de datos. Ingresa el nombre de la base de datos para '{instance}': ").strip()
+    
+    options = [(db, db) for db in databases]
+    return prompt_selection(options, f"Selecciona base de datos para '{instance}'")
+
+
+def prompt_for_modules(config, instance):
+    modules = get_custom_modules(config, instance)
+    if not modules:
+        print(f"\nNo se encontraron módulos custom en los addons de '{instance}'.")
+        return "all"
+    
+    options = [(mod, mod) for mod in modules]
+    selected = prompt_selection(options, f"Selecciona módulos a actualizar para '{instance}' (Espacio para marcar, Enter para confirmar)", multi=True)
+    if not selected:
+        return "all"
+    return ",".join(selected)
 
 
 def main():
@@ -561,20 +757,20 @@ def main():
     # psql
     psql_p = subparsers.add_parser("psql", help="Conectar a PostgreSQL")
     psql_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
-    psql_p.add_argument("-d", required=True, help="Nombre de la base de datos")
+    psql_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
 
     # pw
     pw_p = subparsers.add_parser("pw", help="Restablecer contraseña de un usuario")
     pw_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
-    pw_p.add_argument("-d", required=True, help="Nombre de la base de datos")
-    pw_p.add_argument("-l", default="admin", help="Login a restablecer (por defecto: admin)")
+    pw_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
+    pw_p.add_argument("-l", help="Login a restablecer (opcional)")
     pw_p.add_argument("-p", "--password", default="admin", help="Nueva contraseña (por defecto: admin)")
 
     # update
     update_p = subparsers.add_parser("update", help="Actualizar módulos de Odoo")
     update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
-    update_p.add_argument("-d", required=True, help="Nombre de la base de datos")
-    update_p.add_argument("-m", default="all", help="Módulos a actualizar (separados por coma)")
+    update_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
+    update_p.add_argument("-m", default=None, help="Módulos a actualizar (opcional)")
 
     # init
     init_p = subparsers.add_parser("init", help="Inicializar addons/repositorios")
@@ -582,8 +778,8 @@ def main():
 
     # sync
     sync_p = subparsers.add_parser("sync", help="Sincroniza submódulos de un repositorio")
-    sync_p.add_argument("r", help="Repositorio")
-    sync_p.add_argument("b", help="Branch")
+    sync_p.add_argument("r", nargs="?", default=None, help="Repositorio (opcional)")
+    sync_p.add_argument("b", nargs="?", default=None, help="Branch (opcional)")
     sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
 
     args = parser.parse_args()
@@ -592,17 +788,16 @@ def main():
         parser.print_help()
         return
 
-    # Load config for all commands except sync (which doesn't need it)
-    if args.action != "sync":
-        config = load_config(BASE_PATH)
+    # Load config for all commands
+    config = load_config(BASE_PATH)
 
-        actions_with_instance = {
-            "start", "stop", "restart", "logs", "remove", 
-            "fix-files", "init", "bash", "psql", "pw", "update"
-        }
-        
-        if args.action in actions_with_instance and getattr(args, "instance", None) is None:
-            args.instance = prompt_for_instance(config, args.action)
+    actions_with_instance = {
+        "start", "stop", "restart", "logs", "remove", 
+        "fix-files", "init", "bash", "psql", "pw", "update"
+    }
+    
+    if args.action in actions_with_instance and getattr(args, "instance", None) is None:
+        args.instance = prompt_for_instance(config, args.action)
 
     # Dispatch
     if args.action == "build":
@@ -624,14 +819,30 @@ def main():
     elif args.action == "fix-files":
         fix_filestore(config, args.instance)
     elif args.action == "psql":
+        if args.d is None:
+            args.d = prompt_for_database(config, args.instance)
         psql_connect(config, args.instance, args.d)
     elif args.action == "pw":
+        if args.d is None:
+            args.d = prompt_for_database(config, args.instance)
+        if args.l is None:
+            args.l = prompt_for_user(config, args.instance, args.d)
         reset_password(config, args.instance, args.d, args.l, args.password)
     elif args.action == "update":
+        if args.instance is None:
+            args.instance = prompt_for_instance(config, "update")
+        if args.d is None:
+            args.d = prompt_for_database(config, args.instance)
+        if args.m is None:
+            args.m = prompt_for_modules(config, args.instance)
         bash_update_modules(config, args.instance, args.d, args.m)
     elif args.action == "init":
         init_addons(config, args.instance)
     elif args.action == "sync":
+        if args.r is None:
+            args.r = prompt_for_repos()
+        if args.b is None:
+            args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
         sync(args.r, args.b, show=args.v)
 
 
