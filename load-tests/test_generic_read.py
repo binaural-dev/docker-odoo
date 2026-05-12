@@ -20,7 +20,7 @@ class GenericReadUser(BaseOdooUser):
     - Ajusta 'wait_time' según el comportamiento deseado
     """
     abstract = False
-    instance_name = "mercedes"
+    instance_name = "petare"
     wait_time = between(0.5, 2)
 
     def on_start(self):

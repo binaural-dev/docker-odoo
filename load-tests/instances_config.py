@@ -16,7 +16,7 @@ INSTANCES = {
         "database": "binaural_tesote_test",  # Nombre real de la BD en PostgreSQL
         "login": "admin",
         "password": "admin",
-        "protocol": "jsonrpc",
+        "protocol": "jsonrpcs",
         "odoo_version": "19.0",
         "description": "Instancia de prueba binaural (Odoo 19)"
     },
@@ -26,7 +26,7 @@ INSTANCES = {
         "database": "odoo_cadipa1_production",  # Actualizado con nombre real
         "login": "admin",
         "password": "admin",
-        "protocol": "jsonrpc",
+        "protocol": "jsonrpcs",
         "odoo_version": "17.0",
         "description": "Instancia CADIPA (Odoo 17)"
     },
@@ -36,7 +36,7 @@ INSTANCES = {
         "database": "odoo_gno_staging",  # Actualizado con nombre real
         "login": "admin",
         "password": "admin",
-        "protocol": "jsonrpc",
+        "protocol": "jsonrpcs",
         "odoo_version": "17.0",
         "description": "Instancia GNO (Odoo 17)"
     },
@@ -46,7 +46,7 @@ INSTANCES = {
         "database": "odoo_donaciones_prod",  # Actualizado con nombre real
         "login": "admin",
         "password": "admin",
-        "protocol": "jsonrpc",
+        "protocol": "jsonrpcs",
         "odoo_version": "19.0",
         "description": "Instancia Donaciones (Odoo 19)"
     },
@@ -56,7 +56,7 @@ INSTANCES = {
         "database": "odoo_17_donaciones",  # Actualizado con nombre real
         "login": "admin",
         "password": "admin",
-        "protocol": "jsonrpc",
+        "protocol": "jsonrpcs",
         "odoo_version": "17.0",
         "description": "Instancia Donaciones v17 (Odoo 17)"
     },
@@ -66,19 +66,19 @@ INSTANCES = {
         "database": "19_mercedes",  # Actualizado con nombre real
         "login": "admin",
         "password": "admin",
-        "protocol": "jsonrpc",
+        "protocol": "jsonrpcs",
         "odoo_version": "19.0",
         "description": "Instancia Mercedes (Odoo 19)"
     },
     "petare": {
-        "host": "localhost",
-        "port": 8098,
-        "database": "odoo_petare_prod",  # Actualizado con nombre real
+        "host": "binaural-dev-nuevomercadopetare-staging-29595187.dev.odoo.com",
+        "port": 443,
+        "database": "binaural-dev-nuevomercadopetare-staging-29595187",  # Actualizado con nombre real
         "login": "admin",
-        "password": "admin",
-        "protocol": "jsonrpc",
-        "odoo_version": "17.0",
-        "description": "Instancia Petare (Odoo 17)"
+        "password": "bqto",
+        "protocol": "jsonrpcs",
+        "odoo_version": "16.0",
+        "description": "Instancia Petare (Odoo 16)"
     },
 }
 

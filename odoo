@@ -586,14 +586,21 @@ def main():
     sync_p.add_argument("b", help="Branch")
     sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
 
+    # new
+    new_inst_p = subparsers.add_parser("new", help="Crea una nueva instancia (interactivo o por argumentos)")
+    new_inst_p.add_argument("name", nargs="?", default=None, help="Nombre de instancia")
+    new_inst_p.add_argument("repo", nargs="?", default=None, help="URL del repositorio (SSH)")
+    new_inst_p.add_argument("branch", nargs="?", default=None, help="Rama del repositorio")
+    new_inst_p.add_argument("version", nargs="?", default=None, help="Versión de Odoo")
+
     args = parser.parse_args()
 
     if not args.action:
         parser.print_help()
         return
 
-    # Load config for all commands except sync (which doesn't need it)
-    if args.action != "sync":
+    # Load config for all commands except sync and new
+    if args.action not in ("sync", "new"):
         config = load_config(BASE_PATH)
 
         actions_with_instance = {
@@ -601,7 +608,9 @@ def main():
             "fix-files", "init", "bash", "psql", "pw", "update"
         }
         
-        if args.action in actions_with_instance and getattr(args, "instance", None) is None:
+        if getattr(args, "instance", None) == "all":
+            args.instance = None
+        elif args.action in actions_with_instance and getattr(args, "instance", None) is None:
             args.instance = prompt_for_instance(config, args.action)
 
     # Dispatch
@@ -633,7 +642,13 @@ def main():
         init_addons(config, args.instance)
     elif args.action == "sync":
         sync(args.r, args.b, show=args.v)
-
+    elif args.action == "new":
+        cmd = [sys.executable, os.path.join(BASE_PATH, "scripts", "create_instance.py")]
+        if args.name: cmd.append(args.name)
+        if args.repo: cmd.append(args.repo)
+        if args.branch: cmd.append(args.branch)
+        if args.version: cmd.append(args.version)
+        subprocess.run(cmd)
 
 if __name__ == "__main__":
     main()
