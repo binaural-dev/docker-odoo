@@ -237,7 +237,7 @@ class SCPDownloadManager:
 
 		return selected_remote_path
 
-	def build_local_zip_path(self, local_zip_filename, source_zip_filename):
+	def build_local_zip_path(self, local_zip_filename):
 		if not local_zip_filename.lower().endswith(".zip"):
 			raise ValueError("El nombre local del ZIP debe terminar en .zip")
 
@@ -246,45 +246,14 @@ class SCPDownloadManager:
 				f"La ruta local de descarga no es una carpeta: {self.download_path}"
 			)
 
-		existing_dir = os.path.isdir(self.download_path)
-		if existing_dir:
-			source_backup_base = DatabaseNameBuilder.normalize_backup_base_name(
-				source_zip_filename
-			)
-			for existing_filename in os.listdir(self.download_path):
-				existing_zip_path = os.path.join(self.download_path, existing_filename)
-				if not os.path.isfile(existing_zip_path):
-					continue
-
-				try:
-					existing_backup_base = DatabaseNameBuilder.normalize_backup_base_name(
-						existing_filename
-					)
-				except ValueError:
-					continue
-
-				if existing_backup_base == source_backup_base:
-					raise FileExistsError(
-						"Ya existe un ZIP local correspondiente al mismo backup remoto. "
-						f"Abortando descarga: {existing_zip_path}"
-					)
-
 		os.makedirs(self.download_path, exist_ok=True)
-		local_zip_path = os.path.join(self.download_path, local_zip_filename)
-
-		if os.path.exists(local_zip_path):
-			raise FileExistsError(
-				"Ya existe un ZIP local con el mismo nombre. "
-				f"Abortando descarga: {local_zip_path}"
-			)
-
-		return local_zip_path
+		return os.path.join(self.download_path, local_zip_filename)
 
 	def download(self, remote_zip_path, local_zip_filename):
 		local_zip_path = self.build_local_zip_path(
 			local_zip_filename=local_zip_filename,
-			source_zip_filename=posixpath.basename(remote_zip_path),
 		)
+		overwrite_existing = os.path.exists(local_zip_path)
 
 		cmd = self._build_scp_command()
 		cmd.extend([self._format_remote_spec(remote_zip_path), local_zip_path])
@@ -293,6 +262,8 @@ class SCPDownloadManager:
 			"\nDescargando backup remoto: "
 			f"{self.user}@{self.host}:{remote_zip_path}"
 		)
+		if overwrite_existing:
+			print(f"Sobrescribiendo ZIP local existente: {local_zip_path}")
 		print(f"Ruta local de descarga: {local_zip_path}\n")
 
 		subprocess.run(cmd, check=True)
@@ -308,11 +279,11 @@ class SCPDownloadManager:
 
 class DatabaseNameBuilder:
 	EXPIRY_PATTERN = re.compile(
-		r"^(?P<base>.+)__exp_"
+		r"^(?P<base>.+?)(?:__(?P<variant>long))?__exp_"
 		r"(?P<end>\d{4}_\d{2}_\d{2})$"
 	)
 	EXPIRY_ZIP_PATTERN = re.compile(
-		r"^(?P<base>.+)__exp_"
+		r"^(?P<base>.+?)(?:__(?P<variant>long))?__exp_"
 		r"(?P<end>\d{4}_\d{2}_\d{2})\.zip$",
 		re.IGNORECASE,
 	)
@@ -407,7 +378,7 @@ class DatabaseNameBuilder:
 		return cls._parse_end_date(match.group("end"))
 
 	@classmethod
-	def build(cls, zip_path, retention_days=None, today=None):
+	def build(cls, zip_path, retention_days=None, today=None, variant=None):
 		today = today or datetime.date.today()
 
 		if retention_days is None:
@@ -419,6 +390,8 @@ class DatabaseNameBuilder:
 			raise ValueError("retention_days debe ser mayor a cero")
 
 		raw_base = cls.normalize_backup_base_name(zip_path)
+		if variant:
+			raw_base = f"{raw_base}__{variant}"
 		end_date = today + datetime.timedelta(days=retention_days)
 		resource_base_name = f"{raw_base}__exp_{cls._fmt_date(end_date)}"
 		local_zip_filename = f"{resource_base_name}.zip"
@@ -755,6 +728,7 @@ class RestoreSCPOrchestrator:
 		expired_zip_cleaner,
 		logger=None,
 		retention_days=None,
+		long_retention_days=None,
 		cleanup_dbs=False,
 		cleanup_zips=False,
 	):
@@ -765,6 +739,7 @@ class RestoreSCPOrchestrator:
 		self.expired_zip_cleaner = expired_zip_cleaner
 		self.logger = logger
 		self.retention_days = retention_days
+		self.long_retention_days = long_retention_days
 		self.cleanup_dbs = cleanup_dbs
 		self.cleanup_zips = cleanup_zips
 
@@ -827,22 +802,43 @@ class RestoreSCPOrchestrator:
 			source_zip_filename,
 			retention_days=self.retention_days,
 		)
+		long_db_target = None
+		if self.long_retention_days is not None:
+			long_db_target = self.db_name_builder.build(
+				source_zip_filename,
+				retention_days=self.long_retention_days,
+				variant="long",
+			)
+
 		local_zip_path = self.scp_manager.download(
 			remote_zip_path=remote_zip_path,
 			local_zip_filename=local_zip_filename,
 		)
 
 		print(f"\nBase de datos objetivo: {db_name}")
+		if long_db_target:
+			print(f"Base de datos objetivo long: {long_db_target[0]}")
 		print(f"ZIP local persistido como: {local_zip_path}")
 		if end_date:
 			print(f"Disponibilidad de la base hasta: {end_date.strftime('%Y_%m_%d')}\n")
 		else:
 			print("Disponibilidad de la base: sin vencimiento\n")
+		if long_db_target and long_db_target[2]:
+			print(
+				"Disponibilidad de la base long hasta: "
+				f"{long_db_target[2].strftime('%Y_%m_%d')}\n"
+			)
 
 		self._log_downloaded_zip(local_zip_path, remote_zip_path, end_date)
 
 		self.restore_runner.run_restore(local_zip_path, db_name)
 		self._log_restored_database(db_name, local_zip_path, end_date)
+
+		if long_db_target:
+			long_db_name, _, long_end_date = long_db_target
+			self.restore_runner.run_restore(local_zip_path, long_db_name)
+			self._log_restored_database(long_db_name, local_zip_path, long_end_date)
+
 		self.cleanup_expired_resources()
 
 
@@ -881,6 +877,14 @@ def parse_args():
 			"Días de vigencia para agregar sufijo __exp_YYYY_MM_DD al nombre "
 			"de la DB y del ZIP local descargado. Si se omite, se restauran sin "
 			"fecha de expiración"
+		),
+	)
+	parser.add_argument(
+		"--long-retention-days",
+		type=int,
+		help=(
+			"Días de vigencia para crear además una segunda DB long con sufijo "
+			"__long__exp_YYYY_MM_DD"
 		),
 	)
 	parser.add_argument(
@@ -934,6 +938,21 @@ def parse_args():
 
 	if args.retention_days is not None and args.retention_days <= 0:
 		parser.error("--retention-days debe ser mayor a 0")
+
+	if args.long_retention_days is not None and args.long_retention_days <= 0:
+		parser.error("--long-retention-days debe ser mayor a 0")
+
+	if args.long_retention_days is not None and args.retention_days is None:
+		parser.error("--long-retention-days requiere --retention-days")
+
+	if (
+		args.long_retention_days is not None
+		and args.retention_days is not None
+		and args.long_retention_days <= args.retention_days
+	):
+		parser.error(
+			"--long-retention-days debe ser mayor que --retention-days"
+		)
 
 	if args.delay_cleanup_zips_days < 0:
 		parser.error("--delay-cleanup-zips-days debe ser mayor o igual a 0")
@@ -1035,6 +1054,7 @@ def main():
 		expired_zip_cleaner=expired_zip_cleaner,
 		logger=logger,
 		retention_days=args.retention_days,
+		long_retention_days=args.long_retention_days,
 		cleanup_dbs=args.cleanup_dbs,
 		cleanup_zips=args.cleanup_zips,
 	)
