@@ -640,6 +640,22 @@ class FilestoreRestoreManager:
             [
                 "docker",
                 "exec",
+                "-u",
+                "root",
+                self.container,
+                "rm",
+                "-rf",
+                self.container_filestore_path,
+            ],
+            check=True,
+        )
+
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-u",
+                "root",
                 self.container,
                 "mkdir",
                 "-p",
