@@ -12,3 +12,5 @@ docker-compose.generated.yml
 *antigractivy*
 venv
 __pycache__
+.atl/
+.windsurf/
