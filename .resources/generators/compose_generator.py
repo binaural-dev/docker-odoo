@@ -138,7 +138,7 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
 
     lines = [
         f"  {container_name}:",
-        "    command: odoo --dev=all",
+        "    command: odoo",
         "    restart: always",
         f"    container_name: {container_name}",
         "    build:",
