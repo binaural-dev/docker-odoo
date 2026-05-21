@@ -1107,18 +1107,10 @@ def main():
 	if args.cleanup_dbs_only or args.cleanup_zips_only:
 		print("\nModo cleanup selectivo: se omite descarga y restore.\n")
 
-		today = datetime.date.today() + datetime.timedelta(days=7)
-  
-		print(f"Fecha actual para evaluación de expiración: {today}\n")
-
 		if args.cleanup_dbs_only:
-			expired_db_cleaner.drop_expired_databases(
-				today=today,
-			)
+			expired_db_cleaner.drop_expired_databases()
 		if args.cleanup_zips_only:
-			expired_zip_cleaner.delete_expired_zips(
-				today=today,
-			)
+			expired_zip_cleaner.delete_expired_zips()
 		return
 
 	scripts_dir = os.path.dirname(os.path.abspath(__file__))
