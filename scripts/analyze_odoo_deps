@@ -1,0 +1,850 @@
+#!/usr/bin/env python3
+"""Analyze Odoo module dependencies across multiple addons paths."""
+
+import argparse
+import ast
+import csv
+import graphlib
+import json
+import sys
+from pathlib import Path
+
+
+def _warn(message):
+    print(f"WARNING: {message}", file=sys.stderr)
+
+
+def _error(message):
+    print(f"ERROR: {message}", file=sys.stderr)
+
+
+def _bool_text(value):
+    return "true" if value else "false"
+
+
+def _split_csv_argument(raw_value):
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+class Module:
+    """Rich entity representing an Odoo module."""
+
+    def __init__(self, name, path, manifest, addons_priority, addons_path_str, direct_dep_names):
+        self.name = name
+        self.path = path
+        self.manifest = manifest
+        self.addons_priority = addons_priority
+        self.addons_path_str = addons_path_str
+        self.direct_dep_names = list(direct_dep_names)
+        self.direct_deps = []
+        self.accumulated_deps = set()
+        self.missing_dep_names = set()
+        self.architecture_violations = set()
+        self.cycle_involved = False
+        self.fully_expanded = True
+
+    def __hash__(self):
+        return hash((self.name, str(self.path)))
+
+    @property
+    def direct_count(self):
+        return len(self.direct_dep_names)
+
+    @property
+    def accumulated_count(self):
+        return len(self.accumulated_deps)
+
+    def to_output_dict(self, verbose=False):
+        output = {
+            "name": self.name,
+            "path": str(self.path),
+            "addons_priority": self.addons_priority,
+            "direct_count": self.direct_count,
+            "accumulated_count": self.accumulated_count,
+            "fully_expanded": self.fully_expanded,
+            "cycle_involved": self.cycle_involved,
+        }
+
+        if verbose:
+            output["accumulated_deps"] = sorted(
+                dependency.name for dependency in self.accumulated_deps
+            )
+            output["direct_deps"] = sorted(
+                dependency.name for dependency in self.direct_deps
+            )
+            output["not_expanded_modules"] = sorted(self.missing_dep_names)
+            output["architecture_violations"] = sorted(
+                dependency.name for dependency in self.architecture_violations
+            )
+
+            detailed = {}
+            for dependency in self.accumulated_deps:
+                source_path = dependency.addons_path_str
+                detailed.setdefault(source_path, []).append(dependency.name)
+            for source_path in detailed:
+                detailed[source_path].sort()
+            output["detailed_accumulated_deps"] = detailed
+
+        return output
+
+
+class ManifestParser:
+    """Parses Odoo manifest files."""
+
+    def parse(self, file_path):
+        try:
+            raw_content = file_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            _warn(f"Cannot read manifest '{file_path}': {exc}")
+            return None
+
+        try:
+            parsed = ast.literal_eval(raw_content)
+        except (ValueError, SyntaxError) as exc:
+            _warn(f"Invalid manifest syntax in '{file_path}': {exc}")
+            return None
+
+        if not isinstance(parsed, dict):
+            _warn(f"Manifest '{file_path}' is not a dict; skipping")
+            return None
+
+        return parsed
+
+
+class ModuleRegistry:
+    """Discovers modules and stores canonical and path-based indexes."""
+
+    def __init__(self, manifest_parser):
+        self.manifest_parser = manifest_parser
+        self.by_path = {}
+        self.by_name = {}
+
+    def load(self, addons_paths):
+        self.by_path = {}
+        self.by_name = {}
+
+        for priority_index, addons_path in enumerate(addons_paths):
+            for manifest_file in sorted(addons_path.rglob("__manifest__.py")):
+                module_dir = manifest_file.parent.resolve()
+
+                if module_dir in self.by_path:
+                    continue
+
+                manifest = self.manifest_parser.parse(manifest_file)
+                if manifest is None:
+                    continue
+
+                depends_value = manifest.get("depends", [])
+                if depends_value is None:
+                    depends_value = []
+
+                if not isinstance(depends_value, list):
+                    _warn(
+                        "Manifest '"
+                        + str(manifest_file)
+                        + "' has non-list depends; using empty list"
+                    )
+                    depends_value = []
+
+                direct_dep_names = []
+                for dependency_name in depends_value:
+                    if isinstance(dependency_name, str):
+                        direct_dep_names.append(dependency_name)
+                    else:
+                        _warn(
+                            "Manifest '"
+                            + str(manifest_file)
+                            + "' has non-string dependency entry; skipping"
+                        )
+
+                module = Module(
+                    name=module_dir.name,
+                    path=module_dir,
+                    manifest=manifest,
+                    addons_priority=priority_index,
+                    addons_path_str=str(addons_path),
+                    direct_dep_names=direct_dep_names,
+                )
+
+                self.by_path[module.path] = module
+
+                # Odoo behavior: first match by name wins.
+                if module.name not in self.by_name:
+                    self.by_name[module.name] = module
+
+    def all_modules(self):
+        return list(self.by_path.values())
+
+
+class DependencyGraph:
+    """Resolves and analyzes dependency relationships between modules."""
+
+    def __init__(self, registry):
+        self.registry = registry
+        self.cycle_modules = set()
+
+    def resolve(self):
+        for module in self.registry.all_modules():
+            module.direct_deps = []
+            module.missing_dep_names = set()
+            module.architecture_violations = set()
+
+            for dep_name in module.direct_dep_names:
+                dependency = self.registry.by_name.get(dep_name)
+                if dependency is None:
+                    module.missing_dep_names.add(dep_name)
+                    continue
+
+                module.direct_deps.append(dependency)
+
+                if dependency.addons_priority > module.addons_priority:
+                    module.architecture_violations.add(dependency)
+
+            if module.missing_dep_names:
+                _warn(
+                    "Module '"
+                    + module.name
+                    + "' has missing dependencies: "
+                    + ", ".join(sorted(module.missing_dep_names))
+                )
+
+    def compute_transitive(self):
+        modules = self.registry.all_modules()
+        graph = {module: tuple(module.direct_deps) for module in modules}
+        self.cycle_modules = self._detect_cycle_nodes(graph)
+
+        if self.cycle_modules:
+            _warn(
+                "Dependency cycles detected involving: "
+                + ", ".join(sorted(module.name for module in self.cycle_modules))
+            )
+
+        memo = {}
+        visiting = set()
+
+        def dfs(module):
+            if module in memo:
+                return memo[module]
+
+            if module in visiting:
+                return set()
+
+            visiting.add(module)
+            resolved = set()
+
+            for dependency in module.direct_deps:
+                resolved.add(dependency)
+                resolved.update(dfs(dependency))
+
+            visiting.remove(module)
+            memo[module] = resolved
+            return resolved
+
+        for module in modules:
+            module.accumulated_deps = dfs(module)
+
+        for module in modules:
+            cycle_in_path = bool(module.accumulated_deps.intersection(self.cycle_modules))
+            module.cycle_involved = module in self.cycle_modules or cycle_in_path
+            module.fully_expanded = (
+                not module.missing_dep_names and not module.cycle_involved
+            )
+
+    def _detect_cycle_nodes(self, graph):
+        if not graph:
+            return set()
+
+        sorter = graphlib.TopologicalSorter(graph)
+        try:
+            tuple(sorter.static_order())
+            return set()
+        except graphlib.CycleError as exc:
+            reported_cycle = self._extract_cycle_from_exception(exc)
+            if reported_cycle:
+                _warn(
+                    "Topological cycle path: "
+                    + " -> ".join(module.name for module in reported_cycle)
+                )
+
+        # Collect unresolved nodes after processing all acyclic nodes.
+        sorter = graphlib.TopologicalSorter(graph)
+        processed = set()
+        try:
+            sorter.prepare()
+        except graphlib.CycleError:
+            pass
+
+        while True:
+            ready_nodes = sorter.get_ready()
+            if not ready_nodes:
+                break
+
+            for node in ready_nodes:
+                processed.add(node)
+                sorter.done(node)
+
+        unresolved = set(graph.keys()) - processed
+        if not unresolved:
+            return set()
+
+        cycle_nodes = set()
+        for node in unresolved:
+            if self._is_in_cycle(node, graph, unresolved):
+                cycle_nodes.add(node)
+
+        if cycle_nodes:
+            return cycle_nodes
+
+        # Fallback safety; unresolved generally implies cycle impact.
+        return unresolved
+
+    def _extract_cycle_from_exception(self, exc):
+        if len(exc.args) < 2:
+            return []
+
+        cycle_nodes = exc.args[1]
+        if isinstance(cycle_nodes, (list, tuple)):
+            return [node for node in cycle_nodes if isinstance(node, Module)]
+
+        return []
+
+    def _is_in_cycle(self, candidate, graph, allowed_nodes):
+        for neighbor in graph.get(candidate, ()):
+            if neighbor not in allowed_nodes:
+                continue
+
+            if neighbor == candidate:
+                return True
+
+            if self._can_reach_target(
+                current=neighbor,
+                target=candidate,
+                graph=graph,
+                allowed_nodes=allowed_nodes,
+                visited=set(),
+            ):
+                return True
+
+        return False
+
+    def _can_reach_target(self, current, target, graph, allowed_nodes, visited):
+        if current == target:
+            return True
+
+        if current in visited:
+            return False
+
+        visited.add(current)
+
+        for next_node in graph.get(current, ()):
+            if next_node not in allowed_nodes:
+                continue
+
+            if self._can_reach_target(
+                current=next_node,
+                target=target,
+                graph=graph,
+                allowed_nodes=allowed_nodes,
+                visited=visited,
+            ):
+                return True
+
+        return False
+
+    def get_eval_modules(self, eval_paths):
+        selected_modules = {}
+
+        for eval_path in eval_paths:
+            resolved_eval_path = eval_path.resolve()
+
+            if (resolved_eval_path / "__manifest__.py").is_file():
+                candidate_module_paths = [resolved_eval_path]
+            else:
+                candidate_module_paths = [
+                    manifest_file.parent.resolve()
+                    for manifest_file in sorted(
+                        resolved_eval_path.rglob("__manifest__.py")
+                    )
+                ]
+
+            if not candidate_module_paths:
+                _warn(
+                    "No modules found in eval path '"
+                    + str(resolved_eval_path)
+                    + "'"
+                )
+
+            for module_path in candidate_module_paths:
+                module = self.registry.by_path.get(module_path)
+                if module is None:
+                    _warn(
+                        "Eval module path '"
+                        + str(module_path)
+                        + "' was not loaded from addons paths"
+                    )
+                    continue
+
+                selected_modules[module.path] = module
+
+        return list(selected_modules.values())
+
+    def get_sorted(self, eval_modules):
+        return sorted(
+            eval_modules,
+            key=lambda module: (module.accumulated_count, module.name),
+        )
+
+
+class _StringBuffer:
+    """Minimal text buffer compatible with csv module writer."""
+
+    def __init__(self):
+        self._chunks = []
+
+    def write(self, value):
+        self._chunks.append(value)
+        return len(value)
+
+    def getvalue(self):
+        return "".join(self._chunks)
+
+
+class OutputFormatter:
+    """Formats and persists analysis output."""
+
+    BASE_FIELDS = [
+        "name",
+        "path",
+        "addons_priority",
+        "direct_count",
+        "accumulated_count",
+        "fully_expanded",
+        "cycle_involved",
+    ]
+
+    VERBOSE_FIELDS = [
+        "accumulated_deps",
+        "direct_deps",
+        "not_expanded_modules",
+        "architecture_violations",
+    ]
+
+    def _field_names(self, verbose):
+        if verbose:
+            return self.BASE_FIELDS + self.VERBOSE_FIELDS
+        return list(self.BASE_FIELDS)
+
+    def _module_rows(self, modules, verbose):
+        return [module.to_output_dict(verbose=verbose) for module in modules]
+
+    def _stringify_value(self, value):
+        if isinstance(value, bool):
+            return _bool_text(value)
+
+        if isinstance(value, list):
+            return ";".join(str(item) for item in value)
+
+        return str(value)
+
+    def format_table_text(self, modules, verbose):
+        field_names = self._field_names(verbose)
+        row_data = self._module_rows(modules, verbose)
+
+        rows = []
+        for row in row_data:
+            rows.append([self._stringify_value(row.get(field, "")) for field in field_names])
+
+        table_matrix = [field_names] + rows
+        widths = [0] * len(field_names)
+        for row in table_matrix:
+            for index, cell in enumerate(row):
+                widths[index] = max(widths[index], len(cell))
+
+        def format_line(cells):
+            padded = []
+            for index, cell in enumerate(cells):
+                padded.append(cell.ljust(widths[index]))
+            return " | ".join(padded)
+
+        lines = [format_line(field_names)]
+        lines.append("-+-".join("-" * width for width in widths))
+
+        for row in rows:
+            lines.append(format_line(row))
+
+        return "\n".join(lines)
+
+    def format_csv(self, modules, verbose):
+        field_names = self._field_names(verbose)
+        row_data = self._module_rows(modules, verbose)
+
+        buffer = _StringBuffer()
+        writer = csv.DictWriter(buffer, fieldnames=field_names)
+        writer.writeheader()
+
+        for row in row_data:
+            serialized = {}
+            for field in field_names:
+                serialized[field] = self._stringify_value(row.get(field, ""))
+            writer.writerow(serialized)
+
+        return buffer.getvalue()
+
+    def format_json(self, modules, verbose):
+        row_data = self._module_rows(modules, verbose)
+        return json.dumps(row_data, indent=2, ensure_ascii=False)
+
+    def save_or_print(self, content, output_path):
+        if output_path is not None:
+            output_path.write_text(content + ("\n" if not content.endswith("\n") else ""), encoding="utf-8")
+            return
+
+        if content.endswith("\n"):
+            sys.stdout.write(content)
+        else:
+            sys.stdout.write(content + "\n")
+
+
+class DependencyAnalyzer:
+    """Coordinates discovery, graph analysis, and output formatting."""
+
+    def __init__(
+        self,
+        addons_paths,
+        eval_paths,
+        output_format="table_text",
+        output_path=None,
+        verbose=False,
+    ):
+        self.addons_paths = addons_paths
+        self.eval_paths = eval_paths
+        self.output_format = output_format
+        self.output_path = output_path
+        self.verbose = verbose
+
+    def run(self):
+        parser = ManifestParser()
+        registry = ModuleRegistry(parser)
+        registry.load(self.addons_paths)
+
+        graph = DependencyGraph(registry)
+        graph.resolve()
+        graph.compute_transitive()
+
+        eval_modules = graph.get_eval_modules(self.eval_paths)
+        sorted_modules = graph.get_sorted(eval_modules)
+
+        formatter = OutputFormatter()
+        if self.output_format == "table_text":
+            output = formatter.format_table_text(sorted_modules, self.verbose)
+        elif self.output_format == "csv":
+            output = formatter.format_csv(sorted_modules, self.verbose)
+        else:
+            output = formatter.format_json(sorted_modules, self.verbose)
+
+        formatter.save_or_print(output, self.output_path)
+        return 0
+
+
+def _validate_paths(raw_value, argument_name):
+    raw_items = _split_csv_argument(raw_value)
+    if not raw_items:
+        raise ValueError(
+            f"{argument_name} must include at least one valid path"
+        )
+
+    paths = []
+    for raw_item in raw_items:
+        path = Path(raw_item).expanduser()
+        if not path.exists():
+            raise ValueError(f"Path does not exist in {argument_name}: {raw_item}")
+        if not path.is_dir():
+            raise ValueError(f"Path is not a directory in {argument_name}: {raw_item}")
+        paths.append(path.resolve())
+
+    return paths
+
+
+def build_cli_parser():
+    parser = argparse.ArgumentParser(
+        description="Analyze Odoo addon dependencies and output module ranking."
+    )
+    parser.add_argument(
+        "--addons-path",
+        required=True,
+        help="Comma-separated addons paths ordered by priority",
+    )
+    parser.add_argument(
+        "--eval-directory",
+        required=True,
+        help="Comma-separated module paths or directories to evaluate",
+    )
+    parser.add_argument(
+        "--format",
+        choices=["table_text", "csv", "json"],
+        default="table_text",
+        help="Output format",
+    )
+    parser.add_argument(
+        "--output-path",
+        default=None,
+        help="Optional file path for output",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Include accumulated_deps, direct_deps, not_expanded_modules and "
+            "architecture_violations"
+        ),
+    )
+    return parser
+
+
+def main(argv=None):
+    parser = build_cli_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        addons_paths = _validate_paths(args.addons_path, "--addons-path")
+        eval_paths = _validate_paths(args.eval_directory, "--eval-directory")
+    except ValueError as exc:
+        _error(str(exc))
+        return 1
+
+    output_path = None
+    if args.output_path:
+        output_path = Path(args.output_path).expanduser()
+
+    analyzer = DependencyAnalyzer(
+        addons_paths=addons_paths,
+        eval_paths=eval_paths,
+        output_format=args.format,
+        output_path=output_path,
+        verbose=args.verbose,
+    )
+
+    try:
+        return analyzer.run()
+    except OSError as exc:
+        _error(str(exc))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+
+# =============================================================================
+# DOCUMENTATION
+# =============================================================================
+#
+# OVERVIEW
+# --------
+# This script analyzes Odoo addon dependencies across multiple source paths.
+# It recursively discovers __manifest__.py files, builds a dependency graph,
+# validates architectural hierarchy rules, detects cycles, and outputs modules
+# sorted by accumulated (transitive) dependency count.
+#
+# HOW MODULE DISCOVERY WORKS
+# --------------------------
+# 1. Each --addons-path is scanned recursively for __manifest__.py files.
+# 2. The module name is the directory name containing __manifest__.py.
+# 3. Modules are registered by their absolute path (unique key) and by name.
+# 4. If the same module name exists in multiple --addons-path entries,
+#    the first occurrence wins (standard Odoo behavior).
+# 5. Each module receives an 'addons_priority' index (0 = first path, most
+#    independent; N = last path, most derived).
+#
+# DEPENDENCY RESOLUTION
+# ---------------------
+# - Direct dependencies are read from the 'depends' key in __manifest__.py.
+# - Dependencies are resolved by name using the first-match rule above.
+# - If a dependency name cannot be found in any --addons-path, it is marked
+#   as MISSING (see 'not_expanded_modules' in verbose output).
+# - Transitive (accumulated) dependencies are computed via DFS with
+#   memoization. This means if A depends on B and B depends on C, A's
+#   accumulated_deps will include both B and C.
+#
+# ARCHITECTURE VALIDATION (addons_priority)
+# -----------------------------------------
+# The script enforces a hierarchy: a module in addons_paths[i] must NOT
+# depend on a module in addons_paths[j] where j > i.
+# Example: odoo/core (priority 0) cannot depend on enterprise (priority 1).
+# Violations are reported as warnings and listed in
+# 'architecture_violations' per module.
+#
+# CYCLE DETECTION
+# ---------------
+# Uses Python's graphlib.TopologicalSorter to detect circular dependencies.
+# If cycles exist, affected modules are marked with 'cycle_involved: true'.
+# Cycles prevent full expansion, so 'fully_expanded' becomes false for all
+# modules in or downstream of the cycle.
+#
+# FULLY_EXPANDED FLAG
+# -------------------
+# A module is 'fully_expanded' only when:
+#   - It has NO missing dependencies (not_expanded_modules is empty)
+#   - It is NOT involved in or downstream of a cycle (cycle_involved is false)
+# If either condition fails, fully_expanded is false.
+#
+# CLI OPTIONS / FLAGS
+# -------------------
+# --addons-path       (required) Comma-separated list of addon source paths.
+#                     Order matters: index 0 is most independent/base layer.
+#
+# --eval-directory    (required) Comma-separated list of paths to evaluate.
+#                     Each path can be:
+#                       - A single module directory (contains __manifest__.py)
+#                       - A parent directory containing multiple modules
+#                     Only modules under these paths appear in the output,
+#                     but their dependencies are resolved against the full
+#                     --addons-path graph.
+#
+# --format            (optional) Output format: table_text, csv, or json.
+#                     Default: table_text
+#
+# --output-path       (optional) Write output to file instead of stdout.
+#
+# --verbose           (optional) Include detailed lists:
+#                     accumulated_deps, direct_deps, not_expanded_modules,
+#                     architecture_violations.
+#
+# WARNINGS (stderr)
+# -----------------
+# "Cannot read manifest '<path>': <exception>"
+#     The file exists but could not be read (permissions, encoding, etc.).
+#
+# "Invalid manifest syntax in '<path>': <exception>"
+#     The file is not valid Python literal syntax (e.g., malformed dict).
+#
+# "Manifest '<path>' is not a dict; skipping"
+#     The parsed content is not a dictionary (e.g., a list or string).
+#
+# "Manifest '<path>' has non-list depends; using empty list"
+#     The 'depends' key exists but is not a list (e.g., a string or None).
+#
+# "Manifest '<path>' has non-string dependency entry; skipping"
+#     An item inside 'depends' is not a string (e.g., an integer).
+#
+# "Module '<name>' has missing dependencies: <dep1>, <dep2>"
+#     The module declares dependencies that were not found in any
+#     --addons-path. These are listed in not_expanded_modules.
+#
+# "Dependency cycles detected involving: <mod1>, <mod2>"
+#     Circular dependencies were found between the listed modules.
+#
+# "Topological cycle path: <mod1> -> <mod2> -> ..."
+#     Shows the actual cycle path detected by graphlib.
+#
+# "No modules found in eval path '<path>'"
+#     The --eval-directory path contains no __manifest__.py files.
+#
+# "Eval module path '<path>' was not loaded from addons paths"
+#     The module exists in --eval-directory but was not discovered during
+#     --addons-path scanning (possibly excluded by first-match collision).
+#
+# ERRORS (stderr, non-zero exit)
+# --------------------------------
+# "--addons-path must include at least one valid path"
+#     The --addons-path argument is empty or only contains commas/spaces.
+#
+# "Path does not exist in --addons-path: <path>"
+#     One of the provided paths does not exist on the filesystem.
+#
+# "Path is not a directory in --addons-path: <path>"
+#     One of the provided paths exists but is not a directory.
+#
+# (Same three error variants apply to --eval-directory)
+#
+# OSError during execution
+#     An unexpected OS error occurred while writing output or reading files.
+#
+# OUTPUT FIELDS
+# -------------
+# name                Module name (directory name)
+# path                Absolute path to the module directory
+# addons_priority     Index in --addons-path (0 = first/base layer)
+# direct_count        Number of items in the manifest's 'depends' list
+#                     (includes missing/unresolved names)
+# accumulated_count   Number of resolved transitive dependencies
+# fully_expanded      true/false (see FULLY_EXPANDED section above)
+# cycle_involved      true/false (true if in or downstream of a cycle)
+#
+# When --verbose is used, these additional fields appear:
+# accumulated_deps    Alphabetically sorted list of resolved transitive deps
+# detailed_accumulated_deps
+#                     Dictionary grouping accumulated_deps by their source
+#                     addons path. The key is the absolute path string from
+#                     --addons-path where each dependency was discovered.
+#                     This allows you to see which layer (odoo, enterprise,
+#                     custom, etc.) each transitive dependency belongs to.
+#                     Example:
+#                       {
+#                         "/opt/odoo/addons": ["base", "web", "mail"],
+#                         "/opt/enterprise": ["web_enterprise"],
+#                         "/opt/custom": []
+#                       }
+# direct_deps         Alphabetically sorted list of resolved direct deps
+# not_expanded_modules Alphabetically sorted list of missing dependency names
+# architecture_violations
+#                     This field lists the modules that violate the hierarchy
+#                     rule of the addons paths.
+#
+#                     Rule: a module in addons_paths[i] CANNOT depend on a
+#                     module in addons_paths[j] where j > i.
+#
+#                     Why this matters: the --addons-path order represents
+#                     architectural layers from most fundamental to most
+#                     derived. A base layer (like Odoo core) should never
+#                     depend on a higher layer (like Enterprise or custom
+#                     addons) because that would create an inverted
+#                     dependency: the foundation needs something built on
+#                     top of it.
+#
+#                     Example:
+#                       --addons-path=/opt/odoo/addons,/opt/enterprise
+#
+#                       If a module in /opt/odoo/addons (priority 0) has:
+#                         'depends': ['sale_subscription']
+#                       And 'sale_subscription' lives in /opt/enterprise
+#                       (priority 1), then 'sale_subscription' will appear
+#                       in this module's architecture_violations list.
+#
+#                     This usually indicates:
+#                       - The --addons-path order is wrong
+#                       - A module was placed in the wrong directory
+#                       - A dependency should not exist between these layers
+#
+#
+# FORMAT NOTES
+# ------------
+# - table_text: Human-readable aligned table using spaces and pipes.
+# - csv: Standard CSV. List fields use semicolon (;) as internal separator
+#        to avoid conflicts with CSV commas.
+# - json: Pretty-printed JSON. Booleans are lowercase (true/false).
+#
+# EXAMPLES
+# --------
+# # Basic table output to stdout
+# python analyze_odoo_deps \
+#     --addons-path=/opt/odoo/addons,/opt/enterprise \
+#     --eval-directory=/opt/enterprise/sale_stock
+#
+# # JSON with full details, saved to file
+# python analyze_odoo_deps \
+#     --addons-path=/opt/odoo/addons,/opt/enterprise,/opt/custom \
+#     --eval-directory=/opt/custom \
+#     --format=json \
+#     --verbose \
+#     --output-path=/tmp/analysis.json
+#
+# # CSV output for spreadsheet import
+# python analyze_odoo_deps \
+#     --addons-path=/opt/odoo/addons,/opt/enterprise \
+#     --eval-directory=/opt/enterprise \
+#     --format=csv \
+#     --verbose \
+#     --output-path=/tmp/report.csv
+#
+# =============================================================================

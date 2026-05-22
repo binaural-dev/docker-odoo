@@ -289,7 +289,7 @@ if __name__ == "__main__":
     validate_parser.add_argument(
         "-p",
         "--path",
-        default="/home/odoo/src",
+        default="src",
         help="Ruta dentro del contenedor donde están los módulos (por defecto: /home/odoo/src)",
     )
 

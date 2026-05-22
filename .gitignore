@@ -10,3 +10,6 @@ docker-compose.generated.yml
 **/.vscode/
 venv
 __pycache__
+.ignore
+.atl
+openspec
