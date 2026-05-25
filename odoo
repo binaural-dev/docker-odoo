@@ -127,14 +127,13 @@ def run_bash():
     os.system(f"docker exec -u root -it {PROJECT_NAME} bash")
 
 
-def bash_update_modules(dbname: str, modules: str = "all"):
+def bash_update_modules(dbname: str, modules: str = "all", overwrite_translation: bool = False):
     PROJECT_NAME = os.getenv("PROJECT_NAME")
-    print(
-        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
-    )
-    os.system(
-        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
-    )
+    cmd = f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init --no-http --workers=0 -u {modules} -d {dbname}"
+    if overwrite_translation:
+        cmd += " --i18n-overwrite"
+    print(cmd)
+    os.system(cmd)
 
 
 def build_odoo(no_cache):
@@ -431,6 +430,13 @@ def main():
         default="all",
         help="Modules to update, default all. Use comma to separate multiple modules",
     )
+    update_parser.add_argument(
+        "-i18n",
+        "--overwrite-translation",
+        action="store_true",
+        dest="overwrite_translation",
+        help="Overwrite translations",
+    )
 
     update_parser = subparsers.add_parser("test", help="Execute Tests of a module")
     update_parser.add_argument("-d", required=True, help="Database name.")
@@ -469,7 +475,7 @@ def main():
         return True
 
     if args.action == "update":
-        bash_update_modules(args.d, args.m)
+        bash_update_modules(args.d, args.m, args.overwrite_translation)
         return True
 
     if args.action == "init":
