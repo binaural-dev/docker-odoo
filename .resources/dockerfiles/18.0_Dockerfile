@@ -20,27 +20,35 @@ RUN set -x ; \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 python3-dbfread python3-dev python3-gevent python3-pip python3-setuptools python3-wheel python3-markdown python3-mock python3-phonenumbers python3-websocket python3-google-auth libpq-dev python3-asn1crypto python3-jwt publicsuffix python3-xmlsec python3-aiosmtpd pylint \
     && rm -rf /var/lib/apt/lists/*
 
-#wkhtmltox
+# 1. Instalamos las dependencias base que sí existen en Jammy
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xfonts-75dpi \
+    xfonts-base \
+    libxrender1 \
+    libfontconfig1 \
+    libxext6 \
+    libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Instalación de la versión específica para ARM64 que no depende de librerías externas de Qt
 RUN ARCH="$(dpkg --print-architecture)"; \
-    if [ "$ARCH" = "amd64" ]; then \
-        echo "Installing package for AMD64"; \
-        curl -sSL https://nightly.odoo.com/deb/jammy/wkhtmltox_0.12.5-2.jammy_amd64.deb -o /tmp/wkhtml.deb; \
-        apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
-    elif [ "$ARCH" = "arm64" ]; then \
-        echo "Installing package for ARM64"; \
+    if [ "$ARCH" = "arm64" ]; then \
+        # Descargamos la versión corregida para Ubuntu Jammy ARM64
         curl -sSL https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_arm64.deb -o /tmp/wkhtml.deb; \
-        apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
     else \
-        echo "Architecture not supported for wkhtmltox: $ARCH"; \
+        # Versión para AMD64
+        curl -sSL https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_amd64.deb -o /tmp/wkhtml.deb; \
     fi; \
-    rm -rf /var/lib/apt/lists/* /tmp/wkhtml.deb
+    # Instalamos el .deb y forzamos a apt a buscar lo que falte
+    apt-get update && apt-get install -y /tmp/wkhtml.deb && rm /tmp/wkhtml.deb
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        libxrender1 libxext6 libfontconfig1 xfonts-75dpi xfonts-base wget && \
-    apt install -y wkhtmltopdf
+#RUN apt-get update && \
+#    apt-get install -y --no-install-recommends \
+#        libxrender1 libxext6 libfontconfig1 xfonts-75dpi xfonts-base wget && \
+#    apt install -y wkhtmltopdf
+
 
 # Install Node.js 20
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
@@ -82,9 +90,24 @@ RUN ARCH=$(dpkg --print-architecture) && \
         exit 1; \
     fi && \
     rm -rf /var/lib/apt/lists/* /tmp/chrome.deb
+    
+# Permitir instalación global
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
-# Install pip packages
-RUN python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==0.4.7 pandas coverage
+# Actualizar pip a la última versión para que maneje mejor las dependencias
+RUN python3 -m pip install --no-cache-dir --upgrade pip
 
+# Instalar los paquetes adicionales QUE NO ESTÁN en el core de Odoo
+RUN python3 -m pip install --no-cache-dir \
+    ebaysdk==2.1.5 \
+    pdf417gen==0.7.1 \
+    ruff==0.4.7 \
+    pandas \
+    coverage \
+    watchdog
+
+# OPCIÓN RECOMENDADA PARA ODOO 18:
+# En lugar de instalar TODO el requirements.txt (que ya instaló el .deb),
+# instala solo si falta algo específico o usa este comando para ignorar errores de conflictos:
 ADD --chown=odoo:odoo https://raw.githubusercontent.com/odoo/odoo/18.0/requirements.txt /tmp/requirements.txt
-RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt || true
