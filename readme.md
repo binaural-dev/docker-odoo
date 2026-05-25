@@ -283,5 +283,7 @@ Este script proporciona una interfaz de línea de comandos para administrar ento
 | `psql -d <dbname>` | Abre una consola PostgreSQL dentro del contenedor. | Consultas SQL o depuración de BD. |
 | `sync <repo> <branch> [--v]` | Sincroniza repositorios y submódulos. | Cambios de rama, actualizaciones o conflictos. |
 | `update -d <dbname> -m <modules>` | Actualiza módulos Odoo dentro del contenedor. | Desarrollo o despliegue de cambios. |
+| `test -d <dbname> -m <module>` | Ejecuta todas las pruebas unitarias de un modulo en una base de datos. | Desarrollo o pruebas QA de cambios. |
+
 
 ---
