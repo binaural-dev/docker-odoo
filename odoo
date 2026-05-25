@@ -136,6 +136,34 @@ def bash_update_modules(dbname: str, modules: str = "all", overwrite_translation
     os.system(cmd)
 
 
+def tester(database, module, conf_path="/etc/odoo/odoo.conf", port=0):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    POSTGRES_USER = os.getenv("POSTGRES_USER")
+    os.system(
+        f"""docker exec -it {PROJECT_NAME} {POSTGRES_USER} -c {conf_path} -d {database} -i {module} --test-enable --stop-after-init -p {port}"""
+    )
+
+
+def scaffold_module(module_name: str, repo_name: str = None):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    if not repo_name:
+        repo_name = os.getenv("MAIN_REPO_NAME")
+    if not repo_name:
+        print("\n❌ Error: No se ha especificado el repositorio donde crear el módulo.")
+        print("Puedes especificarlo de las siguientes maneras:")
+        print("  1. Usando el parámetro -r: ./odoo scaffold mi_modulo -r nombre_repositorio")
+        print("  2. Configurando la variable MAIN_REPO_NAME en tu archivo .env (ej: MAIN_REPO_NAME=repositorio)\n")
+        return False
+    dest_path = f"/home/odoo/src/custom/{repo_name}"
+    cmd = f"docker exec -it {PROJECT_NAME} odoo scaffold {module_name} {dest_path}"
+    print(cmd)
+    res = os.system(cmd)
+    if res == 0:
+        print(f"\n✅ Módulo '{module_name}' creado con éxito en '{dest_path}'")
+    else:
+        print(f"\n❌ Error al crear el módulo '{module_name}'")
+
+
 def build_odoo(no_cache):
     ODOO_VERSION = os.getenv("ODOO_VERSION")
     RESOURCES_DIR = "/.resources"
@@ -186,10 +214,10 @@ def build_odoo(no_cache):
         print(e)
     if no_cache:
         print("Construyendo Odoo sin caché...")
-        os.system("docker compose -f docker-compose.app.yml build --no-cache")
+        os.system("DOCKER_BUILDKIT=0 docker compose -f docker-compose.app.yml build --no-cache")
     else:
         print("Construyendo Odoo con caché...")
-        os.system("docker compose -f docker-compose.app.yml build")
+        os.system("DOCKER_BUILDKIT=0 docker compose -f docker-compose.app.yml build")
 
 
 def init_addons():
@@ -368,16 +396,11 @@ def psql(d):
     PROJECT_NAME = os.getenv("PROJECT_NAME")
     POSTGRES_USER = os.getenv("POSTGRES_USER")
     POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+    POSTGRES_HOST = os.getenv("POSTGRES_HOST")
     os.system(
-        f"docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {PROJECT_NAME}_db -U {POSTGRES_USER} -d {d}"
+        f"docker exec -it -e PGPASSWORD={POSTGRES_PASSWORD} {PROJECT_NAME} psql --host {POSTGRES_HOST} -U {POSTGRES_USER} -d {d}"
     )
 
-def tester(database, module, conf_path="/etc/odoo/odoo.conf", port=0):
-    PROJECT_NAME = os.getenv("PROJECT_NAME")
-    POSTGRES_USER = os.getenv("POSTGRES_USER")
-    os.system(
-        f"""docker exec -it {PROJECT_NAME} {POSTGRES_USER} -c {conf_path} -d {database} -i {module} --test-enable --stop-after-init -p {port}"""
-    )
 
 def main():
     # Cargar las variables de entorno
@@ -438,15 +461,24 @@ def main():
         help="Overwrite translations",
     )
 
-    update_parser = subparsers.add_parser("test", help="Execute Tests of a module")
-    update_parser.add_argument("-d", required=True, help="Database name.")
-    update_parser.add_argument(
+    test_parser = subparsers.add_parser("test", help="Execute Tests of a module")
+    test_parser.add_argument("-d", required=True, help="Database name.")
+    test_parser.add_argument(
         "-m",
         required=True,
         help="Module to execute the tests files.",
     )
-    update_parser.add_argument("-c", default="/etc/odoo/odoo.conf", help="Odoo conf path (optional).")
-    update_parser.add_argument("-p", default=0, help="Port where execute the tests (optional).")
+    test_parser.add_argument("-c", default="/etc/odoo/odoo.conf", help="Odoo conf path (optional).")
+    test_parser.add_argument("-p", default=0, help="Port where execute the tests (optional).")
+
+    scaffold_parser = subparsers.add_parser("scaffold", help="Create a new Odoo module using scaffold")
+    scaffold_parser.add_argument("name", help="Name of the new module")
+    scaffold_parser.add_argument(
+        "-r",
+        "--repo",
+        default=None,
+        help="Repository folder name inside src/custom (defaults to MAIN_REPO_NAME in .env)",
+    )
 
     # Parsear los argumentos
     args = parser.parse_args()
@@ -478,6 +510,14 @@ def main():
         bash_update_modules(args.d, args.m, args.overwrite_translation)
         return True
 
+    if args.action == "test":
+        tester(args.d, args.m, args.c, args.p)
+        return True
+
+    if args.action == "scaffold":
+        scaffold_module(args.name, args.repo)
+        return True
+
     if args.action == "init":
         init_addons()
         return True
@@ -500,10 +540,6 @@ def main():
 
     if args.action == "remove":
         remove_odoo()
-        return True
-
-    if args.action == "test":
-        tester(args.d, args.m, args.c, args.p)
         return True
 
     parser.print_help()
