@@ -82,14 +82,16 @@ def describe_days_until_cleanup(days_until_cleanup):
 
 
 def compute_cleanup_on(expires_on, delay_days=0):
-	return expires_on + datetime.timedelta(days=delay_days + 1)
+	return expires_on + datetime.timedelta(days=delay_days)
 
 
 def classify_cleanup_status(expires_on, cleanup_on, today):
 	if today < expires_on:
 		return "vigente"
 	if today == expires_on:
-		return "vence hoy"
+		if cleanup_on == expires_on:
+			return "eliminable hoy"
+		return "en gracia"
 	if today < cleanup_on:
 		return "en gracia"
 	if today == cleanup_on:
@@ -415,7 +417,7 @@ class DatabaseNameBuilder:
 		raw_base = cls.normalize_backup_base_name(zip_path)
 		if variant:
 			raw_base = f"{raw_base}__{variant}"
-		end_date = today + datetime.timedelta(days=retention_days)
+		end_date = today + datetime.timedelta(days=retention_days - 1)
 		resource_base_name = f"{raw_base}__exp_{cls._fmt_date(end_date)}"
 		local_zip_filename = f"{resource_base_name}.zip"
 		return resource_base_name, local_zip_filename, end_date
