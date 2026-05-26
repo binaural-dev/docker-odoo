@@ -422,11 +422,12 @@ class DatabaseNameBuilder:
 
 
 class OdooRestoreScriptRunner:
-	def __init__(self, restore_script_path, workdir=None, psql_bin=None, verbose=False):
+	def __init__(self, restore_script_path, workdir=None, psql_bin=None, verbose=False, db_prefix=None):
 		self.restore_script_path = restore_script_path
 		self.workdir = workdir
 		self.psql_bin = psql_bin
 		self.verbose = verbose
+		self.db_prefix = db_prefix
 
 	def run_restore(self, instance, zip_path, db_name):
 		if not os.path.isfile(self.restore_script_path):
@@ -449,6 +450,8 @@ class OdooRestoreScriptRunner:
 			cmd.extend(["--workdir", self.workdir])
 		if self.psql_bin:
 			cmd.extend(["--psql-bin", self.psql_bin])
+		if self.db_prefix:
+			cmd.extend(["--db-prefix", self.db_prefix])
 		if self.verbose:
 			cmd.append("--verbose")
 
@@ -459,9 +462,10 @@ class OdooRestoreScriptRunner:
 class ExpiredDatabaseCleaner:
 	FILESTORE_BASE_PATH = "/home/odoo/data/filestore"
 
-	def __init__(self, env_config, logger=None):
+	def __init__(self, env_config, logger=None, db_prefix=None):
 		self.env = env_config
 		self.logger = logger
+		self.db_prefix = db_prefix
 
 	def _run_container_command(self, command):
 		cmd = ["docker", "exec", self.env.container_name, *command]
@@ -502,6 +506,9 @@ class ExpiredDatabaseCleaner:
 		for db_name in candidates:
 			expires_on = DatabaseNameBuilder.parse_database_expiry(db_name)
 			if not expires_on:
+				continue
+
+			if self.db_prefix and not db_name.startswith(self.db_prefix):
 				continue
 
 			cleanup_on = compute_cleanup_on(expires_on, delay_days=0)
@@ -1029,6 +1036,11 @@ def parse_args():
 		action="store_true",
 		help="Habilita salida detallada en odoo_restore",
 	)
+	parser.add_argument(
+		"--db-prefix",
+		default="",
+		help="Prefijo opcional para el nombre de la base de datos restaurada",
+	)
 
 	args = parser.parse_args()
 
@@ -1102,7 +1114,7 @@ def main():
 
 	config = load_config(BASE_PATH)
 	env_config = EnvConfig.from_instance(config, args.instance)
-	expired_db_cleaner = ExpiredDatabaseCleaner(env_config=env_config, logger=logger)
+	expired_db_cleaner = ExpiredDatabaseCleaner(env_config=env_config, logger=logger, db_prefix=args.db_prefix)
 
 	if args.cleanup_dbs_only or args.cleanup_zips_only:
 		print("\nModo cleanup selectivo: se omite descarga y restore.\n")
@@ -1130,6 +1142,7 @@ def main():
 		workdir=args.workdir,
 		psql_bin=args.psql_bin,
 		verbose=args.verbose,
+		db_prefix=args.db_prefix,
 	)
 
 	orchestrator = RestoreSCPOrchestrator(
