@@ -696,10 +696,12 @@ class RestoreOrchestrator:
         psql_bin,
         verbose=False,
         cleanup_enabled=True,
+        db_prefix=None,
     ):
         self.zip_path = zip_path
         self.container = container_name
         self.new_db_name = new_db_name
+        self.db_prefix = db_prefix
         self.db_user = db_user
         self.db_host = db_host
         self.db_port = db_port
@@ -717,12 +719,19 @@ class RestoreOrchestrator:
         )
 
     def run(self):
+        effective_db_name = self.new_db_name
+        if self.db_prefix:
+            effective_db_name = f"{self.db_prefix}{self.new_db_name}"
+
         print("\n=== Iniciando proceso de restore ===\n")
         print(
             "Contexto de ejecución:\n"
             f"- Workdir base: {self.workspace.workdir_base}\n"
             f"- Carpeta temporal local: {self.workspace.local_restore_dir}\n"
         )
+        if self.db_prefix:
+            print(f"- Prefijo de base de datos: {self.db_prefix}")
+            print(f"- Nombre efectivo de base de datos: {effective_db_name}\n")
 
         extractor = ZipExtractor(
             zip_path=self.zip_path,
@@ -733,7 +742,7 @@ class RestoreOrchestrator:
 
         db_manager = DatabaseRestoreManager(
             container=self.container,
-            db_name=self.new_db_name,
+            db_name=effective_db_name,
             db_user=self.db_user,
             db_host=self.db_host,
             db_port=self.db_port,
@@ -752,7 +761,7 @@ class RestoreOrchestrator:
 
         local_filestore_path = extractor.extract_filestore()
         filestore_container_path = (
-            f"{self.container_filestore_base_path}/{self.new_db_name}"
+            f"{self.container_filestore_base_path}/{effective_db_name}"
         )
 
         filestore_manager = FilestoreRestoreManager(
@@ -766,7 +775,7 @@ class RestoreOrchestrator:
         if local_filestore_path:
             self.cleanup_manager.cleanup_local_path(local_filestore_path)
 
-        print(f"\n✔ Restore completado correctamente para la base '{self.new_db_name}'.\n")
+        print(f"\n✔ Restore completado correctamente para la base '{effective_db_name}'.\n")
 
     def cleanup(self):
         print("\n=== Cleanup de temporales ===")
@@ -826,6 +835,11 @@ def parse_args():
         help="Mostrar la salida completa de psql durante el restore",
         default=False,
     )
+    restore_parser.add_argument(
+        "--db-prefix",
+        default="",
+        help="Prefijo opcional para el nombre de la base de datos restaurada",
+    )
 
     return parser.parse_args(), parser
 
@@ -867,6 +881,7 @@ def main():
         psql_bin=psql_bin,
         verbose=args.verbose,
         cleanup_enabled=not args.no_cleanup,
+        db_prefix=args.db_prefix,
     )
     try:
         restorer.run()
