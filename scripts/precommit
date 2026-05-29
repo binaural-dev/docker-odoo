@@ -1,0 +1,281 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+import traceback
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import load_config, resolve_instance_config
+
+PRECOMMIT_REPO_URL = "git@github.com:binaural-dev/precommit-config-files.git"
+PRECOMMIT_REPO_BRANCH = "release"
+IGNORE_DIR = os.path.join(BASE_PATH, ".ignore")
+LOCAL_REPO_DIR = os.path.join(IGNORE_DIR, "precommit-config-files")
+
+
+def _precommit_cmd():
+    """Return the argv list to invoke pre-commit via the current interpreter."""
+    return [sys.executable, "-m", "pre_commit"]
+
+
+def _precommit_available():
+    """Check if pre-commit is importable/runnable by the current interpreter."""
+    try:
+        subprocess.run(_precommit_cmd() + ["--version"], capture_output=True, check=True)
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return False
+
+
+class PrecommitSetup:
+    @staticmethod
+    def ensure_installed():
+        if _precommit_available():
+            return
+        print("Instalando pre-commit...")
+        subprocess.run([sys.executable, "-m", "pip", "install", "pre-commit"], check=True)
+        if not _precommit_available():
+            raise RuntimeError(
+                "pre-commit se instaló pero no está disponible para este intérprete Python."
+            )
+
+    @staticmethod
+    def download_config():
+        os.makedirs(IGNORE_DIR, exist_ok=True)
+
+        if os.path.exists(LOCAL_REPO_DIR):
+            print("Actualizando precommit-config-files desde el remoto...")
+            subprocess.run(
+                ["git", "fetch", "origin", PRECOMMIT_REPO_BRANCH],
+                cwd=LOCAL_REPO_DIR, check=True,
+            )
+            subprocess.run(
+                ["git", "reset", "--hard", f"origin/{PRECOMMIT_REPO_BRANCH}"],
+                cwd=LOCAL_REPO_DIR, check=True,
+            )
+        else:
+            print(f"Clonando {PRECOMMIT_REPO_URL} en {LOCAL_REPO_DIR}...")
+            subprocess.run(
+                ["git", "clone", "--branch", PRECOMMIT_REPO_BRANCH,
+                 "--depth", "1", PRECOMMIT_REPO_URL, LOCAL_REPO_DIR],
+                check=True,
+            )
+
+        exclude = {".git", ".github", "README.md", "LICENSE"}
+
+        for item in os.listdir(LOCAL_REPO_DIR):
+            if item in exclude:
+                continue
+            src = os.path.join(LOCAL_REPO_DIR, item)
+            dst = os.path.join(BASE_PATH, item)
+            if os.path.isdir(src):
+                if os.path.exists(dst):
+                    shutil.rmtree(dst)
+                shutil.copytree(src, dst)
+            else:
+                shutil.copy2(src, dst)
+
+        subprocess.run(_precommit_cmd() + ["install"], cwd=BASE_PATH, check=True)
+
+    @classmethod
+    def setup(cls):
+        cls.ensure_installed()
+        cls.download_config()
+
+
+class ModuleResolver:
+    def __init__(self, config, instance):
+        self.instance = instance
+        self.addons_paths = self._get_addons_paths(config)
+
+    def _get_addons_paths(self, config):
+        if self.instance not in config["instances"]:
+            print(f"Error: instancia '{self.instance}' no existe")
+            sys.exit(1)
+
+        inst_conf = config["instances"][self.instance]
+        resolved = resolve_instance_config(inst_conf, config)
+        return resolved.get("addons", [])
+
+    @staticmethod
+    def _is_module(path):
+        return os.path.isdir(path) and os.path.exists(os.path.join(path, "__manifest__.py"))
+
+    def resolve_all(self):
+        modules = []
+        for addon_rel in self.addons_paths:
+            addon_path = os.path.join(BASE_PATH, addon_rel)
+            if not os.path.isdir(addon_path):
+                continue
+            for entry in sorted(os.listdir(addon_path)):
+                candidate = os.path.join(addon_path, entry)
+                if self._is_module(candidate):
+                    modules.append(candidate)
+        return modules
+
+    def resolve(self, module_names):
+        if any(m == "all" for m in module_names):
+            return self.resolve_all()
+
+        resolved = []
+        for mod in module_names:
+            mod = mod.strip()
+            if not mod:
+                continue
+
+            if "/" in mod:
+                full = os.path.join(BASE_PATH, mod)
+                if self._is_module(full):
+                    resolved.append(full)
+                else:
+                    print(
+                        f"Error: la ruta '{mod}' no es un módulo válido "
+                        f"(no se encontró __manifest__.py)"
+                    )
+                    sys.exit(1)
+            else:
+                found = []
+                for addon_rel in self.addons_paths:
+                    candidate = os.path.join(BASE_PATH, addon_rel, mod)
+                    if self._is_module(candidate):
+                        found.append(candidate)
+
+                if not found:
+                    print(
+                        f"Error: módulo '{mod}' no encontrado en los addons "
+                        f"de la instancia '{self.instance}'"
+                    )
+                    sys.exit(1)
+                elif len(found) > 1:
+                    print(f"Error: módulo '{mod}' encontrado en múltiples directorios:")
+                    for p in found:
+                        print(f"  - {os.path.relpath(p, BASE_PATH)}")
+                    print("Especificá la ruta completa para desambiguar (ej: 'integra-addons/{mod}')")
+                    sys.exit(1)
+                else:
+                    resolved.append(found[0])
+
+        return resolved
+
+
+class PrecommitRunner:
+    def __init__(self, instance, modules):
+        self.instance = instance
+        self.modules = modules
+
+    @staticmethod
+    def _collect_files(module_paths):
+        files = []
+        for mod_path in module_paths:
+            for root, dirs, filenames in os.walk(mod_path):
+                dirs[:] = [d for d in dirs if not d.startswith(".") and d != "__pycache__"]
+                for fn in filenames:
+                    files.append(os.path.join(root, fn))
+        return files
+
+    def run(self):
+        PrecommitSetup.setup()
+
+        config = load_config(BASE_PATH)
+        resolver = ModuleResolver(config, self.instance)
+        resolved_paths = resolver.resolve(self.modules)
+
+        if not resolved_paths:
+            print("No se resolvieron módulos para ejecutar pre-commit.")
+            return
+
+        print(f"\nEjecutando pre-commit sobre {len(resolved_paths)} módulo(s):")
+        for p in resolved_paths:
+            print(f"  - {os.path.relpath(p, BASE_PATH)}")
+        print()
+
+        target_files = self._collect_files(resolved_paths)
+        if not target_files:
+            print("No se encontraron archivos para procesar en los módulos especificados.")
+            return
+
+        subprocess.run(_precommit_cmd() + ["run", "--files"] + target_files, cwd=BASE_PATH, check=True)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Ejecuta pre-commit sobre módulos de Odoo para una instancia"
+    )
+    parser.add_argument(
+        "instance",
+        nargs="?",
+        help="Nombre de la instancia en instances.json. Si se omite, se preguntará interactivamente.",
+    )
+    parser.add_argument(
+        "-m", "--modules",
+        required=True,
+        help="Módulos separados por coma, o 'all' para todos. "
+             "Ej: modulo1,modulo2,integra-addons/modulo3",
+    )
+    return parser.parse_args()
+
+
+def prompt_instance(config):
+    instances = list(config["instances"].keys())
+    if not instances:
+        print("Error: no hay instancias definidas en instances.json")
+        sys.exit(1)
+
+    print("Instancias disponibles:")
+    for idx, name in enumerate(instances, start=1):
+        print(f"  {idx}. {name}")
+
+    while True:
+        try:
+            choice = input("Seleccioná una instancia (número o nombre): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelado.")
+            sys.exit(1)
+
+        if not choice:
+            continue
+
+        # Si es un número, buscar por índice
+        if choice.isdigit():
+            idx = int(choice) - 1
+            if 0 <= idx < len(instances):
+                return instances[idx]
+            print(f"Número inválido. Elegí entre 1 y {len(instances)}.")
+            continue
+
+        # Si es un nombre, validar que exista
+        if choice in instances:
+            return choice
+
+        print(f"'" + choice + "' no es una instancia válida. Probá de nuevo.")
+
+
+def main():
+    args = parse_args()
+    modules = [m.strip() for m in args.modules.split(",") if m.strip()]
+
+    instance = args.instance
+    if instance is None:
+        config = load_config(BASE_PATH)
+        instance = prompt_instance(config)
+        print(f"Instancia seleccionada: {instance}\n")
+
+    runner = PrecommitRunner(instance=instance, modules=modules)
+    runner.run()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.CalledProcessError as exc:
+        # pre-commit ya imprime su propio output; no ensuciamos la consola
+        raise SystemExit(exc.returncode)
+    except Exception as exc:
+        traceback.print_exc()
+        print(f"\nError: {exc}", file=sys.stderr)
+        raise SystemExit(1)

@@ -1,5 +1,4 @@
 
-
 [MASTER]
 load-plugins=pylint_odoo
 score=n
@@ -14,13 +13,6 @@ valid-odoo-versions=18.0
 
 [MESSAGES CONTROL]
 disable=all
-
-# This .pylintrc contains optional AND mandatory checks and is meant to be
-# loaded in an IDE to have it check everything, in the hope this will make
-# optional checks more visible to contributors who otherwise never look at a
-# green travis to see optional checks that failed.
-# .pylintrc-mandatory containing only mandatory checks is used the pre-commit
-# config as a blocking check.
 
 enable=anomalous-backslash-in-string,
     api-one-deprecated,
@@ -98,25 +90,7 @@ enable=anomalous-backslash-in-string,
     translation-contains-variable,
     translation-positional-used,
     website-manifest-key-not-valid-uri,
-    external-request-timeout,
-    missing-manifest-dependency,
-    too-complex,,
-    create-user-wo-reset-password,
-    dangerous-filter-wo-user,
-    file-not-used,
-    missing-newline-extrafiles,
-    no-utf8-coding-comment,
-    old-api7-method-defined,
-    unnecessary-utf8-coding-comment,
-    # messages that do not cause the lint step to fail
-    consider-merging-classes-inherited,
-    deprecated-module,
-    invalid-commit,
-    missing-readme,
-    odoo-addons-relative-import,
-    redefined-builtin,
-    manifest-external-assets
-
+    external-request-timeout
 
 [REPORTS]
 msg-template={path}:{line}: [{msg_id}({symbol}), {obj}] {msg}
