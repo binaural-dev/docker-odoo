@@ -127,14 +127,113 @@ def run_bash():
     os.system(f"docker exec -u root -it {PROJECT_NAME} bash")
 
 
-def bash_update_modules(dbname: str, modules: str = "all"):
+def bash_update_modules(dbname: str, modules: str = "all", overwrite_translation: bool = False):
     PROJECT_NAME = os.getenv("PROJECT_NAME")
-    print(
-        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
-    )
+    cmd = f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init --no-http --workers=0 -u {modules} -d {dbname}"
+    if overwrite_translation:
+        cmd += " --i18n-overwrite"
+    print(cmd)
+    os.system(cmd)
+
+
+def tester(database, module, conf_path="/etc/odoo/odoo.conf", port=0):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    POSTGRES_USER = os.getenv("POSTGRES_USER")
     os.system(
-        f"docker exec -u root -it {PROJECT_NAME} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+        f"""docker exec -it {PROJECT_NAME} {POSTGRES_USER} -c {conf_path} -d {database} -i {module} --test-enable --stop-after-init -p {port}"""
     )
+
+
+def scaffold_module(module_name: str, repo_name: str = None):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    if not repo_name:
+        repo_name = os.getenv("MAIN_REPO_NAME")
+    if not repo_name:
+        print("\n❌ Error: No se ha especificado el repositorio donde crear el módulo.")
+        print("Puedes especificarlo de las siguientes maneras:")
+        print("  1. Usando el parámetro -r: ./odoo scaffold mi_modulo -r nombre_repositorio")
+        print("  2. Configurando la variable MAIN_REPO_NAME en tu archivo .env (ej: MAIN_REPO_NAME=repositorio)\n")
+        return False
+    dest_path = f"/home/odoo/src/custom/{repo_name}"
+    cmd = f"docker exec -it {PROJECT_NAME} odoo scaffold {module_name} {dest_path}"
+    print(cmd)
+    res = os.system(cmd)
+    if res == 0:
+        print(f"\n✅ Módulo '{module_name}' creado con éxito en '{dest_path}'")
+    else:
+        print(f"\n❌ Error al crear el módulo '{module_name}'")
+
+
+def install_requirements(module_path: str, break_system: bool = False):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    if not PROJECT_NAME:
+        print("\n❌ Error: PROJECT_NAME no está definido en las variables de entorno.")
+        return False
+
+    script_dir = Path(__file__).resolve().parent
+
+    print(f"\n🔍 Buscando módulo '{module_path}'...")
+
+    # Intentar resolver la ruta directamente
+    path = Path(module_path)
+    if not path.is_absolute():
+        path = script_dir / path
+
+    requirements_file = path / "requirements.txt"
+
+    # Si no existe, buscamos el módulo de forma recursiva en la carpeta 'src'
+    if not requirements_file.exists():
+        src_dir = script_dir / "src"
+        if src_dir.exists():
+            found_paths = []
+            module_name = Path(module_path).name
+            for root, dirs, files in os.walk(src_dir):
+                if module_name in dirs:
+                    candidate_path = Path(root) / module_name
+                    if (candidate_path / "requirements.txt").exists():
+                        found_paths.append(candidate_path)
+
+            if len(found_paths) == 1:
+                path = found_paths[0]
+                requirements_file = path / "requirements.txt"
+                print(f"✅ Módulo localizado en: {path.relative_to(script_dir)}")
+            elif len(found_paths) > 1:
+                print(f"\n⚠️  Se encontraron múltiples módulos con el nombre '{module_name}':")
+                for fp in found_paths:
+                    print(f"  - {fp.relative_to(script_dir)}")
+                print("Por favor, especifica la ruta completa del módulo.")
+                return False
+
+    # Verificar de nuevo si encontramos el archivo
+    if not requirements_file.exists():
+        print(f"\n❌ Error: No se encontró 'requirements.txt' para el módulo '{module_path}'.")
+        print(f"Ruta buscada: {requirements_file}")
+        return False
+
+    # Asegurarnos de que esté dentro de 'src' para que el contenedor lo vea
+    try:
+        relative_to_src = requirements_file.relative_to(script_dir / "src")
+        container_req_path = f"/home/odoo/src/{relative_to_src}"
+    except ValueError:
+        print(f"\n❌ Error: El archivo 'requirements.txt' ({requirements_file}) debe estar dentro de la carpeta 'src' para ser visible desde el contenedor.")
+        return False
+
+    print(f"📄 Archivo detectado: {requirements_file.relative_to(script_dir)}")
+    print(f"🐳 Entrando al contenedor '{PROJECT_NAME}' para instalar dependencias con pip...")
+
+    cmd = f"docker exec -u root -it {PROJECT_NAME} pip install -r {container_req_path}"
+    if break_system:
+        cmd += " --break-system-packages"
+
+    print(f"💻 Comando ejecutado: {cmd}\n")
+    res = os.system(cmd)
+
+    if res == 0:
+        print(f"\n✅ Dependencias de '{module_path}' instaladas con éxito.")
+        return True
+    else:
+        print(f"\n❌ Hubo un problema al instalar las dependencias (Código de salida: {res}).")
+        return False
 
 
 def build_odoo(no_cache):
@@ -426,6 +525,48 @@ def main():
         default="all",
         help="Modules to update, default all. Use comma to separate multiple modules",
     )
+    update_parser.add_argument(
+        "-i18n",
+        "--overwrite-translation",
+        action="store_true",
+        dest="overwrite_translation",
+        help="Overwrite translations",
+    )
+
+    test_parser = subparsers.add_parser("test", help="Execute Tests of a module")
+    test_parser.add_argument("-d", required=True, help="Database name.")
+    test_parser.add_argument(
+        "-m",
+        required=True,
+        help="Module to execute the tests files.",
+    )
+    test_parser.add_argument("-c", default="/etc/odoo/odoo.conf", help="Odoo conf path (optional).")
+    test_parser.add_argument("-p", default=0, help="Port where execute the tests (optional).")
+
+    scaffold_parser = subparsers.add_parser("scaffold", help="Create a new Odoo module using scaffold")
+    scaffold_parser.add_argument("name", help="Name of the new module")
+    scaffold_parser.add_argument(
+        "-r",
+        "--repo",
+        default=None,
+        help="Repository folder name inside src/custom (defaults to MAIN_REPO_NAME in .env)",
+    )
+
+    pip_parser = subparsers.add_parser(
+        "pip-install",
+        aliases=["install-requirements"],
+        help="Instala los requerimientos de un módulo mediante pip en el contenedor."
+    )
+    pip_parser.add_argument(
+        "module",
+        help="Ruta del módulo (ej: src/third-party-addons/tk_security_master) o el nombre del módulo"
+    )
+    pip_parser.add_argument(
+        "--break-system",
+        action="store_true",
+        dest="break_system",
+        help="Permite la instalación forzada pasando el flag --break-system-packages a pip"
+    )
 
     # Parsear los argumentos
     args = parser.parse_args()
@@ -454,7 +595,19 @@ def main():
         return True
 
     if args.action == "update":
-        bash_update_modules(args.d, args.m)
+        bash_update_modules(args.d, args.m, args.overwrite_translation)
+        return True
+
+    if args.action == "test":
+        tester(args.d, args.m, args.c, args.p)
+        return True
+
+    if args.action == "scaffold":
+        scaffold_module(args.name, args.repo)
+        return True
+
+    if args.action in ["pip-install", "install-requirements"]:
+        install_requirements(args.module, args.break_system)
         return True
 
     if args.action == "init":
