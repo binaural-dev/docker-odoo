@@ -63,6 +63,53 @@ def _get_db_services(config, instance=None):
 
 
 # ============================================================
+# Validation
+# ============================================================
+
+
+def validate_instances(config):
+    """Validate instances.json for duplicate ports and valid configuration."""
+    ports_seen = {}
+    errors = []
+
+    # Check pgadmin port
+    if config.get("pgadmin", {}).get("enabled"):
+        port = config["pgadmin"].get("port")
+        if port:
+            ports_seen[port] = "pgadmin"
+
+    # Check instances
+    for name, inst in config.get("instances", {}).items():
+        # Check external_port
+        ext_port = inst.get("external_port")
+        if ext_port:
+            if ext_port in ports_seen:
+                errors.append(f"Puerto duplicado: {ext_port} usado por '{name}' y '{ports_seen[ext_port]}'")
+            else:
+                ports_seen[ext_port] = f"instancia {name} (external_port)"
+        
+        # Check longpolling_port
+        lp_port = inst.get("longpolling_port")
+        if lp_port:
+            if lp_port in ports_seen:
+                errors.append(f"Puerto duplicado: {lp_port} usado por '{name}' y '{ports_seen[lp_port]}'")
+            else:
+                ports_seen[lp_port] = f"instancia {name} (longpolling_port)"
+                
+        # Check db existence
+        db_name = inst.get("database")
+        if db_name and db_name not in config.get("databases", {}):
+            errors.append(f"La instancia '{name}' usa la base de datos '{db_name}' que no está definida en 'databases'.")
+
+    if errors:
+        print("\n\033[1;31m=== ❌ ERROR DE VALIDACIÓN EN instances.json ===\033[0m\n")
+        for err in errors:
+            print(f"  - {err}")
+        print()
+        sys.exit(1)
+
+
+# ============================================================
 # Commands
 # ============================================================
 
@@ -782,6 +829,9 @@ def main():
     sync_p.add_argument("b", nargs="?", default=None, help="Branch (opcional)")
     sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
 
+    # validate-instances
+    subparsers.add_parser("validate-instances", help="Valida el archivo instances.json")
+
     args = parser.parse_args()
 
     if not args.action:
@@ -790,6 +840,9 @@ def main():
 
     # Load config for all commands
     config = load_config(BASE_PATH)
+
+    # Validate instances.json
+    validate_instances(config)
 
     actions_with_instance = {
         "start", "stop", "restart", "logs", "remove", 
@@ -844,6 +897,8 @@ def main():
         if args.b is None:
             args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
         sync(args.r, args.b, show=args.v)
+    elif args.action == "validate-instances":
+        print("\n\033[1;32m✅ El archivo instances.json es válido.\033[0m\n")
 
 
 if __name__ == "__main__":
