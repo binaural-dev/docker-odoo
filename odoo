@@ -236,6 +236,10 @@ def remove_odoo(config, instance=None):
 
     print("\n🛑 Eliminado.\n")
 
+    do_restart = input("¿Deseas levantar el entorno nuevamente en blanco? (S/n): ")
+    if do_restart.lower() != "n":
+        start_odoo(config, instance)
+
 
 def run_bash(config, instance):
     """Open bash in an Odoo instance container."""
