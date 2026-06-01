@@ -528,8 +528,9 @@ class DatabaseRestoreManager:
             f"Creando nueva base de datos '{self.db_name}' dentro del contenedor {self.container}"
         )
 
+        safe_db = self.db_name.replace("'", "''")
         check_cmd = self._psql_command(
-            "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{self.db_name}'"
+            "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{safe_db}'"
         )
 
         result = subprocess.run(check_cmd, capture_output=True, text=True)
