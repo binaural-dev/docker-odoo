@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import click
 from pathlib import Path
@@ -32,8 +33,20 @@ def run_command(instance, d, l, password):
 
     pw = f"'{password}'"
     login = f"'{l}'"
-    os.system(
-        f'docker exec -it -e PGPASSWORD={db_password} {container} psql --host {db_host} --port {db_port} -U {db_user} -d {d} -c "update res_users set password = {pw}, login = {login} where id=2;"'
+    env = os.environ.copy()
+    env["PGPASSWORD"] = db_password
+    subprocess.run(
+        [
+            "docker", "exec",
+            container,
+            "psql",
+            "--host", db_host,
+            "--port", str(db_port),
+            "-U", db_user,
+            "-d", d,
+            "-c", f"update res_users set password = {pw}, login = {login} where id=2;"
+        ],
+        env=env,
     )
 
 
