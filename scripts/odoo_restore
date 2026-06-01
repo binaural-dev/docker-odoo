@@ -180,11 +180,11 @@ class CleanupManager:
         try:
             if os.path.isdir(path):
                 print(f"Eliminando carpeta temporal local: {path}")
-                subprocess.run(["rm", "-rf", path], check=True)
+                shutil.rmtree(path, ignore_errors=True)
             else:
                 print(f"Eliminando archivo temporal local: {path}")
-                subprocess.run(["rm", "-f", path], check=True)
-        except subprocess.CalledProcessError as exc:
+                os.remove(path)
+        except OSError as exc:
             print(f"Advertencia: no se pudo limpiar el path local {path}: {exc}")
             return
 
