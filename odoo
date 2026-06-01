@@ -268,7 +268,7 @@ def bash_update_modules(config, instance, dbname, modules="all"):
     """Update Odoo modules in an instance."""
     print(f"\n\033[1;35m=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     container = f"odoo-{instance}"
-    cmd = ["docker", "exec", "-u", "root", "-it", container, "odoo", "--stop-after-init", "-p", "90", "--workers=0", "-u", modules, "-d", dbname]
+    cmd = ["docker", "exec", "-u", "root", container, "odoo", "--stop-after-init", "-p", "90", "--workers=0", "-u", modules, "-d", dbname]
     print(" ".join(cmd))
     subprocess.run(cmd)
 
@@ -376,7 +376,7 @@ def reset_password(config, instance, dbname, login, password):
     login_str = f"'{login}'"
     print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
     subprocess.run(
-        ["docker", "exec", "-it", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname, "-c", f"update res_users set password = {pw} where login = {login_str};"],
+        ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname, "-c", f"update res_users set password = {pw} where login = {login_str};"],
         env={**os.environ, "PGPASSWORD": db_password},
     )
     print("✅ Contraseña actualizada.\n")
