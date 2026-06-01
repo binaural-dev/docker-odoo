@@ -585,15 +585,16 @@ class ExpiredDatabaseCleaner:
 		if not DatabaseNameBuilder.EXPIRY_PATTERN.match(db_name):
 			raise ValueError(f"Nombre de base fuera de patrón permitido: {db_name}")
 
+		safe_db = db_name.replace("'", "''").replace('"', '""')
 		terminate_sql = (
 			"SELECT pg_terminate_backend(pid) "
 			"FROM pg_stat_activity "
-			f"WHERE datname = '{db_name}' "
+			f"WHERE datname = '{safe_db}' "
 			"AND pid <> pg_backend_pid();"
 		)
 		self._run_psql(terminate_sql)
 
-		self._run_psql(f'DROP DATABASE IF EXISTS "{db_name}";')
+		self._run_psql(f'DROP DATABASE IF EXISTS "{safe_db}";')
 
 	def drop_filestore(self, db_name):
 		if not DatabaseNameBuilder.EXPIRY_PATTERN.match(db_name):
