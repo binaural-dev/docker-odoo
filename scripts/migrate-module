@@ -1,25 +1,39 @@
 #!/usr/bin/env python3
 
-import os
 import subprocess
+import sys
 import click
-from dotenv import load_dotenv
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import load_config
 
 
 @click.command()
+@click.argument("instance")
 @click.option("-d", required=True, help="Database name")
-@click.option("-i", required=True, help="Module to migrate")
-@click.option("-c", required=True, help="Container name")
-def run_command(d, i, c):
-    load_dotenv()
+@click.option("-i", required=True, help="Module to install/migrate")
+def run_command(instance, d, i):
+    config = load_config(BASE_PATH)
+    if instance not in config["instances"]:
+        click.echo(f"Error: instancia '{instance}' no existe")
+        sys.exit(1)
+
+    inst_conf = config["instances"][instance]
+    odoo_version = inst_conf["odoo_version"]
+    major = odoo_version.split(".")[0]
+    container = f"odoo-{instance}"
+    load_modules = f"base,web,views_migration_{major}"
+
     subprocess.run(
         [
             "docker", "exec",
-            c,
+            container,
             "odoo",
             "-i", i,
             "-d", d,
-            "--load=base,web,views_migration_17",
+            f"--load={load_modules}",
             "--http-port=9999",
             "--workers=0",
             "--stop-after-init",
