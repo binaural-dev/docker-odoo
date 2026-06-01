@@ -166,13 +166,14 @@ class LifecycleCsvLogger:
 
 
 class SCPDownloadManager:
-	def __init__(self, host, user, remote_path, download_path, port=22, identity_file=None):
+	def __init__(self, host, user, remote_path, download_path, port=22, identity_file=None, scp_timeout=300):
 		self.host = host
 		self.user = user
 		self.remote_path = remote_path
 		self.download_path = download_path
 		self.port = port
 		self.identity_file = identity_file
+		self.scp_timeout = scp_timeout
 
 	@staticmethod
 	def _normalize_remote_dir(remote_path):
@@ -268,7 +269,13 @@ class SCPDownloadManager:
 			print(f"Sobrescribiendo ZIP local existente: {local_zip_path}")
 		print(f"Ruta local de descarga: {local_zip_path}\n")
 
-		subprocess.run(cmd, check=True)
+		try:
+			subprocess.run(cmd, check=True, timeout=self.scp_timeout)
+		except subprocess.TimeoutExpired:
+			raise RuntimeError(
+				f"La descarga SCP excedió el tiempo límite de {self.scp_timeout}s "
+				f"desde {self.user}@{self.host}:{remote_zip_path}"
+			)
 
 		if not os.path.isfile(local_zip_path):
 			raise FileNotFoundError(f"No se encontró el ZIP descargado: {local_zip_path}")
@@ -971,6 +978,12 @@ def parse_args():
 		help="Ruta local de la clave privada SSH para SCP",
 	)
 	parser.add_argument(
+		"--scp-timeout",
+		type=int,
+		default=300,
+		help="Tiempo máximo en segundos para la descarga SCP (default: 300)",
+	)
+	parser.add_argument(
 		"--force-download",
 		action="store_true",
 		help=(
@@ -1140,6 +1153,7 @@ def main():
 		download_path=args.download_path,
 		port=args.port,
 		identity_file=args.identity_file,
+		scp_timeout=args.scp_timeout,
 	)
 
 	restore_runner = OdooRestoreScriptRunner(
