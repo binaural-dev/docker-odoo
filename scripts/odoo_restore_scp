@@ -190,6 +190,8 @@ class SCPDownloadManager:
 
 	def _build_ssh_command(self, remote_command):
 		cmd = ["ssh", "-p", str(self.port)]
+		cmd.extend(["-o", "StrictHostKeyChecking=accept-new"])
+		cmd.extend(["-o", "UserKnownHostsFile=/dev/null"])
 		if self.identity_file:
 			cmd.extend(["-i", self.identity_file])
 		cmd.extend([f"{self.user}@{self.host}", remote_command])
