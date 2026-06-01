@@ -223,17 +223,19 @@ class DumpManager:
         print(f"Usando pg_dump para generar dump: {self.pg_dump_bin}")
 
         inner_cmd = (
-            f"if [ -f '{self.dump_path}' ]; then "
-            f"echo 'ERROR: El archivo {self.dump_path} ya existe.' >&2; exit 1; "
+            f"if [ -f {shlex.quote(self.dump_path)} ]; then "
+            f"echo 'ERROR: El archivo {shlex.quote(self.dump_path)} ya existe.' >&2; exit 1; "
             f"else "
-            f"{pg_dump_bin} -h {self.db_host} -p {self.db_port} -U {self.db_user} "
-            f"-F p -d {self.db_name} -f {self.dump_path} -b; "
+            f"{pg_dump_bin} -h {shlex.quote(self.db_host)} -p {shlex.quote(self.db_port)} "
+            f"-U {shlex.quote(self.db_user)} "
+            f"-F p -d {shlex.quote(self.db_name)} -f {shlex.quote(self.dump_path)} -b; "
             f"fi"
         )
 
         overwriting_cmd = (
-            f"{pg_dump_bin} -h {self.db_host} -p {self.db_port} -U {self.db_user} "
-            f"-F p -d {self.db_name} -f {self.dump_path} -b; "
+            f"{pg_dump_bin} -h {shlex.quote(self.db_host)} -p {shlex.quote(self.db_port)} "
+            f"-U {shlex.quote(self.db_user)} "
+            f"-F p -d {shlex.quote(self.db_name)} -f {shlex.quote(self.dump_path)} -b; "
         )
 
         dump_cmd = overwriting_cmd if self.overwrite_existing else inner_cmd
