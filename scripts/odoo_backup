@@ -406,6 +406,7 @@ class CleanupManager:
         cleanup_enabled=True,
         confirm=False,
         linux_dump_user=None,
+        non_interactive=False,
     ):
         self.container = container_name
         self.local_paths_to_cleanup = local_paths_to_cleanup
@@ -413,8 +414,12 @@ class CleanupManager:
         self.cleanup_enabled = cleanup_enabled
         self.confirm = confirm
         self.linux_dump_user = linux_dump_user
+        self.non_interactive = non_interactive
 
     def _confirm(self, message):
+
+        if self.non_interactive:
+            return True
 
         if not self.confirm:
             return True
@@ -565,6 +570,7 @@ class OdooBackupOrchestrator:
         cleanup_enabled=True,
         overwrite_existing=False,
         verbose=True,
+        non_interactive=False,
     ):
         self.verbose = verbose
 
@@ -622,6 +628,7 @@ class OdooBackupOrchestrator:
             ],
             cleanup_enabled=self.cleanup_enabled,
             linux_dump_user=self.linux_dump_user,
+            non_interactive=non_interactive,
         )
 
         if self.container_filestore_path:
@@ -831,6 +838,7 @@ def backup(
     with_filestore=True,
     cleanup=True,
     verbose=True,
+    non_interactive=False,
 ):
     odoo_backup_orchestrator = OdooBackupOrchestrator(
         container_name=container_name,
@@ -849,6 +857,7 @@ def backup(
         target_pg_major=target_pg_major,
         pg_dump_bin=pg_dump_bin,
         verbose=verbose,
+        non_interactive=non_interactive,
     )
 
     odoo_backup_orchestrator.run_backup()
@@ -921,6 +930,13 @@ def main():
         default=False,
     )
 
+    backup_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="No preguntar confirmación para limpieza (útil en CI/automation)",
+        default=False,
+    )
+
     args = parser.parse_args()
 
     if args.run != "backup":
@@ -989,6 +1005,7 @@ def main():
         with_filestore=not args.no_fs,
         cleanup=not args.no_cleanup,
         verbose=args.verbose,
+        non_interactive=args.yes,
     )
 
 
