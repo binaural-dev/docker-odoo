@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import click
@@ -31,8 +32,8 @@ def run_command(instance, d, l, password):
     db_port = db_conf["port"]
     container = f"odoo-{instance}"
 
-    pw = f"'{password}'"
-    login = f"'{l}'"
+    safe_pw = shlex.quote(password)
+    safe_login = shlex.quote(l)
     env = os.environ.copy()
     env["PGPASSWORD"] = db_password
     subprocess.run(
@@ -44,7 +45,7 @@ def run_command(instance, d, l, password):
             "--port", str(db_port),
             "-U", db_user,
             "-d", d,
-            "-c", f"update res_users set password = {pw}, login = {login} where id=2;"
+            "-c", f"update res_users set password = {safe_pw} where login = {safe_login};"
         ],
         env=env,
     )
