@@ -110,7 +110,10 @@ class DumpManager:
 
         if verify_result.returncode != 0:
             print(
-                f"No se encontró {target_bin}. Instalando {package_name} dentro del contenedor {self.container}..."
+                "\n*** WARNING: Se instalará software dentro del contenedor de producción ***\n"
+                f"  Paquete: {package_name}\n"
+                f"  Contenedor: {self.container}\n"
+                "  Esto requiere acceso a internet desde el contenedor y permisos root.\n"
             )
             install_cmd = [
                 "docker",
@@ -125,7 +128,23 @@ class DumpManager:
                 f"{package_name}",
             ]
 
-            subprocess.run(install_cmd, check=True)
+            try:
+                install_result = subprocess.run(install_cmd, capture_output=True, text=True)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Error al ejecutar apt-get install {package_name} en {self.container}: {exc}\n"
+                    f"Sugerencia: instalá manualmente con:\n"
+                    f"  docker exec -u root {self.container} apt-get install -y {package_name}"
+                ) from exc
+
+            if install_result.returncode != 0:
+                stderr = (install_result.stderr or "").strip()
+                print(f"*** ERROR: Falló la instalación de {package_name} ***\n  Detalle: {stderr}")
+                raise RuntimeError(
+                    f"Falló la instalación de {package_name} dentro del contenedor {self.container}.\n"
+                    f"Sugerencia: instalá manualmente con:\n"
+                    f"  docker exec -u root {self.container} apt-get install -y {package_name}"
+                )
 
         detected_major = self._get_pg_dump_major_in_container(pg_dump_bin=target_bin)
         if detected_major != self.target_pg_major:
