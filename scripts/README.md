@@ -1,64 +1,214 @@
-# Scripts disponibles
+# Scripts de administración
 
-Esta carpeta agrupa utilidades para administrar y probar tu entorno de Odoo. La mayoría de los scripts hacen uso de las variables definidas en `.env`.
+Utilidades para administrar entornos Odoo multi-instancia.
+La mayoría obtiene la configuración de `instances.json` a través de
+`.resources/generators/config_loader.py`.
 
+---
 
+## `coverage` — Test runner con cobertura y DB temporal automática
 
-
-## Ejemplos de uso de scripts
-
-### migrate-module
-
-```sh
-./scripts/migrate-module -d <base_de_datos> -i <modulo> -c <contenedor_odoo>
-```
-Migra el módulo `<modulo>` en la base de datos `<base_de_datos>` dentro del contenedor `<contenedor_odoo>`.
-
-### odoo-backups.sh
+Ejecuta tests de Odoo con `coverage`, crea una DB temporal y la elimina al
+finalizar. Falla si la cobertura no alcanza el threshold.
 
 ```sh
-./scripts/odoo-backups.sh -c <config.json> -s <servers.json> -d <base_de_datos>
-```
-Genera un respaldo de la base de datos `<base_de_datos>` y su filestore, utilizando los archivos de configuración y servidores indicados.
+./scripts/coverage \
+  --odoo_container=<nombre> \
+  --modules=<path_relativo> \
+  --test_tags=<tags>
 
-### odoo-pw
+# Opcional:
+  --db_name=<db>       # nombre fijo (default: cov_YYYYMMDD_HHMMSS)
+  --keep-db            # no borrar la DB temp al salir
+  --threshold=<pct>    # mínimo de cobertura (default: 70)
+  --help
+```
+
+---
+
+## `migrate-module` — Migración de módulo con vistas (OCA views_migration)
+
+Instala un módulo cargando el helper de migración de vistas de OCA.
+La versión de `views_migration_{major}` se resuelve automáticamente desde
+`odoo_version` en `instances.json`.
 
 ```sh
-./scripts/odoo-pw -d <base_de_datos> -l <usuario>
+./scripts/migrate-module <instancia> -d <base_de_datos> -i <modulo>
 ```
-Restablece la contraseña del usuario `<usuario>` en la base de datos `<base_de_datos>`, usando el valor de `RESET_PASSWORD` definido en el archivo `.env`. Si no se indica usuario, se restablece la contraseña de `admin`.
 
-### odoo-test
+> Antes requería `-c <contenedor>`. Ahora toma el nombre de instancia
+> y resuelve contenedor y versión desde instances.json.
+
+---
+
+## `odoo_active_users` — Usuarios online por base de datos
+
+Cuenta usuarios activos en cada base de datos Odoo según la tabla
+`bus_presence`, con ventana de tiempo configurable.
 
 ```sh
-./scripts/odoo-test
+./scripts/odoo_active_users <instancia> \
+  [--minutes 2] \
+  [--include-portal] \
+  [--host <host>] [--port <port>] [--user <user>] [--password <pass>]
 ```
-Ejecuta pruebas automatizadas sobre la base de datos `testing`.
 
-### odoo-update
+---
+
+## `odoo_backup` — Backup de DB + filestore en ZIP
+
+Genera dump SQL + filestore y los empaqueta en un ZIP. Valida
+compatibilidad de versiones de pg_dump y puede instalar el cliente
+correcto automáticamente.
 
 ```sh
-./scripts/odoo-update -d <base_de_datos> <modulo1> <modulo2> ...
+./scripts/odoo_backup backup <instancia> \
+  --target-pg-major <major> \
+  [-d <base>] [-p <path>] \
+  [--pg-dump-bin <bin>] \
+  [--no-fs] [--no-cleanup] [--verbose] [--yes]
 ```
-Actualiza los módulos indicados (`<modulo1>`, `<modulo2>`, etc.) en la base de datos `<base_de_datos>`.
 
-### restore_db.sh
+- Sin `-d`: lista bases disponibles para elegir interactivamente.
+- `--yes`: salta confirmaciones de limpieza (útil en CI/cron).
+- `--target-pg-major`: ej. `16`, `17`. Si pg_dump no coincide, intenta
+  instalar `postgresql-client-{major}` dentro del contenedor.
+
+---
+
+## `odoo_cron_backup` — Backup periódico con rotación
+
+Wrapper de `odoo_backup` para ejecución programada (cron). Corre el backup
+y luego limpia los ZIPs más antiguos manteniendo solo los N más recientes.
 
 ```sh
-./scripts/restore_db.sh -b <contenedor_db> -o <contenedor_odoo> -f <archivo_backup> -d <base_de_datos>
+./scripts/odoo_cron_backup \
+  --instance <instancia> \
+  --database <base> \
+  --backups-folder-path <path> \
+  --backup-script-path <path> \
+  --target-pg-major <major> \
+  --log-file-path <path> \
+  --log-retention-days <días> \
+  --cleanup-keep <cantidad> \
+  [--pg-dump-bin <bin>] [--no-fs] [--no-log-cleanup]
 ```
-Restaura el backup `<archivo_backup>` en la base de datos `<base_de_datos>`, utilizando los contenedores `<contenedor_db>` (PostgreSQL) y `<contenedor_odoo>` (Odoo).
 
+---
 
-### Notas y solución de problemas para restore_db.sh
+## `odoo_restore` — Restaurar backup desde ZIP
 
-- El script detecta automáticamente si el archivo es `.dump` (usa `pg_restore`) o `.sql` (usa `psql`).
-- Si ves el error `pg_restore: error: unsupported version (1.16) in file header`, significa que tu contenedor de PostgreSQL es más antiguo que la versión usada para generar el dump.  
-  **Solución:** actualiza la variable `POSTGRES_IMG_VERSION` en tu `.env` y recrea el contenedor.
-- Si después de restaurar y actualizar todos los módulos aparecen errores como `KeyError: 'ir.http'` en Odoo, puede deberse a:
-  - Un dump incompleto o corrupto.
-  - Falta de módulos en el path de addons.
-  - Incompatibilidad entre la versión de Odoo y la base restaurada.
-- Para máxima compatibilidad, solicita siempre el dump en formato SQL plano (`.sql`).
-- Si tienes problemas, revisa los logs de restauración y asegúrate de que todos los módulos requeridos estén presentes en el entorno.
+Extrae dump.sql + filestore de un ZIP de backup, valida compatibilidad
+de versiones de PostgreSQL, crea la DB y restaura.
 
+```sh
+./scripts/odoo_restore restore <instancia> \
+  -z <archivo.zip> -d <nueva_db> \
+  [--workdir <path>] [--psql-bin <bin>] \
+  [--db-prefix <prefijo>] \
+  [--verbose] [--no-cleanup]
+```
+
+- Valida que la versión del servidor origen no sea más nueva que la
+  del destino.
+- Si la major de psql no coincide con la del dump, intenta instalar
+  el cliente correcto automáticamente.
+- `--db-prefix`: agrega un prefijo al nombre de la DB restaurada.
+
+---
+
+## `odoo_restore_scp` — Descarga SCP + restore + limpieza de expirados
+
+Descarga un ZIP de backup desde un servidor remoto por SCP, ejecuta
+`odoo_restore`, y opcionalmente limpia bases de datos y ZIPs vencidos
+según su nombre (sufijo `__exp_YYYY_MM_DD`).
+
+```sh
+./scripts/odoo_restore_scp \
+  --instance <instancia> \
+  --host <host> --user <usuario> \
+  --remote-path <ruta_remota> \
+  --download-path <ruta_local> \
+  [--port 22] [--identity-file <clave>] \
+  [--retention-days <días>] \
+  [--long-retention-days <días>] \
+  [--force-download] \
+  [--cleanup-dbs] [--cleanup-zips] \
+  [--delay-cleanup-zips-days <días>] \
+  [--log-csv-path <path>] \
+  [--workdir <path>] [--psql-bin <bin>] \
+  [--db-prefix <prefijo>] [--scp-timeout 300] \
+  [--verbose]
+```
+
+- `--cleanup-dbs-only` / `--cleanup-zips-only`: modo solo limpieza.
+- Sin `--retention-days`: restaura sin fecha de vencimiento.
+- Con `--long-retention-days`: crea una segunda copia con retención
+  extendida y sufijo `__long`.
+- Soporta formato de backup de `odoo_backup` para resolución automática
+  del ZIP más reciente desde carpeta remota.
+
+---
+
+## `odoo-pw` — Restablecer contraseña de usuario
+
+Conecta a PostgreSQL vía el contenedor Odoo y actualiza la contraseña
+de un usuario.
+
+```sh
+./scripts/odoo-pw <instancia> -d <base> \
+  [-l admin] [-p admin]
+```
+
+- `-l`: login del usuario (default: `admin`)
+- `-p`, `--password`: nueva contraseña (default: `admin`)
+
+---
+
+## `odoo-test` — Ejecutar tests Odoo
+
+```sh
+./scripts/odoo-test <instancia> \
+  [-d testing] \
+  [-t /binaural_accountant] \
+  [-i l10n_ve,binaural_rate,account,binaural_accountant]
+```
+
+---
+
+## `odoo-update` — Actualizar módulos
+
+```sh
+./scripts/odoo-update <instancia> -d <base> <modulo1> [<modulo2> ...]
+```
+
+- Sin módulos: actualiza `all`.
+- `--load-language <locale>`: idioma a cargar (default: no se carga).
+
+---
+
+## `odoo-upgrade-manifest` — Bump de versión en manifests
+
+Asistente interactivo para incrementar el número de versión en
+`__manifest__.py` de módulos Odoo.
+
+```sh
+./scripts/odoo-upgrade-manifest
+```
+
+Escanea `src/` y `src/custom/`, permite seleccionar carpeta padre y
+módulos a actualizar.
+
+---
+
+## `precommit` — Ejecutar pre-commit sobre módulos de una instancia
+
+Clona/actualiza la configuración de pre-commit desde el repo interno y
+ejecuta los hooks sobre los módulos de una instancia.
+
+```sh
+./scripts/precommit <instancia> -m <modulos>
+```
+
+- `-m all`: todos los módulos de la instancia.
+- `-m modulo1,modulo2,integra-addons/modulo3`: rutas exactas.
