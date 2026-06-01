@@ -33,9 +33,9 @@ COMPOSE_FILE = "docker-compose.generated.yml"
 
 def _docker_compose(*args):
     """Run docker compose with the generated file."""
-    cmd = f"docker compose -f {COMPOSE_FILE} {' '.join(args)}"
-    print(cmd)
-    os.system(cmd)
+    cmd = ["docker", "compose", "-f", COMPOSE_FILE, *args]
+    print(" ".join(cmd))
+    subprocess.run(cmd)
 
 
 def _get_instance_services(config, instance=None):
@@ -160,9 +160,13 @@ def start_odoo(config, instance=None):
 
     # Fix filestore permissions
     for svc in odoo_services:
-        os.system(
-            f"docker exec -u root {svc} chown -R odoo:odoo /home/odoo/data 2>/dev/null || true"
-        )
+        try:
+            subprocess.run(
+                ["docker", "exec", "-u", "root", svc, "chown", "-R", "odoo:odoo", "/home/odoo/data"],
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
 
     # Start nginx
     print("\n→ Iniciando Nginx...")
@@ -230,7 +234,7 @@ def remove_odoo(config, instance=None):
     if instance:
         odoo_services = _get_instance_services(config, instance)
         for svc in odoo_services:
-            os.system(f"docker compose -f {COMPOSE_FILE} rm -s -v -f {svc}")
+            subprocess.run(["docker", "compose", "-f", COMPOSE_FILE, "rm", "-s", "-v", "-f", svc])
     else:
         _docker_compose("down", "-v", "--remove-orphans")
 
@@ -245,7 +249,11 @@ def run_bash(config, instance):
     """Open bash in an Odoo instance container."""
     container = f"odoo-{instance}"
     # Check if container is running
-    is_running = os.popen(f"docker inspect -f '{{{{.State.Running}}}}' {container} 2>/dev/null").read().strip()
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", container],
+        capture_output=True, text=True, stderr=subprocess.DEVNULL,
+    )
+    is_running = result.stdout.strip()
     
     if is_running != "true":
         print(f"\n❌ El contenedor '{container}' no está en ejecución.")
@@ -253,16 +261,16 @@ def run_bash(config, instance):
         return
 
     print(f"\n\033[1;34m=== 🐚 ABRIENDO BASH EN: {instance.upper()} ===\033[0m\n")
-    os.system(f"docker exec -u root -it {container} bash")
+    subprocess.run(["docker", "exec", "-u", "root", "-it", container, "bash"])
 
 
 def bash_update_modules(config, instance, dbname, modules="all"):
     """Update Odoo modules in an instance."""
     print(f"\n\033[1;35m=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     container = f"odoo-{instance}"
-    cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
-    print(cmd)
-    os.system(cmd)
+    cmd = ["docker", "exec", "-u", "root", "-it", container, "odoo", "--stop-after-init", "-p", "90", "--workers=0", "-u", modules, "-d", dbname]
+    print(" ".join(cmd))
+    subprocess.run(cmd)
 
 
 def show_logs(config, instance=None):
@@ -294,9 +302,13 @@ def fix_filestore(config, instance=None):
     services = _get_instance_services(config, instance)
     for svc in services:
         print(f"→ Corrigiendo permisos en {svc}...")
-        os.system(
-            f"docker exec -u root {svc} chown -R odoo:odoo /home/odoo/data 2>/dev/null || true"
-        )
+        try:
+            subprocess.run(
+                ["docker", "exec", "-u", "root", svc, "chown", "-R", "odoo:odoo", "/home/odoo/data"],
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
     print("\n✅ Permisos corregidos.\n")
 
 
@@ -311,9 +323,9 @@ def psql_connect(config, instance, dbname):
     container = f"odoo-{instance}"
 
     print(f"\n\033[1;34m=== 🐘 CONECTANDO PSQL A: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
-    os.system(
-        f"docker exec -it -e PGPASSWORD={db_password} {container} "
-        f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname}"
+    subprocess.run(
+        ["docker", "exec", "-it", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname],
+        env={**os.environ, "PGPASSWORD": db_password},
     )
 
 
@@ -363,10 +375,9 @@ def reset_password(config, instance, dbname, login, password):
     pw = f"'{password}'"
     login_str = f"'{login}'"
     print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
-    
-    # Update password for the specific login
-    os.system(
-        f'docker exec -it -e PGPASSWORD={db_password} {container} psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -c "update res_users set password = {pw} where login = {login_str};"'
+    subprocess.run(
+        ["docker", "exec", "-it", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname, "-c", f"update res_users set password = {pw} where login = {login_str};"],
+        env={**os.environ, "PGPASSWORD": db_password},
     )
     print("✅ Contraseña actualizada.\n")
 
