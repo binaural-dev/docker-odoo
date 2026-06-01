@@ -14,8 +14,9 @@ from generators.config_loader import load_config
 @click.command()
 @click.argument("instance")
 @click.option("-d", required=True, help="Database name")
+@click.option("--load-language", default=None, help="Language module to load")
 @click.argument("modules", nargs=-1)
-def run_command(instance, d, modules):
+def run_command(instance, d, load_language, modules):
     config = load_config(BASE_PATH)
     if instance not in config["instances"]:
         click.echo(f"Error: instancia '{instance}' no existe")
@@ -23,17 +24,17 @@ def run_command(instance, d, modules):
 
     container = f"odoo-{instance}"
     modules_str = ','.join(modules) if modules else 'all'
-    subprocess.run(
-        [
-            "docker", "exec",
-            container,
-            "odoo",
-            "-d", d,
-            "-u", modules_str,
-            "--load-language=es_VE",
-            "--stop-after-init",
-        ],
-    )
+    cmd = [
+        "docker", "exec",
+        container,
+        "odoo",
+        "-d", d,
+        "-u", modules_str,
+    ]
+    if load_language:
+        cmd.append(f"--load-language={load_language}")
+    cmd.append("--stop-after-init")
+    subprocess.run(cmd)
 
 
 if __name__ == "__main__":
