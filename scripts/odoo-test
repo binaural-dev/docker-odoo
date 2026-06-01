@@ -23,8 +23,9 @@ def run_command(instance, d, test_tags, install):
 
     container = f"odoo-{instance}"
     command = (
-        f"docker exec -uodoo -it {container} odoo --test-tags {test_tags} -d {d} -i {install} "
-        "--without-demo=True --stop-after-init -c /home/odoo/.config/odoo.conf"
+        f"docker exec -uodoo {container} odoo --test-tags {test_tags} -d {d} -i {install} "
+        "--without-demo=True --stop-after-init -c /home/odoo/.config/odoo.conf "
+        "--http-port=19999 --workers 0"
     )
     os.system(command)
 
