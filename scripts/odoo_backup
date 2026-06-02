@@ -7,6 +7,15 @@ import os
 import sys
 import re
 import shlex
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import (
+    load_config,
+    resolve_db_config,
+    get_db_host,
+)
 
 
 # ============================================================
@@ -736,22 +745,7 @@ class OdooBackupOrchestrator:
         return self.backup_zip_path
 
 
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    raise SystemExit(
-        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
-    )
-
-
-def get_required_env(name):
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Falta la variable de entorno requerida: {name}")
-    return value
-
-
-def list_databases(db_user, db_host, db_port):
+def list_databases(container_name, db_user, db_host, db_port, db_password):
     """
     Devuelve una lista de bases de datos disponibles en PostgreSQL dentro del contenedor Docker.
     Usa psql -lqt para obtenerlas.
@@ -760,7 +754,7 @@ def list_databases(db_user, db_host, db_port):
     cmd = [
         "docker",
         "exec",
-        get_required_env("PROJECT_NAME"),
+        container_name,
         "psql",
         f"-U{db_user}",
         f"-h{db_host}",
@@ -772,7 +766,7 @@ def list_databases(db_user, db_host, db_port):
         cmd,
         capture_output=True,
         text=True,
-        env={**os.environ, "PGPASSWORD": get_required_env("POSTGRES_PASSWORD")},
+        env={**os.environ, "PGPASSWORD": db_password},
     )
 
     if result.returncode != 0:
@@ -824,7 +818,11 @@ def normalize_pg_major(value):
 
 
 def backup(
+    container_name,
     db_name,
+    db_user,
+    db_host,
+    db_port,
     backup_path,
     target_pg_major,
     pg_dump_bin="pg_dump",
@@ -833,11 +831,11 @@ def backup(
     verbose=True,
 ):
     odoo_backup_orchestrator = OdooBackupOrchestrator(
-        container_name=get_required_env("PROJECT_NAME"),
+        container_name=container_name,
         db_name=db_name,
-        db_user=get_required_env("POSTGRES_USER"),
-        db_host=get_required_env("POSTGRES_HOST"),
-        db_port=get_required_env("EXTERNAL_PORT_POSTGRES"),
+        db_user=db_user,
+        db_host=db_host,
+        db_port=db_port,
         backup_local_path=backup_path,
         db_container_dump_path="/tmp/odoo_database_backups/dump.sql",
         container_filestore_path=(
@@ -855,7 +853,7 @@ def backup(
 
 
 def main():
-    load_dotenv()
+    default_backup_path = os.path.join(BASE_PATH, "backups")
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(script_dir)
@@ -869,6 +867,18 @@ def main():
         "backup", help="Backup de la base de datos y filestore de Odoo"
     )
     
+    backup_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Mostrar mensajes detallados durante el backup",
+        default=False,
+    )
+
+    backup_parser.add_argument(
+        "instance",
+        help="Nombre de la instancia de Odoo",
+    )
+
     backup_parser.add_argument(
         "--verbose",
         action="store_true",
@@ -926,13 +936,30 @@ def main():
         parser.print_help()
         sys.exit(1)
 
+    config = load_config(BASE_PATH)
+    instance = args.instance
+
+    if instance not in config["instances"]:
+        print(f"Error: instancia '{instance}' no existe")
+        sys.exit(1)
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    db_port = db_conf["port"]
+    container_name = f"odoo-{instance}"
+
     # Si no se pasa -d, listar y elegir
     if not args.d:
         print("No se especificó base de datos. Listando bases disponibles...")
         dbs = list_databases(
-            db_user=get_required_env("POSTGRES_USER"),
-            db_host=get_required_env("POSTGRES_HOST"),
-            db_port=get_required_env("EXTERNAL_PORT_POSTGRES"),
+            container_name=container_name,
+            db_user=db_user,
+            db_host=db_host,
+            db_port=db_port,
+            db_password=db_password,
         )
         if not dbs:
             print("No se encontraron bases de datos.")
@@ -960,7 +987,11 @@ def main():
         sys.exit(1)
 
     backup(
+        container_name=container_name,
         db_name=args.d,
+        db_user=db_user,
+        db_host=db_host,
+        db_port=db_port,
         backup_path=args.p,
         target_pg_major=target_pg_major,
         pg_dump_bin=pg_dump_bin,

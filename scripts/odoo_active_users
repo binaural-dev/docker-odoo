@@ -21,9 +21,18 @@ usuarios portal/share.
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 import psycopg2
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import (
+    load_config,
+    resolve_db_config,
+    get_db_host,
+)
 
 
 def env_required(name: str) -> str:
@@ -108,20 +117,24 @@ def main():
         description="Cuenta usuarios online por base de datos Odoo"
     )
     parser.add_argument(
+        "instance",
+        help="Nombre de la instancia de Odoo",
+    )
+    parser.add_argument(
         "--host",
-        help="Host de Postgres (fallback: POSTGRES_HOST)",
+        help="Host de Postgres (override: usa instances.json por defecto)",
     )
     parser.add_argument(
         "--port",
-        help="Puerto de Postgres (fallback: EXTERNAL_PORT_POSTGRES)",
+        help="Puerto de Postgres (override: usa instances.json por defecto)",
     )
     parser.add_argument(
         "--user",
-        help="Usuario de Postgres (fallback: POSTGRES_USER)",
+        help="Usuario de Postgres (override: usa instances.json por defecto)",
     )
     parser.add_argument(
         "--password",
-        help="Password de Postgres (fallback: POSTGRES_PASSWORD)",
+        help="Password de Postgres (override: usa instances.json por defecto)",
     )
     parser.add_argument(
         "--minutes",
@@ -136,10 +149,23 @@ def main():
     )
     args = parser.parse_args()
 
-    host = arg_or_env(args.host, "POSTGRES_HOST")
-    port = arg_or_env(args.port, "EXTERNAL_PORT_POSTGRES")
-    user = arg_or_env(args.user, "POSTGRES_USER")
-    password = arg_or_env(args.password, "POSTGRES_PASSWORD")
+    config = load_config(BASE_PATH)
+    instance = args.instance
+    if instance not in config["instances"]:
+        print(f"Error: instancia '{instance}' no existe")
+        sys.exit(1)
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    db_port = db_conf["port"]
+
+    host = args.host or db_host
+    port = args.port or str(db_port)
+    user = args.user or db_user
+    password = args.password or db_password
 
     try:
         admin_conn = psycopg2.connect(

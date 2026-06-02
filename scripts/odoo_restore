@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import importlib
 import os
 import shutil
 import subprocess
@@ -11,6 +10,14 @@ import uuid
 import zipfile
 import re
 from pathlib import Path, PurePosixPath
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import (
+    load_config,
+    resolve_db_config,
+    get_db_host,
+)
 
 
 class RestoreWorkspace:
@@ -705,10 +712,12 @@ class RestoreOrchestrator:
         psql_bin,
         verbose=False,
         cleanup_enabled=True,
+        db_prefix=None,
     ):
         self.zip_path = zip_path
         self.container = container_name
         self.new_db_name = new_db_name
+        self.db_prefix = db_prefix
         self.db_user = db_user
         self.db_host = db_host
         self.db_port = db_port
@@ -726,12 +735,19 @@ class RestoreOrchestrator:
         )
 
     def run(self):
+        effective_db_name = self.new_db_name
+        if self.db_prefix:
+            effective_db_name = f"{self.db_prefix}{self.new_db_name}"
+
         print("\n=== Iniciando proceso de restore ===\n")
         print(
             "Contexto de ejecución:\n"
             f"- Workdir base: {self.workspace.workdir_base}\n"
             f"- Carpeta temporal local: {self.workspace.local_restore_dir}\n"
         )
+        if self.db_prefix:
+            print(f"- Prefijo de base de datos: {self.db_prefix}")
+            print(f"- Nombre efectivo de base de datos: {effective_db_name}\n")
 
         extractor = ZipExtractor(
             zip_path=self.zip_path,
@@ -742,7 +758,7 @@ class RestoreOrchestrator:
 
         db_manager = DatabaseRestoreManager(
             container=self.container,
-            db_name=self.new_db_name,
+            db_name=effective_db_name,
             db_user=self.db_user,
             db_host=self.db_host,
             db_port=self.db_port,
@@ -761,7 +777,7 @@ class RestoreOrchestrator:
 
         local_filestore_path = extractor.extract_filestore()
         filestore_container_path = (
-            f"{self.container_filestore_base_path}/{self.new_db_name}"
+            f"{self.container_filestore_base_path}/{effective_db_name}"
         )
 
         filestore_manager = FilestoreRestoreManager(
@@ -775,7 +791,7 @@ class RestoreOrchestrator:
         if local_filestore_path:
             self.cleanup_manager.cleanup_local_path(local_filestore_path)
 
-        print(f"\n✔ Restore completado correctamente para la base '{self.new_db_name}'.\n")
+        print(f"\n✔ Restore completado correctamente para la base '{effective_db_name}'.\n")
 
     def cleanup(self):
         print("\n=== Cleanup de temporales ===")
@@ -784,21 +800,16 @@ class RestoreOrchestrator:
         print("Limpieza completada.\n")
 
 
-def load_dotenv_if_available():
-    try:
-        dotenv_module = importlib.import_module("dotenv")
-    except ModuleNotFoundError:
-        return
-
-    dotenv_module.load_dotenv()
-
-
 def parse_args():
     parser = argparse.ArgumentParser(description="Script de restore de Odoo")
     subparsers = parser.add_subparsers(dest="run", help="Acciones")
 
     restore_parser = subparsers.add_parser(
         "restore", help="Restaurar una base de datos y filestore desde un ZIP"
+    )
+    restore_parser.add_argument(
+        "instance",
+        help="Nombre de la instancia de Odoo",
     )
     restore_parser.add_argument(
         "-z",
@@ -840,19 +851,16 @@ def parse_args():
         help="Mostrar la salida completa de psql durante el restore",
         default=False,
     )
+    restore_parser.add_argument(
+        "--db-prefix",
+        default="",
+        help="Prefijo opcional para el nombre de la base de datos restaurada",
+    )
 
     return parser.parse_args(), parser
 
 
-def get_required_env(name):
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Falta la variable de entorno requerida: {name}")
-    return value
-
-
 def main():
-    load_dotenv_if_available()
     args, parser = parse_args()
 
     if args.run != "restore":
@@ -863,21 +871,34 @@ def main():
     if not psql_bin:
         raise RuntimeError("El flag --psql-bin no puede estar vacío")
 
+    config = load_config(BASE_PATH)
+    instance = args.instance
+    if instance not in config["instances"]:
+        print(f"Error: instancia '{instance}' no existe")
+        sys.exit(1)
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_port = db_conf["port"]
+    container_name = f"odoo-{instance}"
+
     restorer = RestoreOrchestrator(
         zip_path=args.z,
-        container_name=get_required_env("PROJECT_NAME"),
+        container_name=container_name,
         new_db_name=args.d,
-        db_user=get_required_env("POSTGRES_USER"),
-        db_host=get_required_env("POSTGRES_HOST"),
-        db_port=get_required_env("EXTERNAL_PORT_POSTGRES"),
+        db_user=db_user,
+        db_host=db_host,
+        db_port=db_port,
         container_filestore_base_path="/home/odoo/data/filestore",
         linux_dump_user="dump_user",
         workdir_base=args.workdir,
         psql_bin=psql_bin,
         verbose=args.verbose,
         cleanup_enabled=not args.no_cleanup,
+        db_prefix=args.db_prefix,
     )
-
     try:
         restorer.run()
     finally:

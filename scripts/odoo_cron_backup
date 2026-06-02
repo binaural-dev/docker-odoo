@@ -10,6 +10,7 @@ from datetime import datetime
 class BackupConfig:
 	def __init__(
     	self,
+    	instance: str,
     	database: str,
 		backups_folder_path: str,
 		script_path: str,
@@ -21,6 +22,7 @@ class BackupConfig:
 		cleanup_keep: int,
 		pg_dump_bin: str = None,
     ):
+		self.instance = instance
 		self.database = database
 		self.backups_folder_path = backups_folder_path
 		self.script_path = script_path
@@ -36,6 +38,7 @@ class BackupConfig:
 		command = [
 			self.script_path,
 			"backup",
+			self.instance,
 			"-d",
 			self.database,
 			"-p",
@@ -279,6 +282,7 @@ class BackupRunner:
 
 def build_parser():
 	parser = argparse.ArgumentParser(description="Ejecuta backup periodico y limpia backups antiguos")
+	parser.add_argument("--instance", required=True, help="Nombre de la instancia de Odoo a respaldar")
 	parser.add_argument("--database", required=True, help="Nombre de la base de datos Odoo a respaldar")
 	parser.add_argument("--backups-folder-path", required=True, help="Ruta de la carpeta donde se guardan los backups")
 	parser.add_argument("--backup-script-path", required=True, help="Ruta al script ejecutable de backup")
@@ -304,7 +308,8 @@ if __name__ == "__main__":
 	args = build_parser().parse_args()
 
 	config = BackupConfig(
-	    	database = args.database,
+    		instance = args.instance,
+    		database = args.database,
 		backups_folder_path = args.backups_folder_path,
 		script_path = args.backup_script_path,
 		target_pg_major = args.target_pg_major,
