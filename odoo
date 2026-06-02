@@ -164,6 +164,78 @@ def scaffold_module(module_name: str, repo_name: str = None):
         print(f"\n❌ Error al crear el módulo '{module_name}'")
 
 
+def install_requirements(module_path: str, break_system: bool = False):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    if not PROJECT_NAME:
+        print("\n❌ Error: PROJECT_NAME no está definido en las variables de entorno.")
+        return False
+
+    script_dir = Path(__file__).resolve().parent
+
+    print(f"\n🔍 Buscando módulo '{module_path}'...")
+
+    # Intentar resolver la ruta directamente
+    path = Path(module_path)
+    if not path.is_absolute():
+        path = script_dir / path
+
+    requirements_file = path / "requirements.txt"
+
+    # Si no existe, buscamos el módulo de forma recursiva en la carpeta 'src'
+    if not requirements_file.exists():
+        src_dir = script_dir / "src"
+        if src_dir.exists():
+            found_paths = []
+            module_name = Path(module_path).name
+            for root, dirs, files in os.walk(src_dir):
+                if module_name in dirs:
+                    candidate_path = Path(root) / module_name
+                    if (candidate_path / "requirements.txt").exists():
+                        found_paths.append(candidate_path)
+
+            if len(found_paths) == 1:
+                path = found_paths[0]
+                requirements_file = path / "requirements.txt"
+                print(f"✅ Módulo localizado en: {path.relative_to(script_dir)}")
+            elif len(found_paths) > 1:
+                print(f"\n⚠️  Se encontraron múltiples módulos con el nombre '{module_name}':")
+                for fp in found_paths:
+                    print(f"  - {fp.relative_to(script_dir)}")
+                print("Por favor, especifica la ruta completa del módulo.")
+                return False
+
+    # Verificar de nuevo si encontramos el archivo
+    if not requirements_file.exists():
+        print(f"\n❌ Error: No se encontró 'requirements.txt' para el módulo '{module_path}'.")
+        print(f"Ruta buscada: {requirements_file}")
+        return False
+
+    # Asegurarnos de que esté dentro de 'src' para que el contenedor lo vea
+    try:
+        relative_to_src = requirements_file.relative_to(script_dir / "src")
+        container_req_path = f"/home/odoo/src/{relative_to_src}"
+    except ValueError:
+        print(f"\n❌ Error: El archivo 'requirements.txt' ({requirements_file}) debe estar dentro de la carpeta 'src' para ser visible desde el contenedor.")
+        return False
+
+    print(f"📄 Archivo detectado: {requirements_file.relative_to(script_dir)}")
+    print(f"🐳 Entrando al contenedor '{PROJECT_NAME}' para instalar dependencias con pip...")
+
+    cmd = f"docker exec -u root -it {PROJECT_NAME} pip install -r {container_req_path}"
+    if break_system:
+        cmd += " --break-system-packages"
+
+    print(f"💻 Comando ejecutado: {cmd}\n")
+    res = os.system(cmd)
+
+    if res == 0:
+        print(f"\n✅ Dependencias de '{module_path}' instaladas con éxito.")
+        return True
+    else:
+        print(f"\n❌ Hubo un problema al instalar las dependencias (Código de salida: {res}).")
+        return False
+
+
 def build_odoo(no_cache):
     ODOO_VERSION = os.getenv("ODOO_VERSION")
     RESOURCES_DIR = "/.resources"
@@ -480,6 +552,22 @@ def main():
         help="Repository folder name inside src/custom (defaults to MAIN_REPO_NAME in .env)",
     )
 
+    pip_parser = subparsers.add_parser(
+        "pip-install",
+        aliases=["install-requirements"],
+        help="Instala los requerimientos de un módulo mediante pip en el contenedor."
+    )
+    pip_parser.add_argument(
+        "module",
+        help="Ruta del módulo (ej: src/third-party-addons/tk_security_master) o el nombre del módulo"
+    )
+    pip_parser.add_argument(
+        "--break-system",
+        action="store_true",
+        dest="break_system",
+        help="Permite la instalación forzada pasando el flag --break-system-packages a pip"
+    )
+
     # Parsear los argumentos
     args = parser.parse_args()
 
@@ -516,6 +604,10 @@ def main():
 
     if args.action == "scaffold":
         scaffold_module(args.name, args.repo)
+        return True
+
+    if args.action in ["pip-install", "install-requirements"]:
+        install_requirements(args.module, args.break_system)
         return True
 
     if args.action == "init":

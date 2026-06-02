@@ -34,6 +34,13 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
     fi; \
         rm -rf /var/lib/apt/lists/* /tmp/wkhtml.deb
 
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libxrender1 libxext6 libfontconfig1 xfonts-75dpi xfonts-base wget && \
+    apt install -y wkhtmltopdf
+
 # Install Node.js 20
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs

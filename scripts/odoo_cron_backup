@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import re
+import subprocess
+from datetime import datetime
+
+
+class BackupConfig:
+	def __init__(
+    	self,
+    	database: str,
+		backups_folder_path: str,
+		script_path: str,
+		target_pg_major: str,
+		include_filestore: bool,
+		log_file_path: str,
+		enable_log_cleanup: bool,
+		log_retention_days: int,
+		cleanup_keep: int,
+		pg_dump_bin: str = None,
+    ):
+		self.database = database
+		self.backups_folder_path = backups_folder_path
+		self.script_path = script_path
+		self.target_pg_major = target_pg_major
+		self.pg_dump_bin = pg_dump_bin
+		self.include_filestore = include_filestore
+		self.log_file_path = log_file_path
+		self.enable_log_cleanup = enable_log_cleanup
+		self.log_retention_days = log_retention_days
+		self.cleanup_keep = cleanup_keep
+
+	def build_command(self):
+		command = [
+			self.script_path,
+			"backup",
+			"-d",
+			self.database,
+			"-p",
+			self.backups_folder_path,
+			"--target-pg-major",
+			str(self.target_pg_major),
+		]
+		if self.pg_dump_bin:
+			command.extend(["--pg-dump-bin", self.pg_dump_bin])
+		if not self.include_filestore:
+			command.append("--no-fs")
+		return command
+
+
+class BackupProcessLogger:
+	CREATION_PREFIX = "Fecha de creacion del archivo de logs: "
+	CREATION_FORMAT = "%Y-%m-%d %I:%M:%S %p"
+	PROCESS_FORMAT = "%Y-%m-%d-%I:%M:%S %p"
+
+	def __init__(self, log_file_path: str, database: str, enable_cleanup: bool, retention_days: int):
+		self.log_file_path = log_file_path
+		self.database = database
+		self.enable_cleanup = enable_cleanup
+		self.retention_days = retention_days
+
+	def initialize(self):
+		self._ensure_log_directory()
+		creation_date = self._load_or_create_creation_date()
+
+		if self.enable_cleanup and self._should_reset_log(creation_date):
+			creation_date = datetime.now()
+			self._reset_log_file(creation_date)
+
+		self._write_process_header()
+
+	def close(self):
+		self.log("-------PROCESO DE BACKUP TERMINADO--------")
+
+	def log(self, message: str = ""):
+		message = message or ""
+		for line in message.splitlines() or [""]:
+			print(line)
+			with open(self.log_file_path, "a", encoding="utf-8") as log_file:
+				log_file.write(f"{line}\n")
+
+	def _ensure_log_directory(self):
+		log_directory = os.path.dirname(self.log_file_path)
+		if log_directory:
+			os.makedirs(log_directory, exist_ok=True)
+
+	def _load_or_create_creation_date(self):
+		if not os.path.exists(self.log_file_path):
+			creation_date = datetime.now()
+			self._reset_log_file(creation_date)
+			return creation_date
+
+		with open(self.log_file_path, "r", encoding="utf-8") as log_file:
+			content = log_file.read()
+
+		lines = content.splitlines()
+		if lines and lines[0].startswith(self.CREATION_PREFIX):
+			creation_value = lines[0][len(self.CREATION_PREFIX):].strip()
+			try:
+				return datetime.strptime(creation_value, self.CREATION_FORMAT)
+			except ValueError:
+				pass
+
+		creation_date = datetime.now()
+		self._write_creation_header(creation_date, content)
+		return creation_date
+
+	def _should_reset_log(self, creation_date):
+		if self.retention_days < 0:
+			raise ValueError("log_retention_days debe ser mayor o igual a 0")
+
+		age_days = (datetime.now() - creation_date).days
+		return age_days >= self.retention_days
+
+	def _reset_log_file(self, creation_date):
+		self._write_creation_header(creation_date, "")
+
+	def _write_creation_header(self, creation_date, existing_content):
+		with open(self.log_file_path, "w", encoding="utf-8") as log_file:
+			log_file.write(
+				f"{self.CREATION_PREFIX}{creation_date.strftime(self.CREATION_FORMAT)}\n\n"
+			)
+			if existing_content:
+				log_file.write(existing_content.lstrip("\n"))
+
+	def _write_process_header(self):
+		started_at = datetime.now().strftime(self.PROCESS_FORMAT).lower()
+		self.log(
+			f"---------------INICIA PROCESO BACKUP PERIODICO - "
+			f"{self.database} - {started_at}---------"
+		)
+
+
+class BackupCleanup:
+	BACKUP_PATTERN = re.compile(
+		r"^(?P<database>.+)_(?P<timestamp>\d{4}-\d{2}-\d{2}_\d{6})_(?P<suffix>fs|nofs)\.zip$"
+	)
+	TIMESTAMP_FORMAT = "%Y-%m-%d_%H%M%S"
+
+	def __init__(self, backups_folder_path: str, logger: BackupProcessLogger):
+		self.backups_folder_path = backups_folder_path
+		self.logger = logger
+
+	def list_backups(self):
+		backups = []
+		if not os.path.isdir(self.backups_folder_path):
+			self.logger.log(f"La carpeta de backups no existe: {self.backups_folder_path}")
+			return backups
+
+		for file_name in os.listdir(self.backups_folder_path):
+			backup_info = self._build_backup_info(file_name)
+			if backup_info is not None:
+				backups.append(backup_info)
+
+		ordered_backups = sorted(backups, key=lambda backup: backup["created_at"], reverse=True)
+		self.logger.log(
+			f"Se encontraron {len(ordered_backups)} backups validos en {self.backups_folder_path}"
+		)
+		return ordered_backups
+
+	def delete_all(self, keep=2):
+		if keep < 0:
+			raise ValueError("keep debe ser mayor o igual a 0")
+
+		backups = self.list_backups()
+		now = datetime.now()
+		kept_backups = [self._serialize_backup(backup, now) for backup in backups[:keep]]
+		deleted_backups = []
+		self.logger.log(f"Se conservaran los {keep} backups mas recientes")
+
+		for backup in backups[keep:]:
+			serialized_backup = self._serialize_backup(backup, now)
+			self.logger.log(
+				f"Eliminando backup antiguo: {serialized_backup['path']} "
+				f"({serialized_backup['age_label']} de antiguedad)"
+			)
+			os.remove(backup["path"])
+			deleted_backups.append(serialized_backup)
+
+		self.logger.log(f"Backups eliminados: {len(deleted_backups)}")
+		return {
+			"kept": kept_backups,
+			"deleted": deleted_backups,
+		}
+
+	def _build_backup_info(self, file_name):
+		match = self.BACKUP_PATTERN.match(file_name)
+		if match is None:
+			return None
+
+		created_at = datetime.strptime(match.group("timestamp"), self.TIMESTAMP_FORMAT)
+		return {
+			"name": file_name,
+			"path": os.path.join(self.backups_folder_path, file_name),
+			"database": match.group("database"),
+			"created_at": created_at,
+			"include_filestore": match.group("suffix") == "fs",
+		}
+
+	def _serialize_backup(self, backup, reference_time):
+		age_delta = reference_time - backup["created_at"]
+		age_days = max(age_delta.days, 0)
+		age_label = self._format_age_label(age_delta)
+		return {
+			"name": backup["name"],
+			"path": backup["path"],
+			"database": backup["database"],
+			"created_at": backup["created_at"],
+			"include_filestore": backup["include_filestore"],
+			"age_days": age_days,
+			"age_label": age_label,
+		}
+
+	def _format_age_label(self, age_delta):
+		total_seconds = max(int(age_delta.total_seconds()), 0)
+		if total_seconds < 60:
+			suffix = "segundo" if total_seconds == 1 else "segundos"
+			return f"{total_seconds} {suffix}"
+
+		if total_seconds < 3600:
+			total_minutes = total_seconds // 60
+			remaining_seconds = total_seconds % 60
+			minute_suffix = "minuto" if total_minutes == 1 else "minutos"
+			second_suffix = "segundo" if remaining_seconds == 1 else "segundos"
+			return f"{total_minutes} {minute_suffix} y {remaining_seconds} {second_suffix}"
+
+		total_hours = total_seconds // 3600
+		if total_hours < 24:
+			suffix = "hora" if total_hours == 1 else "horas"
+			return f"{total_hours} {suffix}"
+
+		total_days = total_hours // 24
+		suffix = "dia" if total_days == 1 else "dias"
+		return f"{total_days} {suffix}"
+
+	def print_cleanup_summary(self, cleanup_report):
+		self.logger.log("")
+		self.logger.log("Resumen final de limpieza:")
+		self._print_backup_group("Backups mantenidos", cleanup_report["kept"])
+		self._print_backup_group("Backups eliminados", cleanup_report["deleted"])
+
+	def _print_backup_group(self, title, backups):
+		self.logger.log(f"{title} ({len(backups)}):")
+		if not backups:
+			self.logger.log("- Ninguno")
+			return
+
+		for backup in backups:
+			self.logger.log(
+				f"- {backup['name']} | {backup['age_label']} de antiguedad | {backup['path']}"
+			)
+
+
+class BackupRunner:
+	def __init__(self, config, logger: BackupProcessLogger):
+		self.config = config
+		self.logger = logger
+
+	def run(self):
+		self.logger.log(
+			f"Ejecutando backup de la base '{self.config.database}' en {self.config.backups_folder_path}"
+		)
+		result = subprocess.run(self.config.build_command(), capture_output=True, text=True)
+
+		if result.stdout:
+			self.logger.log(result.stdout.strip())
+		if result.stderr:
+			self.logger.log(result.stderr.strip())
+
+		if result.returncode == 0:
+			self.logger.log("Backup finalizado correctamente")
+		else:
+			self.logger.log(f"Backup finalizado con error. Codigo de salida: {result.returncode}")
+
+		return result.returncode
+
+
+def build_parser():
+	parser = argparse.ArgumentParser(description="Ejecuta backup periodico y limpia backups antiguos")
+	parser.add_argument("--database", required=True, help="Nombre de la base de datos Odoo a respaldar")
+	parser.add_argument("--backups-folder-path", required=True, help="Ruta de la carpeta donde se guardan los backups")
+	parser.add_argument("--backup-script-path", required=True, help="Ruta al script ejecutable de backup")
+	parser.add_argument("--target-pg-major", required=True, help="Version major objetivo de PostgreSQL para el backup")
+	parser.add_argument("--log-file-path", required=True, help="Ruta del archivo de log del proceso periodico")
+	parser.add_argument("--log-retention-days", type=int, required=True, help="Cantidad de dias para conservar el contenido del log antes de reiniciarlo")
+	parser.add_argument("--cleanup-keep", type=int, required=True,  help="Cantidad de backups mas recientes a conservar durante la limpieza")
+	parser.add_argument(
+		"--pg-dump-bin",
+		required=False,
+		default=None,
+		help=(
+			"Ruta al binario pg_dump a usar como override manual (opcional). "
+			"Si no coincide con --target-pg-major, odoo_backup intentará remediación automática."
+		),
+	)
+	parser.add_argument("--no-fs", action="store_true", help="Si se indica, no incluye el filestore en el backup")
+	parser.add_argument("--no-log-cleanup", action="store_true", help="Si se indica, desactiva la limpieza periodica del archivo de log")
+	return parser
+
+
+if __name__ == "__main__":
+	args = build_parser().parse_args()
+
+	config = BackupConfig(
+	    	database = args.database,
+		backups_folder_path = args.backups_folder_path,
+		script_path = args.backup_script_path,
+		target_pg_major = args.target_pg_major,
+		include_filestore = not args.no_fs,
+		log_file_path = args.log_file_path,
+		enable_log_cleanup = not args.no_log_cleanup,
+		log_retention_days = args.log_retention_days,
+		cleanup_keep = args.cleanup_keep,
+		pg_dump_bin = args.pg_dump_bin,
+	)
+	logger = BackupProcessLogger(
+		log_file_path = config.log_file_path,
+		database = config.database,
+		enable_cleanup = config.enable_log_cleanup,
+		retention_days = config.log_retention_days,
+	)
+	logger.initialize()
+	logger.log("Iniciando proceso de backup...")
+
+	try:
+		cleanup = BackupCleanup(config.backups_folder_path, logger)
+		runner = BackupRunner(config, logger)
+		exit_code = runner.run()
+
+		if exit_code == 0:
+			logger.log("Iniciando limpieza de backups antiguos...")
+			cleanup_report = cleanup.delete_all(keep=config.cleanup_keep)
+			cleanup.print_cleanup_summary(cleanup_report)
+		else:
+			logger.log("Se omite la limpieza porque el backup no se completo correctamente")
+	finally:
+		logger.close()
+
+	raise SystemExit(exit_code)

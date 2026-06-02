@@ -1,0 +1,182 @@
+#!/usr/bin/env python3
+"""Cuenta usuarios online por base de datos Odoo.
+
+La tabla bus_presence registra la presencia reciente de cada usuario en Odoo.
+El canal bus es el mecanismo interno con el que Odoo empuja o coordina eventos
+en tiempo real entre servidor y cliente, por ejemplo notificaciones, mensajes
+o cambios de estado. El polling es la consulta periodica que hace el navegador
+al servidor para preguntar si hay novedades; mientras ese polling sigue vivo,
+Odoo puede asumir que la sesion sigue abierta y activa.
+
+En algunas versiones el timestamp de esa actividad se guarda en last_poll y en
+otras en last_presence; ambos campos representan la ultima vez que Odoo detecto
+al usuario interactuando con el entorno.
+
+Este script considera que un usuario ya no esta usando el ambiente cuando su
+ultima marca de presencia queda fuera de la ventana definida por --minutes.
+Solo cuenta usuarios activos y, salvo que se indique lo contrario, excluye
+usuarios portal/share.
+"""
+
+import argparse
+import os
+import sys
+from typing import Optional
+
+import psycopg2
+
+
+def env_required(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Falta variable de entorno: {name}")
+    return value
+
+
+def arg_or_env(value: Optional[str], env_name: str) -> str:
+    if value:
+        return value
+    return env_required(env_name)
+
+
+def list_databases(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT datname
+            FROM pg_database
+            WHERE datistemplate = false
+              AND datallowconn = true
+              AND datname NOT IN ('postgres')
+            ORDER BY datname
+            """
+        )
+        return [row[0] for row in cur.fetchall()]
+
+
+def get_presence_timestamp_field(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'bus_presence'
+            """
+        )
+        cols = {row[0] for row in cur.fetchall()}
+
+    if "last_poll" in cols:
+        return "last_poll"
+    if "last_presence" in cols:
+        return "last_presence"
+    return None
+
+
+def count_online_users(conn, minutes: int, include_portal: bool):
+    with conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.bus_presence')")
+        exists = cur.fetchone()[0] is not None
+        if not exists:
+            return None, "sin_tabla_bus_presence"
+
+    ts_field = get_presence_timestamp_field(conn)
+    if not ts_field:
+        return None, "sin_campo_timestamp"
+
+    filters = ["u.active IS TRUE"]
+    if not include_portal:
+        filters.append("COALESCE(u.share, FALSE) = FALSE")
+
+    where_extra = " AND ".join(filters)
+
+    query = f"""
+        SELECT COUNT(DISTINCT p.user_id)
+        FROM bus_presence p
+        JOIN res_users u ON u.id = p.user_id
+        WHERE p.{ts_field} >= (NOW() - (%s * INTERVAL '1 minute'))
+          AND {where_extra}
+    """
+
+    with conn.cursor() as cur:
+        cur.execute(query, (minutes,))
+        return cur.fetchone()[0], "ok"
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Cuenta usuarios online por base de datos Odoo"
+    )
+    parser.add_argument(
+        "--host",
+        help="Host de Postgres (fallback: POSTGRES_HOST)",
+    )
+    parser.add_argument(
+        "--port",
+        help="Puerto de Postgres (fallback: EXTERNAL_PORT_POSTGRES)",
+    )
+    parser.add_argument(
+        "--user",
+        help="Usuario de Postgres (fallback: POSTGRES_USER)",
+    )
+    parser.add_argument(
+        "--password",
+        help="Password de Postgres (fallback: POSTGRES_PASSWORD)",
+    )
+    parser.add_argument(
+        "--minutes",
+        type=int,
+        default=2,
+        help="Ventana en minutos para considerar usuario online (default: 2)",
+    )
+    parser.add_argument(
+        "--include-portal",
+        action="store_true",
+        help="Incluir usuarios portal/share",
+    )
+    args = parser.parse_args()
+
+    host = arg_or_env(args.host, "POSTGRES_HOST")
+    port = arg_or_env(args.port, "EXTERNAL_PORT_POSTGRES")
+    user = arg_or_env(args.user, "POSTGRES_USER")
+    password = arg_or_env(args.password, "POSTGRES_PASSWORD")
+
+    try:
+        admin_conn = psycopg2.connect(
+            host=host, port=port, user=user, password=password, dbname="postgres"
+        )
+        admin_conn.autocommit = True
+    except Exception as e:
+        print(f"Error conectando a postgres: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        dbs = list_databases(admin_conn)
+    finally:
+        admin_conn.close()
+
+    print(f"{'DATABASE':40} {'ONLINE':>8} {'STATUS':>24}")
+    print("-" * 76)
+
+    for dbname in dbs:
+        try:
+            conn = psycopg2.connect(
+                host=host, port=port, user=user, password=password, dbname=dbname
+            )
+            conn.autocommit = True
+            count, status = count_online_users(
+                conn, minutes=args.minutes, include_portal=args.include_portal
+            )
+            conn.close()
+
+            if count is None:
+                print(f"{dbname:40} {'-':>8} {status:>24}")
+            else:
+                print(f"{dbname:40} {count:>8} {status:>24}")
+
+        except Exception as e:
+            print(f"{dbname:40} {'-':>8} {'error: ' + str(e):>24}")
+
+
+if __name__ == "__main__":
+    main()

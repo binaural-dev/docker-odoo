@@ -5,6 +5,8 @@ import subprocess
 import datetime
 import os
 import sys
+import re
+import shlex
 
 
 # ============================================================
@@ -21,6 +23,8 @@ class DumpManager:
         db_port,
         copy_to_local_path,
         linux_dump_user,
+        target_pg_major,
+        pg_dump_bin="pg_dump",
         overwrite_existing=False,
     ):
         self.container = container_name
@@ -33,6 +37,113 @@ class DumpManager:
         self.copy_to_local_path = copy_to_local_path
         self.overwrite_existing = overwrite_existing
         self.linux_dump_user = linux_dump_user  # Para crear y eliminar con este usuario. Asi evitamos eliminar archivos importantes.
+        self.target_pg_major = str(target_pg_major)
+        self.pg_dump_bin = pg_dump_bin
+
+    def _get_pg_dump_major_in_container(self, pg_dump_bin=None):
+        pg_dump_bin = pg_dump_bin or self.pg_dump_bin
+
+        cmd = [
+            "docker",
+            "exec",
+            "-u",
+            self.linux_dump_user,
+            self.container,
+            pg_dump_bin,
+            "--version",
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
+
+        if result.returncode != 0:
+            stderr = (result.stderr or "").strip()
+            raise RuntimeError(
+                "No se pudo ejecutar el binario de pg_dump configurado "
+                f"('{pg_dump_bin}') dentro del contenedor {self.container}. "
+                f"Detalle: {stderr or 'sin detalle'}"
+            )
+
+        version_output = (result.stdout or "").strip()
+
+        version_match = re.search(r"PostgreSQL\)\s+(\d+)", version_output)
+        if not version_match:
+            version_match = re.search(r"(\d+)", version_output)
+
+        if not version_match:
+            raise RuntimeError(
+                "No se pudo interpretar la versión de pg_dump a partir de la salida: "
+                f"'{version_output}'"
+            )
+
+        return str(int(version_match.group(1)))
+
+    def _ensure_target_pg_dump_client(self):
+        target_bin = f"/usr/lib/postgresql/{self.target_pg_major}/bin/pg_dump"
+        package_name = f"postgresql-client-{self.target_pg_major}"
+
+        print(
+            "Intentando remediación automática de cliente PostgreSQL para backup:\n"
+            f"- Major requerida: {self.target_pg_major}\n"
+            f"- Paquete objetivo: {package_name}\n"
+            f"- Binario objetivo: {target_bin}"
+        )
+
+        verify_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "bash",
+            "-lc",
+            f"[ -x '{target_bin}' ] && '{target_bin}' --version",
+        ]
+
+        verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
+
+        if verify_result.returncode != 0:
+            print(
+                f"No se encontró {target_bin}. Instalando {package_name} dentro del contenedor {self.container}..."
+            )
+            install_cmd = [
+                "docker",
+                "exec",
+                "-u",
+                "root",
+                self.container,
+                "bash",
+                "-lc",
+                "apt-get update && "
+                "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "
+                f"{package_name}",
+            ]
+
+            subprocess.run(install_cmd, check=True)
+
+        detected_major = self._get_pg_dump_major_in_container(pg_dump_bin=target_bin)
+        if detected_major != self.target_pg_major:
+            raise RuntimeError(
+                "Falló la remediación automática del cliente pg_dump.\n"
+                f"- Major esperada: {self.target_pg_major}\n"
+                f"- Major detectada en {target_bin}: {detected_major}\n"
+                "Prueba forzar manualmente --pg-dump-bin con un binario compatible."
+            )
+
+        self.pg_dump_bin = target_bin
+        print(
+            "✔ Remediación automática completada. "
+            f"Se usará pg_dump en: {self.pg_dump_bin}"
+        )
+
+    def _validate_pg_dump_major_compatibility(self):
+        pg_dump_major = self._get_pg_dump_major_in_container()
+
+        if pg_dump_major != self.target_pg_major:
+            print(
+                "Incompatibilidad detectada entre pg_dump y major destino.\n"
+                f"- pg_dump detectado en {self.pg_dump_bin}: major {pg_dump_major}\n"
+                f"- major destino esperada: {self.target_pg_major}\n"
+                "Se intentará instalar/verificar automáticamente el cliente requerido."
+            )
+            self._ensure_target_pg_dump_client()
 
     def _create_dump_user(self):
         print(
@@ -93,22 +204,26 @@ class DumpManager:
 
     def generate_dump(self):
         self._create_dump_user()
+        self._validate_pg_dump_major_compatibility()
 
         self.create_dump_folder()
 
         print("Generando dump de la base de datos...")
 
+        pg_dump_bin = shlex.quote(self.pg_dump_bin)
+        print(f"Usando pg_dump para generar dump: {self.pg_dump_bin}")
+
         inner_cmd = (
             f"if [ -f '{self.dump_path}' ]; then "
             f"echo 'ERROR: El archivo {self.dump_path} ya existe.' >&2; exit 1; "
             f"else "
-            f"pg_dump -h {self.db_host} -p {self.db_port} -U {self.db_user} "
+            f"{pg_dump_bin} -h {self.db_host} -p {self.db_port} -U {self.db_user} "
             f"-F p -d {self.db_name} -f {self.dump_path} -b; "
             f"fi"
         )
 
         overwriting_cmd = (
-            f"pg_dump -h {self.db_host} -p {self.db_port} -U {self.db_user} "
+            f"{pg_dump_bin} -h {self.db_host} -p {self.db_port} -U {self.db_user} "
             f"-F p -d {self.db_name} -f {self.dump_path} -b; "
         )
 
@@ -208,40 +323,64 @@ class FilestoreManager:
 # ============================================================
 class ZipManager:
 
-    def __init__(self, zip_path, content_paths: list, overwrite_existing=False):
+    def __init__(self, zip_path, content_paths: list, overwrite_existing=False, verbose=True):
         self.zip_path = zip_path
         self.zip_folder = os.path.dirname(zip_path)
         self.zip_name = os.path.basename(zip_path)
         self.content_paths = content_paths
         self.overwrite_existing = overwrite_existing
+        self.verbose = verbose
+        self.zip_initialized = False
 
-    def create_zip(self):
+    def _prepare_zip_file(self):
+        if self.zip_initialized:
+            return
+
+        if os.path.isfile(self.zip_path):
+            if not self.overwrite_existing:
+                print(f"El archivo ZIP {self.zip_path} ya existe. Será sobrescrito.")
+                raise FileExistsError(f"El archivo ZIP {self.zip_path} ya existe.")
+
+            os.remove(self.zip_path)
+
+        self.zip_initialized = True
+
+    def _get_base_dir(self, content_paths):
+        parent_paths = [os.path.dirname(path.rstrip(os.sep)) for path in content_paths]
+        return os.path.commonpath(parent_paths)
+
+    def add_paths_to_zip(self, content_paths):
         print(f"Creando carpeta para el ZIP en {self.zip_folder}")
-
-        if os.path.isfile(self.zip_path) and not self.overwrite_existing:
-            print(f"El archivo ZIP {self.zip_path} ya existe. Será sobrescrito.")
-            raise FileExistsError(f"El archivo ZIP {self.zip_path} ya existe.")
 
         if not os.path.exists(self.zip_folder):
             raise FileNotFoundError(f"La carpeta {self.zip_folder} no existe")
 
-        for path in self.content_paths:
+        for path in content_paths:
             if not os.path.exists(path):
                 raise FileNotFoundError(
                     f"El path {path} no existe y no se puede agregar al ZIP"
                 )
 
-        base_dir = os.path.commonpath(self.content_paths)
-        relative_paths = [os.path.relpath(p, base_dir) for p in self.content_paths]
+        self._prepare_zip_file()
 
-        cmd = ["zip", "-r", self.zip_name] + relative_paths
+        base_dir = self._get_base_dir(content_paths)
+        relative_paths = [os.path.relpath(path, base_dir) for path in content_paths]
+
+        cmd = ["zip", "-r", self.zip_path] + relative_paths
+
+        if not self.verbose:
+            print("Modo silencioso activado: no se mostrarán los archivos siendo agregados al ZIP. \n")
+            cmd.insert(1, "-q")
 
         print(f"Commando ZIP: \n\n{' '.join(cmd)}\n\n")
 
-        print(f"Creando ZIP {self.zip_name} con contenido: {self.content_paths}")
+        print(f"Actualizando ZIP {self.zip_name} con contenido: {content_paths}")
         subprocess.run(cmd, check=True, cwd=base_dir)
 
         return self.zip_path
+
+    def create_zip(self):
+        return self.add_paths_to_zip(self.content_paths)
 
 
 # ============================================================
@@ -253,12 +392,14 @@ class CleanupManager:
         container_name=None,
         local_paths_to_cleanup=None,
         container_paths_to_cleanup=None,
+        cleanup_enabled=True,
         confirm=False,
         linux_dump_user=None,
     ):
         self.container = container_name
         self.local_paths_to_cleanup = local_paths_to_cleanup
         self.container_paths_to_cleanup = container_paths_to_cleanup
+        self.cleanup_enabled = cleanup_enabled
         self.confirm = confirm
         self.linux_dump_user = linux_dump_user
 
@@ -275,10 +416,19 @@ class CleanupManager:
 
         return self
 
+    def _remove_tracked_path(self, tracked_paths, path):
+        if not tracked_paths or not path:
+            return tracked_paths
+
+        return [tracked_path for tracked_path in tracked_paths if tracked_path != path]
+
     def container_cleanup(self):
         print(
             f"*** Limpiando archivos temporales dentro del contenedor {self.container}"
         )
+
+        if not self.cleanup_enabled:
+            return
 
         if not (
             self.container_paths_to_cleanup and self.container and self.linux_dump_user
@@ -310,15 +460,67 @@ class CleanupManager:
                 ],
                 check=True,
             )
+            
+
+    def cleanup_container_path(self, path):
+        if not self.cleanup_enabled:
+            return
+
+        if not (path and self.container and self.linux_dump_user):
+            return
+
+        print(f"Eliminando archivo/carpeta temporal en contenedor: {path}")
+        subprocess.run(
+            [
+                "docker",
+                "exec",
+                "-u",
+                self.linux_dump_user,
+                self.container,
+                "rm",
+                "-rf",
+                path,
+            ],
+            check=True,
+        )
+
+        self.container_paths_to_cleanup = self._remove_tracked_path(
+            self.container_paths_to_cleanup, path
+        )
+
+    def cleanup_local_path(self, path):
+        if not self.cleanup_enabled:
+            return
+
+        if not path or not os.path.exists(path):
+            return
+
+        if os.path.isfile(path):
+            print(f"Eliminando archivo: {path}")
+            subprocess.run(["rm", "-f", path], check=True)
+            self.local_paths_to_cleanup = self._remove_tracked_path(
+                self.local_paths_to_cleanup, path
+            )
+            return
+
+        if os.path.isdir(path):
+            print(f"Eliminando carpeta: {path}")
+            subprocess.run(["rm", "-rf", path], check=True)
+            self.local_paths_to_cleanup = self._remove_tracked_path(
+                self.local_paths_to_cleanup, path
+            )
 
     def local_cleanup(self):
-        print("Limpiando archivos temporales locales")
+        print("Limpiando archivos locales")
+
+        if not self.cleanup_enabled:
+            return
 
         if not self.local_paths_to_cleanup:
             return
 
         continue_cleanup = self._confirm(
-            f"\n\n¿Está seguro de que desea eliminar los archivos temporales locales?"
+            f"\n\n¿Está seguro de que desea eliminar los archivos locales?"
             + "\n Esta acción no se puede deshacer."
             + f"\n\nArchivos/Carpetas a eliminar: {self.local_paths_to_cleanup}\n\n"
         )
@@ -328,25 +530,7 @@ class CleanupManager:
             return
 
         for path in self.local_paths_to_cleanup:
-
-            if not os.path.exists(path):
-                continue
-
-            if os.path.isfile(path):
-                print(f"Eliminando archivo temporal: {path}")
-                subprocess.run(["rm", "-f", path], check=True)
-
-                continue
-
-            if os.path.isdir(path):
-                print(f"Eliminando carpeta temporal: {path}")
-                subprocess.run(["rm", "-rf", path], check=True)
-
-    def deep_cleanup(self):
-        print("Iniciando limpieza profunda de archivos temporales")
-
-        self.container_cleanup()
-        self.local_cleanup()
+            self.cleanup_local_path(path)
 
 
 # ============================================================
@@ -364,9 +548,15 @@ class OdooBackupOrchestrator:
         backup_local_path,
         db_container_dump_path,
         linux_dump_user,
+        target_pg_major,
+        pg_dump_bin="pg_dump",
         container_filestore_path=None,
+        cleanup_enabled=True,
         overwrite_existing=False,
+        verbose=True,
     ):
+        self.verbose = verbose
+
         self.backup_local_path = backup_local_path
         self.container = container_name
 
@@ -379,12 +569,21 @@ class OdooBackupOrchestrator:
             if container_filestore_path
             else None
         )
+        
+        self.backup_filename = self._get_backup_filename()
+        self.backup_zip_path = self._get_zip_path()
+
+        self.tmp_backup_folder_local_path = f"{self.backup_local_path}/.tmp_{self.backup_filename.replace('.zip', '')}"
+        
         self.db_container_dump_path = db_container_dump_path
-        self.db_copy_to_local_path = f"{self.backup_local_path}/dump.sql"
+        self.db_copy_to_local_path = f"{self.tmp_backup_folder_local_path}/dump.sql"
+        
+        self.local_filestore_path = f"{self.tmp_backup_folder_local_path}/filestore"
 
-        self.local_filestore_path = f"{self.backup_local_path}/filestore"
-
+        self.content_paths_to_zip = [self.db_copy_to_local_path, self.local_filestore_path]
+        
         self.overwrite_existing = overwrite_existing
+        self.cleanup_enabled = cleanup_enabled
 
         self.linux_dump_user = linux_dump_user
 
@@ -398,15 +597,19 @@ class OdooBackupOrchestrator:
             db_port=db_port,
             overwrite_existing=self.overwrite_existing,
             linux_dump_user=self.linux_dump_user,
+            target_pg_major=target_pg_major,
+            pg_dump_bin=pg_dump_bin,
         )
 
         self.cleanup_manager = CleanupManager(
             container_name=self.container,
             container_paths_to_cleanup=[self.db_container_dump_path],
             local_paths_to_cleanup=[
-                self.db_copy_to_local_path,
-                self.local_filestore_path,
+                self.tmp_backup_folder_local_path,
+                # self.db_copy_to_local_path,
+                # self.local_filestore_path,
             ],
+            cleanup_enabled=self.cleanup_enabled,
             linux_dump_user=self.linux_dump_user,
         )
 
@@ -420,27 +623,32 @@ class OdooBackupOrchestrator:
         else:
             self.filestore_manager = None
 
-        self.backup_zip_path = self._get_zip_path()
-        self.content_paths = [self.db_copy_to_local_path, self.local_filestore_path]
 
         self.zip_manager = ZipManager(
             zip_path=self.backup_zip_path,
-            content_paths=self.content_paths,
+            content_paths=self.content_paths_to_zip,
             overwrite_existing=self.overwrite_existing,
+            verbose=self.verbose,
         )
 
     # ---------------------------
     # Generar nombre del ZIP
     # ---------------------------
-    def _get_zip_path(self):
+    
+    def _get_backup_filename(self):
         now = datetime.datetime.now()
         timestamp = now.strftime("%Y-%m-%d_%H%M%S")
 
-        suffix = "_fs" if self.filestore_manager else "_nofs"
+        suffix = "_fs" if self.container_filestore_path else "_nofs"
 
         zip_name = f"{self.db_name}_{timestamp}{suffix}.zip"
+        
+        return zip_name
 
-        zip_path = f"{self.backup_local_path}/{zip_name}"
+    def _get_zip_path(self):
+        zip_path = os.path.abspath(
+            os.path.join(self.backup_local_path, self.backup_filename)
+        )
 
         return zip_path
 
@@ -449,6 +657,23 @@ class OdooBackupOrchestrator:
         self.dump_manager.copy_dump_to_local()
 
         return self.db_copy_to_local_path
+
+    def _cleanup_database_dump(self):
+        self.cleanup_manager.cleanup_local_path(self.db_copy_to_local_path)
+        self.cleanup_manager.cleanup_container_path(self.db_container_dump_path)
+
+    def _cleanup_filestore(self):
+        self.cleanup_manager.cleanup_local_path(self.local_filestore_path)
+        
+    def tmp_folder_cleanup(self):
+        print("Limpiando carpeta temporal local")
+
+        if not self.cleanup_enabled:
+            return
+
+        tmp_folder_path = self.tmp_backup_folder_local_path
+        if os.path.exists(tmp_folder_path):
+            self.cleanup_manager.cleanup_local_path(tmp_folder_path)
 
     def _get_filestore(self):
 
@@ -473,24 +698,40 @@ class OdooBackupOrchestrator:
 
         return zip_path
 
+    def _append_to_backup_zip(self, content_paths):
+        return self.zip_manager.add_paths_to_zip(content_paths)
+    
+    def ensure_local_backup_folder(self):
+        if not os.path.exists(self.backup_local_path):
+            print(f"Creando carpeta local para backup en {self.backup_local_path}")
+            os.makedirs(self.backup_local_path, exist_ok=True)
+
     # ---------------------------
     # Ejecutar proceso completo
     # ---------------------------
     def run_backup(self):
-        print("\n=== Iniciando proceso de backup ===")
+        print("\n=== Iniciando proceso de backup ===\n")
+        
+        self.ensure_local_backup_folder()
 
         # 1. Dump
-        self._get_database_dump()
+        dump_path = self._get_database_dump()
+        self._append_to_backup_zip([dump_path])
+        self._cleanup_database_dump()
 
         # 2. Filestore (si aplica)
-        self._get_filestore()
+        filestore_path = self._get_filestore()
+        self._append_to_backup_zip([filestore_path])
+        self._cleanup_filestore()
+        
+        self.tmp_folder_cleanup()
 
-        # 3. Crear ZIP
-        self._create_backup_zip()
+        print(
+            "\n✔ Backup generado correctamente.\n"
+            f"   Archivo: {self.backup_zip_path}\n"
+        )
 
-        print(f"\n✔ Backup generado correctamente: {self.backup_zip_path}\n")
-
-        print(f"\n✔ Backup en: {self.backup_local_path}\n")
+        print(f"✔ Carpeta destino: {self.backup_local_path}\n")
 
         return self.backup_zip_path
 
@@ -503,6 +744,13 @@ except ModuleNotFoundError:
     )
 
 
+def get_required_env(name):
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Falta la variable de entorno requerida: {name}")
+    return value
+
+
 def list_databases(db_user, db_host, db_port):
     """
     Devuelve una lista de bases de datos disponibles en PostgreSQL dentro del contenedor Docker.
@@ -512,7 +760,7 @@ def list_databases(db_user, db_host, db_port):
     cmd = [
         "docker",
         "exec",
-        os.getenv("PROJECT_NAME"),
+        get_required_env("PROJECT_NAME"),
         "psql",
         f"-U{db_user}",
         f"-h{db_host}",
@@ -524,7 +772,7 @@ def list_databases(db_user, db_host, db_port):
         cmd,
         capture_output=True,
         text=True,
-        env={**os.environ, "PGPASSWORD": os.getenv("POSTGRES_PASSWORD")},
+        env={**os.environ, "PGPASSWORD": get_required_env("POSTGRES_PASSWORD")},
     )
 
     if result.returncode != 0:
@@ -561,32 +809,57 @@ def choose_database(db_list):
         print("Selección inválida. Intente nuevamente.")
 
 
-def backup(db_name, backup_path, with_filestore=True, cleanup=True):
+def normalize_pg_major(value):
+    normalized = str(value).strip()
+
+    if not normalized:
+        raise ValueError("--target-pg-major no puede estar vacío.")
+
+    if not normalized.isdigit():
+        raise ValueError(
+            "--target-pg-major debe ser un entero positivo (por ejemplo: 16 o 17)."
+        )
+
+    return str(int(normalized))
+
+
+def backup(
+    db_name,
+    backup_path,
+    target_pg_major,
+    pg_dump_bin="pg_dump",
+    with_filestore=True,
+    cleanup=True,
+    verbose=True,
+):
     odoo_backup_orchestrator = OdooBackupOrchestrator(
-        container_name=os.getenv("PROJECT_NAME"),
+        container_name=get_required_env("PROJECT_NAME"),
         db_name=db_name,
-        db_user=os.getenv("POSTGRES_USER"),
-        db_host=os.getenv("POSTGRES_HOST"),
-        db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+        db_user=get_required_env("POSTGRES_USER"),
+        db_host=get_required_env("POSTGRES_HOST"),
+        db_port=get_required_env("EXTERNAL_PORT_POSTGRES"),
         backup_local_path=backup_path,
         db_container_dump_path="/tmp/odoo_database_backups/dump.sql",
         container_filestore_path=(
             "/home/odoo/data/filestore" if with_filestore else None
         ),
+        cleanup_enabled=cleanup,
         overwrite_existing=True,
         linux_dump_user="dump_user",
+        target_pg_major=target_pg_major,
+        pg_dump_bin=pg_dump_bin,
+        verbose=verbose,
     )
 
     odoo_backup_orchestrator.run_backup()
 
-    if cleanup:
-        # 4. Cleanup
-        odoo_backup_orchestrator.cleanup_manager.deep_cleanup()
 
-
-if __name__ == "__main__":
-
+def main():
     load_dotenv()
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    default_backup_path = os.path.join(project_root, "backups")
 
     parser = argparse.ArgumentParser(description="Script de backup de Odoo")
 
@@ -594,6 +867,13 @@ if __name__ == "__main__":
 
     backup_parser = subparsers.add_parser(
         "backup", help="Backup de la base de datos y filestore de Odoo"
+    )
+    
+    backup_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Mostrar mensajes detallados durante el backup",
+        default=False,
     )
 
     backup_parser.add_argument(
@@ -604,8 +884,26 @@ if __name__ == "__main__":
 
     backup_parser.add_argument(
         "-p",
+        required=False,
+        default=default_backup_path,
+        help=f"Path local donde se guardará el backup (default: {default_backup_path})",
+    )
+
+    backup_parser.add_argument(
+        "--target-pg-major",
         required=True,
-        help="Path local donde se guardará el backup",
+        help="Major de PostgreSQL destino para validar compatibilidad del dump (ej: 16, 17)",
+    )
+
+    backup_parser.add_argument(
+        "--pg-dump-bin",
+        required=False,
+        default="pg_dump",
+        help=(
+            "Binario pg_dump dentro del contenedor (default: pg_dump). "
+            "Si la major no coincide con --target-pg-major, se intentará remediación automática "
+            "con /usr/lib/postgresql/{major}/bin/pg_dump."
+        ),
     )
 
     backup_parser.add_argument(
@@ -632,9 +930,9 @@ if __name__ == "__main__":
     if not args.d:
         print("No se especificó base de datos. Listando bases disponibles...")
         dbs = list_databases(
-            db_user=os.getenv("POSTGRES_USER"),
-            db_host=os.getenv("POSTGRES_HOST"),
-            db_port=os.getenv("EXTERNAL_PORT_POSTGRES"),
+            db_user=get_required_env("POSTGRES_USER"),
+            db_host=get_required_env("POSTGRES_HOST"),
+            db_port=get_required_env("EXTERNAL_PORT_POSTGRES"),
         )
         if not dbs:
             print("No se encontraron bases de datos.")
@@ -644,9 +942,47 @@ if __name__ == "__main__":
         print(f"\nBase de datos seleccionada: {chosen_db}")
         args.d = chosen_db
 
+    try:
+        target_pg_major = normalize_pg_major(args.target_pg_major)
+    except ValueError as error:
+        print(
+            "\nError de validación de argumentos:\n"
+            f"- {error}\n"
+        )
+        sys.exit(1)
+
+    pg_dump_bin = args.pg_dump_bin.strip()
+    if not pg_dump_bin:
+        print(
+            "\nError de validación de argumentos:\n"
+            "- --pg-dump-bin no puede estar vacío.\n"
+        )
+        sys.exit(1)
+
     backup(
         db_name=args.d,
         backup_path=args.p,
+        target_pg_major=target_pg_major,
+        pg_dump_bin=pg_dump_bin,
         with_filestore=not args.no_fs,
         cleanup=not args.no_cleanup,
+        verbose=args.verbose,
     )
+
+
+if __name__ == "__main__":
+    verbose_mode = "--verbose" in sys.argv
+
+    try:
+        main()
+    except Exception as exc:
+        if verbose_mode:
+            raise
+
+        print(
+            "\nError durante el backup.\n"
+            f"Detalle: {exc}\n"
+            "Sugerencia: ejecutá con --verbose para ver el stack completo.\n",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
