@@ -49,11 +49,13 @@ def _branch_clone_dir(branch):
 
 
 def _print_devops_guidance(message):
+    print("\n" + "=" * 80, file=sys.stderr)
     print(f"Error: {message}", file=sys.stderr)
     print(
         f"Revisá las ramas disponibles en {PRECOMMIT_REPO_WEB_URL} y contactate con el equipo de DevOps.",
         file=sys.stderr,
     )
+    print("=" * 80 + "\n", file=sys.stderr)
 
 
 class PrecommitSetup:
