@@ -37,11 +37,6 @@ def _docker_compose(*args):
     print(cmd)
     os.system(cmd)
 
-def run_bash():
-    PROJECT_NAME = os.getenv("PROJECT_NAME")
-    print(f"docker exec -u root -it {PROJECT_NAME} bash")
-    os.system(f"docker exec -u root -it {PROJECT_NAME} bash")
-
 def tester(database, module, conf_path="/etc/odoo/odoo.conf", port=0):
     PROJECT_NAME = os.getenv("PROJECT_NAME")
     POSTGRES_USER = os.getenv("POSTGRES_USER")
@@ -67,169 +62,6 @@ def scaffold_module(module_name: str, repo_name: str = None):
         print(f"\n✅ Módulo '{module_name}' creado con éxito en '{dest_path}'")
     else:
         print(f"\n❌ Error al crear el módulo '{module_name}'")
-
-
-def init_addons():
-    ORG_NAME = os.getenv("ORG_NAME") or "binaural-dev"
-    required_sources = {
-        "binaural": [
-            f"{ORG_NAME}/enterprise",
-            f"{ORG_NAME}/integra-addons",
-            f"{ORG_NAME}/third-party-addons",
-            f"{ORG_NAME}/odoo-venezuela",
-        ],
-        "external": [f"{ORG_NAME}/odoo-venezuela"],
-        "enterprise": [f"{ORG_NAME}/enterprise"],
-    }
-    ENV_TYPE = os.getenv("ENV_TYPE")
-    print("Clonando Repositorios")
-    ODOO_VERSION = os.getenv("ODOO_VERSION")
-    SOURCES = os.path.join(Path(__file__).resolve().parent, "src")
-
-    for repository in required_sources[ENV_TYPE]:
-        name = repository.split("/")[1]
-        path = os.path.join(SOURCES, name)
-        if not os.path.isdir(os.path.join(SOURCES, name)):
-            os.system(
-                f"git clone -b '{ODOO_VERSION}' git@github.com:{repository}.git {path}"
-            )
-        else:
-            print(f"{repository} exists")
-
-
-def fix_filestore_ownership_odoo():
-    print("\n=== Corrección de permisos de propiedad filestore Odoo ===\n")
-
-    PROJECT_NAME = os.getenv("PROJECT_NAME")
-
-    cmd_app = (
-        f"docker exec -u root -it {PROJECT_NAME} chown -R odoo:odoo /home/odoo/data"
-    )
-    print(cmd_app)
-    os.system(cmd_app)
-    print()
-
-
-def start_odoo():
-    print("\n=== Iniciando Odoo ===\n")
-
-    # Levantar base de datos
-    print("→ Iniciando base de datos...")
-    cmd_db = "docker compose -f docker-compose.db.yml up -d"
-    print(cmd_db)
-    os.system(cmd_db)
-
-    # Levantar aplicación Odoo
-    print("\n→ Iniciando aplicación Odoo...")
-    cmd_app = "docker compose -f docker-compose.app.yml up -d"
-    print(cmd_app)
-    os.system(cmd_app)
-
-    fix_filestore_ownership_odoo()
-
-    print("\n✅ Odoo y base de datos están en ejecución.\n")
-
-    print(f"\n✅ URL: http://localhost:{os.getenv('EXTERNAL_PORT_ODOO')}\n")
-
-    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
-        print("→ Iniciando pgAdmin...")
-        cmd_pgadmin = "docker compose -f docker-compose.pgadmin.yml up -d"
-        print(cmd_pgadmin)
-        os.system(cmd_pgadmin)
-        print("\n✅ pgAdmin está en ejecución.\n")
-
-        print(
-            f"""
-        → Recuerda agregar la conexión a la base de datos (Un nuevo server) en pgAdmin usando los siguientes detalles:
-
-            * Host (Host name/address): db
-            * Puerto (Port): {os.getenv("PGADMIN_EXTERNAL_PORT")}
-            * Usuario (Username): {os.getenv("POSTGRES_USER")}
-            * Contraseña (Password): {os.getenv("POSTGRES_PASSWORD")}
-            * Base de datos central (Maintenance database): {os.getenv("POSTGRES_DB")}
-        """
-        )
-
-
-def stop_odoo():
-    print("\n=== Deteniendo Odoo ===\n")
-
-    # Detener aplicación Odoo
-    print("→ Deteniendo aplicación Odoo...")
-    cmd_app = "docker compose -f docker-compose.app.yml down"
-    print(cmd_app)
-    os.system(cmd_app)
-
-    # Detener base de datos
-    print("\n→ Deteniendo base de datos...")
-    cmd_db = "docker compose -f docker-compose.db.yml down"
-    print(cmd_db)
-    os.system(cmd_db)
-
-    print("\n🛑 Odoo y base de datos han sido detenidos.\n")
-
-    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
-        print("→ Deteniendo pgAdmin...")
-        cmd_pgadmin = "docker compose -f docker-compose.pgadmin.yml down"
-        print(cmd_pgadmin)
-        os.system(cmd_pgadmin)
-        print("\n🛑 pgAdmin ha sido detenido.\n")
-
-
-def remove_odoo():
-    print("\n=== Eliminando Odoo ===\n")
-
-    do_continue = input(
-        "⚠️  Esto eliminará todos los datos de Odoo y la base de datos. ¿Deseas continuar? (s/n):  "
-    )
-
-    if do_continue.lower() == "s":
-        print("Continuando con la eliminación...")
-    else:
-        print("Operación cancelada.")
-        sys.exit()
-        return
-
-    # Detener aplicación Odoo
-    print("→ Eliminando aplicación Odoo...")
-    cmd_app = "docker compose -f docker-compose.app.yml down -v --remove-orphans"
-    print(cmd_app)
-    os.system(cmd_app)
-
-    # Detener base de datos
-    print("\n→ Eliminando base de datos...")
-    cmd_db = "docker compose -f docker-compose.db.yml down -v --remove-orphans"
-    print(cmd_db)
-    os.system(cmd_db)
-
-    print("\n🛑 Odoo y base de datos han sido eliminados.\n")
-
-    if os.getenv("PGADMIN_ENABLED", "False").lower() in ["true", "1", "yes"]:
-        print("→ Eliminando pgAdmin...")
-        cmd_pgadmin = (
-            "docker compose -f docker-compose.pgadmin.yml down -v --remove-orphans"
-        )
-        print(cmd_pgadmin)
-        os.system(cmd_pgadmin)
-        print("\n🛑 pgAdmin ha sido eliminado.\n")
-
-
-def restart_odoo():
-    print("\n=== Reiniciando Odoo ===\n")
-
-    # Detener aplicación Odoo
-    stop_odoo()
-
-    # Iniciar aplicación Odoo
-    start_odoo()
-
-    print("\n✅ Odoo y base de datos reiniciados correctamente.\n")
-
-
-def list_containers():
-    cmd = "docker compose -f docker-compose.app.yml ps"
-    os.system(cmd)
-
 
 def _get_instance_services(config, instance=None):
     """Get the list of docker compose service names for an instance (or all)."""
@@ -1076,10 +908,6 @@ def main():
 
     if args.action == "scaffold":
         scaffold_module(args.name, args.repo)
-        return True
-
-    if args.action == "init":
-        init_addons()
         return True
 
 if __name__ == "__main__":
