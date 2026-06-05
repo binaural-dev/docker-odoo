@@ -8,5 +8,13 @@ src
 .resources/nginx_configs/generated.conf
 docker-compose.generated.yml
 **/.vscode/
+*.code-workspace
+*antigractivy*
 venv
 __pycache__
+.atl/
+.windsurf/
+.ignore
+.DS_Store
+openspec
+.codegraph

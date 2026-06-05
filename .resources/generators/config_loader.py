@@ -9,7 +9,7 @@ import sys
 
 
 def load_config(base_path):
-    """Load instances.json from the project root."""
+    """Load instances.json from the project root and filter enabled ones."""
     config_path = os.path.join(base_path, "instances.json")
     if not os.path.exists(config_path):
         print(f"Error: instances.json no encontrado en {base_path}")
@@ -18,6 +18,14 @@ def load_config(base_path):
 
     with open(config_path, "r") as f:
         config = json.load(f)
+
+    # Filter instances: keep only those with "enabled": true (or without the flag)
+    if "instances" in config:
+        config["instances"] = {
+            name: inst
+            for name, inst in config["instances"].items()
+            if inst.get("enabled", True)
+        }
 
     _validate_config(config)
     return config
