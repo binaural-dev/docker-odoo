@@ -8,7 +8,6 @@ Reads instances.json and generates/manages Docker containers for multiple Odoo i
 import argparse
 import json
 import os
-import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -52,7 +51,7 @@ def _get_instance_services(config, instance=None):
 
 
 def _get_db_services(config, instance=None):
-    """Get managed DB services needed for an instance (or all)."""
+    """Get managed DB services needed for an instance (or all enabled)."""
     if instance:
         inst_conf = config["instances"][instance]
         db_name = inst_conf["database"]
@@ -60,8 +59,14 @@ def _get_db_services(config, instance=None):
         if db_conf.get("create_container", True):
             return [f"db-{db_name}"]
         return []
-    # All managed DBs
-    return [f"db-{name}" for name in get_managed_databases(config)]
+    # Only start DBs used by enabled instances
+    needed = set()
+    for name, inst in config["instances"].items():
+        needed.add(inst["database"])
+    return [
+        f"db-{name}" for name in needed
+        if config["databases"].get(name, {}).get("create_container", True)
+    ]
 
 
 # ============================================================
@@ -172,6 +177,7 @@ def start_odoo(config, instance=None):
 
     # Start nginx
     print("\n→ Iniciando Nginx...")
+    subprocess.run(["docker", "rm", "-f", "odoo-nginx"], stderr=subprocess.DEVNULL)
     _docker_compose("up", "-d", "nginx")
 
     # Show URLs
@@ -374,8 +380,8 @@ def reset_password(config, instance, dbname, login, password):
     db_port = db_conf["port"]
     container = f"odoo-{instance}"
 
-    safe_pw = shlex.quote(password)
-    safe_login = shlex.quote(login)
+    safe_pw = "'{}'".format(password.replace("'", "''"))
+    safe_login = "'{}'".format(login.replace("'", "''"))
     print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
     sql = f"update res_users set password = {safe_pw} where login = {safe_login};"
     subprocess.run(
