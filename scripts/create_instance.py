@@ -278,39 +278,42 @@ def create_instance(name, repo_url, branch, odoo_version):
 
 if __name__ == "__main__":
     print("\n=== Creador de Instancias Odoo ===")
+    try:
+        name = sys.argv[1] if len(sys.argv) > 1 else ""
+        while not name:
+            name = input("📦 Ingresa el nombre de la instancia (ej. micliente): ").strip()
 
-    name = sys.argv[1] if len(sys.argv) > 1 else ""
-    while not name:
-        name = input("📦 Ingresa el nombre de la instancia (ej. micliente): ").strip()
+        repo_url = sys.argv[2] if len(sys.argv) > 2 else ""
+        while not repo_url or not is_ssh_url(repo_url):
+            if repo_url and not is_ssh_url(repo_url):
+                print("❌ Error: La URL debe ser SSH (git@... o ssh://...)")
+            repo_url = input("🔗 Ingresa la URL SSH del repositorio: ").strip()
 
-    repo_url = sys.argv[2] if len(sys.argv) > 2 else ""
-    while not repo_url or not is_ssh_url(repo_url):
-        if repo_url and not is_ssh_url(repo_url):
-            print("❌ Error: La URL debe ser SSH (git@... o ssh://...)")
-        repo_url = input("🔗 Ingresa la URL SSH del repositorio: ").strip()
+        branch = sys.argv[3] if len(sys.argv) > 3 else ""
+        while not branch:
+            branch_options = [
+                (1, "release", "release"),
+                (2, "staging", "staging"),
+                (3, "otra", "otra"),
+            ]
+            branch_choice = interactive_menu(
+                "🌿 Selecciona la rama del repositorio", branch_options
+            )
 
-    branch = sys.argv[3] if len(sys.argv) > 3 else ""
-    while not branch:
-        branch_options = [
-            (1, "release", "release"),
-            (2, "staging", "staging"),
-            (3, "otra", "otra"),
-        ]
-        branch_choice = interactive_menu(
-            "🌿 Selecciona la rama del repositorio", branch_options
-        )
+            if branch_choice == "otra":
+                while not branch:
+                    branch = input("🌿 Ingresa el nombre de la rama: ").strip()
+            else:
+                branch = branch_choice
 
-        if branch_choice == "otra":
-            while not branch:
-                branch = input("🌿 Ingresa el nombre de la rama: ").strip()
-        else:
-            branch = branch_choice
+        odoo_version = sys.argv[4] if len(sys.argv) > 4 else ""
+        while not odoo_version:
+            version_options = [(1, "17.0", "17.0"), (2, "19.0", "19.0")]
+            odoo_version = interactive_menu(
+                "⚙️  Selecciona la versión de Odoo", version_options
+            )
 
-    odoo_version = sys.argv[4] if len(sys.argv) > 4 else ""
-    while not odoo_version:
-        version_options = [(1, "17.0", "17.0"), (2, "19.0", "19.0")]
-        odoo_version = interactive_menu(
-            "⚙️  Selecciona la versión de Odoo", version_options
-        )
-
-    create_instance(name, repo_url, branch, odoo_version)
+        create_instance(name, repo_url, branch, odoo_version)
+    except (KeyboardInterrupt, EOFError):
+        print("\nOperación cancelada.")
+        sys.exit(130)
