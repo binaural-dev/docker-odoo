@@ -1,6 +1,7 @@
 .env
 instances.json
 src
+!mcp-server/src
 .resources/Dockerfile
 .resources/Dockerfile.*
 !.resources/Dockerfile.template
