@@ -8,6 +8,7 @@ Reads instances.json and generates/manages Docker containers for multiple Odoo i
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -384,6 +385,85 @@ def sync(repo_names, branch, show=False):
             print(f"❌ Error sincronizando {repo_name}: {e}")
         finally:
             os.chdir(BASE_PATH)
+
+
+def mcp_start(config):
+    """Setup and configure bin-odoo-mcp for opencode."""
+    print("\n\033[1;36m=== 🔧 CONFIGURANDO BIN-ODOO-MCP ===\033[0m\n")
+
+    opencode_bin = shutil.which("opencode")
+    if not opencode_bin:
+        fallback = Path.home() / ".opencode" / "bin" / "opencode"
+        if fallback.exists():
+            opencode_bin = str(fallback)
+
+    if not opencode_bin:
+        print("\033[91m❌ opencode no está instalado.\033[0m")
+        print("Instalalo con: curl -fsSL https://opencode.ai/install.sh | bash")
+        sys.exit(1)
+
+    print(f"✓ opencode encontrado en: {opencode_bin}")
+
+    mcp_server_path = Path(BASE_PATH) / "mcp-server"
+    venv_path = mcp_server_path / ".venv"
+
+    if not venv_path.exists():
+        print("\n→ Creando entorno virtual...")
+        result = subprocess.run(
+            [sys.executable, "-m", "venv", str(venv_path)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"\033[91m❌ Error creando venv: {result.stderr}\033[0m")
+            sys.exit(1)
+        print("✓ Entorno virtual creado")
+    else:
+        print("✓ Entorno virtual ya existe")
+
+    venv_pip = venv_path / "bin" / "pip"
+    print("\n→ Instalando dependencias...")
+    result = subprocess.run(
+        [str(venv_pip), "install", "-e", "."],
+        cwd=str(mcp_server_path),
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"\033[91m❌ Error instalando dependencias: {result.stderr}\033[0m")
+        sys.exit(1)
+    print("✓ Dependencias instaladas")
+
+    opencode_json_path = Path.home() / ".config" / "opencode" / "opencode.json"
+    if not opencode_json_path.exists():
+        print(f"\033[91m❌ No se encontró {opencode_json_path}\033[0m")
+        sys.exit(1)
+
+    with open(opencode_json_path, "r") as f:
+        opencode_config = json.load(f)
+
+    if "mcp" not in opencode_config:
+        opencode_config["mcp"] = {}
+
+    opencode_config["mcp"].pop("odoo-db", None)
+
+    venv_python = venv_path / "bin" / "python"
+    instances_json = str(Path(BASE_PATH) / "instances.json")
+
+    opencode_config["mcp"]["bin-odoo-mcp"] = {
+        "type": "local",
+        "command": [str(venv_python), "-m", "odoo_mcp_server"],
+        "environment": {
+            "INSTANCES_JSON": instances_json,
+            "ALLOW_WRITE": "false"
+        }
+    }
+
+    with open(opencode_json_path, "w") as f:
+        json.dump(opencode_config, f, indent=2)
+
+    print(f"✓ MCP configurado en {opencode_json_path}")
+
+    print("\n\033[92m✅ bin-odoo-mcp configurado correctamente.\033[0m")
+    print("\nReinicia opencode para que los cambios surtan efecto.\n")
 
 
 # ============================================================
@@ -782,6 +862,16 @@ def main():
     sync_p.add_argument("b", nargs="?", default=None, help="Branch (opcional)")
     sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
 
+    # new
+    new_inst_p = subparsers.add_parser("new", help="Crea una nueva instancia (interactivo o por argumentos)")
+    new_inst_p.add_argument("name", nargs="?", default=None, help="Nombre de instancia")
+    new_inst_p.add_argument("repo", nargs="?", default=None, help="URL del repositorio (SSH)")
+    new_inst_p.add_argument("branch", nargs="?", default=None, help="Rama del repositorio")
+    new_inst_p.add_argument("version", nargs="?", default=None, help="Versión de Odoo")
+
+    # mcp-start
+    subparsers.add_parser("mcp-start", help="Configura bin-odoo-mcp para opencode")
+
     args = parser.parse_args()
 
     if not args.action:
@@ -844,7 +934,15 @@ def main():
         if args.b is None:
             args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
         sync(args.r, args.b, show=args.v)
-
+    elif args.action == "new":
+        cmd = [sys.executable, os.path.join(BASE_PATH, "scripts", "create_instance.py")]
+        if args.name: cmd.append(args.name)
+        if args.repo: cmd.append(args.repo)
+        if args.branch: cmd.append(args.branch)
+        if args.version: cmd.append(args.version)
+        subprocess.run(cmd)
+    elif args.action == "mcp-start":
+        mcp_start(config)
 
 if __name__ == "__main__":
     main()
