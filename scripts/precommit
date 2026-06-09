@@ -16,17 +16,35 @@ PRECOMMIT_REPO_WEB_URL = "https://github.com/binaural-dev/precommit-config-files
 PRECOMMIT_REPO_BRANCH = "release"
 PRECOMMIT_CONFIG_FILE = ".pre-commit-config.yaml"
 IGNORE_DIR = os.path.join(BASE_PATH, ".ignore")
+PRECOMMIT_VENV_DIR = os.path.join(IGNORE_DIR, ".venv-precommit")
+PRECOMMIT_PYTHON = sys.executable
 
 
-def _precommit_cmd():
-    """Return the argv list to invoke pre-commit via the current interpreter."""
-    return [sys.executable, "-m", "pre_commit"]
+def _venv_python(venv_dir):
+    if os.name == "nt":
+        return os.path.join(venv_dir, "Scripts", "python.exe")
+    return os.path.join(venv_dir, "bin", "python")
 
 
-def _precommit_available():
-    """Check if pre-commit is importable/runnable by the current interpreter."""
+def _set_precommit_python(python_executable):
+    global PRECOMMIT_PYTHON
+    PRECOMMIT_PYTHON = python_executable
+
+
+def _precommit_cmd(python_executable=None):
+    """Return the argv list to invoke pre-commit via the selected interpreter."""
+    python_bin = python_executable or PRECOMMIT_PYTHON
+    return [python_bin, "-m", "pre_commit"]
+
+
+def _precommit_available(python_executable=None):
+    """Check if pre-commit is importable/runnable by the selected interpreter."""
     try:
-        subprocess.run(_precommit_cmd() + ["--version"], capture_output=True, check=True)
+        subprocess.run(
+            _precommit_cmd(python_executable) + ["--version"],
+            capture_output=True,
+            check=True,
+        )
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
         return False
@@ -60,15 +78,137 @@ def _print_devops_guidance(message):
 
 class PrecommitSetup:
     @staticmethod
-    def ensure_installed():
-        if _precommit_available():
-            return
-        print("Instalando pre-commit...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "pre-commit"], check=True)
-        if not _precommit_available():
-            raise RuntimeError(
-                "pre-commit se instaló pero no está disponible para este intérprete Python."
+    def _is_externally_managed_error(*messages):
+        full_output = "\n".join((message or "") for message in messages).lower()
+        return (
+            "externally-managed-environment" in full_output
+            or "externally managed" in full_output
+            or "pep 668" in full_output
+        )
+
+    @classmethod
+    def _create_venv(cls, clear=False):
+        args = [sys.executable, "-m", "venv"]
+        if clear:
+            args.append("--clear")
+        args.append(PRECOMMIT_VENV_DIR)
+        subprocess.run(args, check=True)
+
+    @staticmethod
+    def _pip_available(python_executable):
+        try:
+            subprocess.run(
+                [python_executable, "-m", "pip", "--version"],
+                capture_output=True,
+                check=True,
             )
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return False
+
+    @classmethod
+    def _ensure_venv_pip(cls, venv_python):
+        if cls._pip_available(venv_python):
+            return
+
+        print("El virtualenv no tiene pip. Intentando bootstrap con ensurepip...")
+        ensurepip = subprocess.run(
+            [venv_python, "-m", "ensurepip", "--upgrade"],
+            capture_output=True,
+            text=True,
+        )
+        if ensurepip.returncode == 0 and cls._pip_available(venv_python):
+            return
+
+        print("No se pudo bootstrapear pip. Reintentando con virtualenv limpio...")
+        cls._create_venv(clear=True)
+        ensurepip_retry = subprocess.run(
+            [venv_python, "-m", "ensurepip", "--upgrade"],
+            capture_output=True,
+            text=True,
+        )
+        if ensurepip_retry.returncode == 0 and cls._pip_available(venv_python):
+            return
+
+        if ensurepip.stdout:
+            print(ensurepip.stdout)
+        if ensurepip.stderr:
+            print(ensurepip.stderr, file=sys.stderr)
+        if ensurepip_retry.stdout:
+            print(ensurepip_retry.stdout)
+        if ensurepip_retry.stderr:
+            print(ensurepip_retry.stderr, file=sys.stderr)
+
+        raise RuntimeError(
+            "No se pudo habilitar pip dentro del virtualenv de pre-commit. "
+            "Instalá 'python3-venv' para tu versión de Python (por ejemplo, 'python3.13-venv') "
+            "y reintentá. Si persiste, eliminá '.ignore/.venv-precommit' y corré el comando nuevamente."
+        )
+
+    @classmethod
+    def _install_in_venv(cls):
+        os.makedirs(IGNORE_DIR, exist_ok=True)
+        venv_python = _venv_python(PRECOMMIT_VENV_DIR)
+
+        if not os.path.exists(venv_python):
+            print(f"Creando virtualenv para pre-commit en {PRECOMMIT_VENV_DIR}...")
+            try:
+                cls._create_venv()
+            except subprocess.CalledProcessError as exc:
+                raise RuntimeError(
+                    "No se pudo crear el virtualenv de pre-commit. "
+                    "Instalá 'python3-venv' e intentá nuevamente."
+                ) from exc
+
+        cls._ensure_venv_pip(venv_python)
+
+        print("Instalando pre-commit en virtualenv dedicado...")
+        subprocess.run([venv_python, "-m", "pip", "install", "-U", "pip"], check=True)
+        subprocess.run([venv_python, "-m", "pip", "install", "pre-commit"], check=True)
+
+        if not _precommit_available(venv_python):
+            raise RuntimeError(
+                "pre-commit se instaló en el virtualenv, pero no quedó disponible."
+            )
+
+        _set_precommit_python(venv_python)
+
+    @classmethod
+    def ensure_installed(cls):
+        if _precommit_available(sys.executable):
+            _set_precommit_python(sys.executable)
+            return
+
+        venv_python = _venv_python(PRECOMMIT_VENV_DIR)
+        if os.path.exists(venv_python) and _precommit_available(venv_python):
+            _set_precommit_python(venv_python)
+            return
+
+        print("Instalando pre-commit...")
+        pip_result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "pre-commit"],
+            capture_output=True,
+            text=True,
+        )
+
+        if pip_result.returncode == 0 and _precommit_available(sys.executable):
+            _set_precommit_python(sys.executable)
+            return
+
+        if cls._is_externally_managed_error(pip_result.stdout, pip_result.stderr):
+            print(
+                "Entorno Python administrado externamente detectado. "
+                "Se usará un virtualenv dedicado en .ignore/.venv-precommit."
+            )
+            cls._install_in_venv()
+            return
+
+        if pip_result.stdout:
+            print(pip_result.stdout)
+        if pip_result.stderr:
+            print(pip_result.stderr, file=sys.stderr)
+
+        cls._install_in_venv()
 
     @staticmethod
     def _branch_exists(branch):
@@ -259,6 +399,39 @@ class PrecommitRunner:
                     files.append(os.path.join(root, fn))
         return files
 
+    @staticmethod
+    def _file_batches(target_files, config_path):
+        base_args = _precommit_cmd() + ["run", "--config", config_path, "--files"]
+        base_size = sum(len(arg) + 1 for arg in base_args)
+
+        try:
+            arg_max = os.sysconf("SC_ARG_MAX")
+        except (AttributeError, ValueError):
+            arg_max = 131072
+
+        env_size = sum(len(key) + len(value) + 2 for key, value in os.environ.items())
+        size_budget = max(8192, min(262144, arg_max - env_size - 32768))
+
+        batches = []
+        current_batch = []
+        current_size = base_size
+
+        for file_path in target_files:
+            file_size = len(file_path) + 1
+
+            if current_batch and (current_size + file_size) > size_budget:
+                batches.append(current_batch)
+                current_batch = []
+                current_size = base_size
+
+            current_batch.append(file_path)
+            current_size += file_size
+
+        if current_batch:
+            batches.append(current_batch)
+
+        return batches
+
     def run(self):
         config = load_config(BASE_PATH)
         resolver = ModuleResolver(config, self.instance)
@@ -281,13 +454,19 @@ class PrecommitRunner:
             print("No se encontraron archivos para procesar en los módulos especificados.")
             return
 
-        subprocess.run(
-            _precommit_cmd()
-            + ["run", "--config", setup_info["config_path"], "--files"]
-            + target_files,
-            cwd=setup_info["repo_dir"],
-            check=True,
-        )
+        file_batches = self._file_batches(target_files, setup_info["config_path"])
+        print(f"Archivos a validar: {len(target_files)} en {len(file_batches)} lote(s).")
+
+        for index, batch in enumerate(file_batches, start=1):
+            if len(file_batches) > 1:
+                print(f"\nLote {index}/{len(file_batches)} ({len(batch)} archivos)")
+            subprocess.run(
+                _precommit_cmd()
+                + ["run", "--config", setup_info["config_path"], "--files"]
+                + batch,
+                cwd=setup_info["repo_dir"],
+                check=True,
+            )
 
 
 def parse_args():
