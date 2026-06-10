@@ -233,10 +233,10 @@ pip install --user textual
 - **Acceso**: `bash`, `logs`, `psql` (suspenden la TUI y devuelven el control
   al terminar el comando interactivo)
 - **Mantenimiento**: `fix-files`, `init`, `validate-instances`, `remove`
-- **Módulos / DB**: `update`, `pw` (reset de password)
+- **Módulos / DB**: `update` (admite `--load-language`), `pw` (reset de password)
 - **Sync**: `sync` (submódulos git de un repo custom)
 - **Scripts**: `backup`, `restore`, `test`, `precommit`, `active-users`,
-  `migrate`, `update-manifest`, `odoo-update`
+  `migrate`, `update-manifest`
 
 `start`/`stop`/`restart`/`logs`/`fix-files`/`init`/`remove` aceptan la
 opción **"Todas las instancias"**; la TUI los itera por vos y evita que

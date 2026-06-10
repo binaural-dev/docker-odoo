@@ -67,6 +67,7 @@ ARG_TARGET_PG = "pg_major"  # target postgres major version
 ARG_PATH = "path"           # generic output path
 ARG_TEST_TAGS = "test_tags"
 ARG_INSTALL = "install_modules"
+ARG_LANG = "load_language"  # optional, only used by the update action
 
 
 @dataclass
@@ -134,8 +135,9 @@ ACTIONS: list[Action] = [
 
     # Módulos / DB
     Action("update", "Update módulos", "Módulos / DB",
-           "Actualiza módulos de Odoo (con -d y -m)",
-           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES]),
+           "Actualiza módulos via scripts/odoo-update (admite --load-language)",
+           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES],
+           needs_db_first=True),
     Action("pw", "Reset password", "Módulos / DB",
            "Restablece la contraseña de un usuario",
            needs=[ARG_INSTANCE, ARG_DB, ARG_USER, ARG_PASSWORD]),
@@ -169,10 +171,6 @@ ACTIONS: list[Action] = [
            needs=[ARG_INSTANCE, ARG_DB]),
     Action("script:upgrade_manifest", "Bump manifest version", "Scripts",
            "Asistente para incrementar la versión en __manifest__.py"),
-    Action("script:update", "Update (script)", "Scripts",
-           "Actualiza módulos vía scripts/odoo-update",
-           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES],
-           needs_db_first=True),
 ]
 
 
@@ -220,6 +218,17 @@ def _odoo_cli_args(action: Action, instance: Optional[str], args: dict) -> list:
 
 def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
     """Build argv for invoking scripts/<script>."""
+    # The consolidated ``update`` action lives next to the ``script:*`` ones
+    # but has a bare action_id (no colon). Resolve it explicitly so the rest
+    # of the dispatch can stay generic.
+    if action.action_id == "update":
+        argv = ["scripts/odoo-update", instance, "-d", args["db"]]
+        if args.get("modules"):
+            argv += args["modules"].split(",")
+        if args.get("load_language"):
+            argv.append(f"--load-language={args['load_language']}")
+        return argv
+
     sub = action.action_id.split(":", 1)[1]
     script = {
         "backup": "scripts/odoo_backup",
@@ -229,7 +238,6 @@ def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
         "active_users": "scripts/odoo_active_users",
         "migrate": "scripts/migrate-module",
         "upgrade_manifest": "scripts/odoo-upgrade-manifest",
-        "update": "scripts/odoo-update",
     }[sub]
     argv = [script]
     if sub == "backup":
@@ -252,10 +260,6 @@ def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
         argv += [instance, "-d", args["db"]]
     elif sub == "upgrade_manifest":
         pass
-    elif sub == "update":
-        argv += [instance, "-d", args["db"]]
-        if args.get("modules"):
-            argv += args["modules"].split(",")
     return argv
 
 
@@ -660,6 +664,12 @@ class DockerOdooApp(App):
                 continue
             fields.append(self._arg_to_field(arg))
 
+        # The consolidated ``update`` action exposes an optional
+        # --load-language field on the text modal that is not part of
+        # ``action.needs`` (the fzf-style picker handles its own modal).
+        if action.action_id == "update":
+            fields.append(self._arg_to_field(ARG_LANG))
+
         # If the only thing the action needs was an instance (already
         # selected), skip the modal and run straight away.
         if not fields:
@@ -697,6 +707,8 @@ class DockerOdooApp(App):
                             "placeholder": "/binaural_accountant"},
             ARG_INSTALL: {"key": ARG_INSTALL, "label": "Módulos a instalar (-i)",
                           "placeholder": "account,sale"},
+            ARG_LANG: {"key": ARG_LANG, "label": "Load language (opcional)",
+                       "placeholder": "es_VE"},
         }
         return defaults[arg]
 
@@ -707,8 +719,11 @@ class DockerOdooApp(App):
             defaults[ARG_PASSWORD] = "admin"
         if action.action_id == "update":
             defaults[ARG_MODULES] = "all"
-        if action.action_id == "script:update":
-            defaults[ARG_MODULES] = "all"
+            if self.selected_instance:
+                inst = self.config["instances"].get(self.selected_instance, {})
+                defaults[ARG_DB] = inst.get(
+                    "overwrite_odoo_config", {}
+                ).get("db_name", self.selected_instance)
         if action.action_id == "script:test":
             defaults[ARG_DB] = "testing"
             defaults[ARG_TEST_TAGS] = "/binaural_accountant"
@@ -724,7 +739,50 @@ class DockerOdooApp(App):
         # Convert numeric fields where appropriate
         if ARG_TARGET_PG in result and result[ARG_TARGET_PG].isdigit():
             result[ARG_TARGET_PG] = int(result[ARG_TARGET_PG])
+        # Soft-check that typed modules exist in any of the instance's
+        # addons paths. This is only relevant for the text modal flow of
+        # the ``update`` action; the fzf-style picker already filters
+        # against the scanned module list.
+        if action.action_id == "update" and result.get(ARG_MODULES):
+            self._warn_unknown_modules(result[ARG_MODULES])
         self.run_worker(self._execute(action, result), exclusive=False)
+
+    def _warn_unknown_modules(self, modules_str: str) -> None:
+        """Log a yellow warning listing modules not found in addons paths."""
+        if not modules_str or modules_str.strip().lower() == "all":
+            return
+        if self.selected_instance is None:
+            return
+        inst = self.config["instances"].get(self.selected_instance)
+        if inst is None:
+            return
+        try:
+            from generators.config_loader import resolve_instance_config
+        except ImportError:
+            return
+        addons = resolve_instance_config(inst, self.config).get("addons", [])
+        valid_paths = [
+            a for a in addons
+            if os.path.isdir(os.path.join(BASE_PATH, a))
+        ]
+        missing: list[str] = []
+        for raw in modules_str.split(","):
+            name = raw.strip()
+            if not name:
+                continue
+            found = any(
+                os.path.isfile(
+                    os.path.join(BASE_PATH, a, name, "__manifest__.py")
+                )
+                for a in valid_paths
+            )
+            if not found:
+                missing.append(name)
+        if missing:
+            self._log(
+                f"[yellow]Aviso:[/yellow] módulo(s) no encontrado(s) en "
+                f"addons: {', '.join(missing)}"
+            )
 
     # ---------- execution ----------
 
@@ -765,7 +823,9 @@ class DockerOdooApp(App):
             self._log(f"[red]✗ {action.label} salió con código {rc_total} en al menos una instancia[/red]")
 
     async def _execute_one(self, action: Action, instance: Optional[str], args: dict, *, echo_cmd: bool = True) -> int:
-        if action.action_id.startswith("script:"):
+        # The consolidated ``update`` action routes through scripts/odoo-update
+        # just like the legacy ``script:update`` did.
+        if action.action_id == "update" or action.action_id.startswith("script:"):
             argv = _script_args(action, instance, args)
         else:
             argv = _odoo_cli_args(action, instance, args)
