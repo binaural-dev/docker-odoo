@@ -76,6 +76,19 @@
           "src/custom/client-b"
         ]
       }
+    },
+    "client-paused": {
+      "enabled": false,
+      "odoo_version": "19.0",
+      "external_port": 8072,
+      "database": "pg16",
+      "odoo_config": "19.0_default",
+      "overwrite_odoo_config": {
+        "addons": [
+          "src/enterprise",
+          "src/custom/client-paused"
+        ]
+      }
     }
   },
   "pgadmin": {

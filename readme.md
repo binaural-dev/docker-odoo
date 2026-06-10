@@ -83,7 +83,7 @@ Define las conexiones a PostgreSQL. `create_container` (default: `true`) control
 
 ### `instances` — Instancias de Odoo
 
-Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`.
+Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`. El flag opcional `"enabled"` (default `true`) controla si la instancia aparece en `./odoo build/start/stop/...` y en la TUI; podés togglerlo desde la TUI con `Space` y el cambio se persiste en `instances.json`.
 
 ```json
 {
@@ -106,6 +106,16 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
       "odoo_config": "17.0_default",
       "overwrite_odoo_config": {
         "addons": ["src/enterprise", "src/custom/client-b"]
+      }
+    },
+    "client-paused": {
+      "enabled": false,
+      "odoo_version": "19.0",
+      "external_port": 8072,
+      "database": "pg16",
+      "odoo_config": "19.0_default",
+      "overwrite_odoo_config": {
+        "addons": ["src/enterprise", "src/custom/client-paused"]
       }
     }
   }
@@ -192,7 +202,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 ./odoo restart
 ```
 
-## TUI interactiva: `./tui.py`
+## TUI interactiva: `./odoo-tui`
 
 Una interfaz de terminal (Textual) que envuelve `./odoo` y los scripts de
 `scripts/`. **No reemplaza el CLI**: `./odoo <comando>` sigue funcionando
@@ -204,7 +214,7 @@ comandos por vos y muestra el output en pantalla.
 pip install --user textual
 
 # Lanzar la TUI
-./tui.py
+./odoo-tui
 ```
 
 ### Flujo
@@ -216,6 +226,26 @@ pip install --user textual
    (DB, módulos, login, archivo ZIP, etc.) aparece un modal para completarlos.
 4. El comando se invoca y el output se stream en el panel inferior.
 
+### Picker fzf para `Update módulos`
+
+La acción `Update módulos` detecta los addons locales de la instancia
+seleccionada (recorriendo los paths declarados en `overwrite_odoo_config`)
+y abre un picker estilo fzf con dos paneles: `Disponibles` (módulos
+encontrados en disco) y `A actualizar` (los que vas acumulando).
+
+- Filtrá tipeando en el campo `Filtro` (match por substring case-insensitive).
+- `Enter` sobre un módulo disponible lo agrega (o lo quita) de la selección.
+- `Tab` cambia el foco entre el campo de filtro y las listas.
+- `L` limpia la selección.
+- `E` ejecuta (o el botón `Ejecutar`).
+- `Esc` cancela.
+
+Si confirmás con la selección vacía, se ejecuta `all` (etiqueta del
+botón cambia a `Ejecutar (all)`). Si la instancia no tiene addons en
+disco, el picker se salta y se usa el modal de texto clásico, que
+además acepta un campo opcional `Load language` para pasarlo como
+`--load-language=es_VE` a `scripts/odoo-update`.
+
 ### Atajos de teclado
 
 | Tecla | Acción |
@@ -224,6 +254,7 @@ pip install --user textual
 | `↑` / `↓` | Navegar dentro de un panel |
 | `Enter` | Seleccionar instancia / ejecutar acción |
 | `r` | Refrescar instancias desde `instances.json` |
+| `Space` | Toggle `enabled` de la instancia seleccionada (persiste en `instances.json`) |
 | `q` / `Esc` | Salir / cancelar modal |
 
 ### Acciones soportadas
@@ -232,10 +263,10 @@ pip install --user textual
 - **Acceso**: `bash`, `logs`, `psql` (suspenden la TUI y devuelven el control
   al terminar el comando interactivo)
 - **Mantenimiento**: `fix-files`, `init`, `validate-instances`, `remove`
-- **Módulos / DB**: `update`, `pw` (reset de password)
+- **Módulos / DB**: `update` (admite `--load-language`), `pw` (reset de password)
 - **Sync**: `sync` (submódulos git de un repo custom)
 - **Scripts**: `backup`, `restore`, `test`, `precommit`, `active-users`,
-  `migrate`, `update-manifest`, `odoo-update`
+  `migrate`, `update-manifest`
 
 `start`/`stop`/`restart`/`logs`/`fix-files`/`init`/`remove` aceptan la
 opción **"Todas las instancias"**; la TUI los itera por vos y evita que

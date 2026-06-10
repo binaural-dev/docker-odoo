@@ -8,11 +8,12 @@ behaviour is untouched: the TUI shells out to the same entrypoints a
 developer would type by hand.
 
 Usage:
-    ./tui.py
-    python3 tui.py
+    ./odoo-tui
+    python3 odoo-tui
 """
 
 import asyncio
+import json
 import os
 import shlex
 import shutil
@@ -41,7 +42,11 @@ from textual.widgets import (
 
 BASE_PATH = str(Path(__file__).resolve().parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
-from generators.config_loader import load_config  # noqa: E402
+from generators.config_loader import (  # noqa: E402
+    is_instance_enabled,
+    load_config,
+    load_full_config,
+)
 
 
 # ============================================================
@@ -62,6 +67,7 @@ ARG_TARGET_PG = "pg_major"  # target postgres major version
 ARG_PATH = "path"           # generic output path
 ARG_TEST_TAGS = "test_tags"
 ARG_INSTALL = "install_modules"
+ARG_LANG = "load_language"  # optional, only used by the update action
 
 
 @dataclass
@@ -129,8 +135,9 @@ ACTIONS: list[Action] = [
 
     # Módulos / DB
     Action("update", "Update módulos", "Módulos / DB",
-           "Actualiza módulos de Odoo (con -d y -m)",
-           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES]),
+           "Actualiza módulos via scripts/odoo-update (admite --load-language)",
+           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES],
+           needs_db_first=True),
     Action("pw", "Reset password", "Módulos / DB",
            "Restablece la contraseña de un usuario",
            needs=[ARG_INSTANCE, ARG_DB, ARG_USER, ARG_PASSWORD]),
@@ -164,10 +171,6 @@ ACTIONS: list[Action] = [
            needs=[ARG_INSTANCE, ARG_DB]),
     Action("script:upgrade_manifest", "Bump manifest version", "Scripts",
            "Asistente para incrementar la versión en __manifest__.py"),
-    Action("script:update", "Update (script)", "Scripts",
-           "Actualiza módulos vía scripts/odoo-update",
-           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES],
-           needs_db_first=True),
 ]
 
 
@@ -215,6 +218,17 @@ def _odoo_cli_args(action: Action, instance: Optional[str], args: dict) -> list:
 
 def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
     """Build argv for invoking scripts/<script>."""
+    # The consolidated ``update`` action lives next to the ``script:*`` ones
+    # but has a bare action_id (no colon). Resolve it explicitly so the rest
+    # of the dispatch can stay generic.
+    if action.action_id == "update":
+        argv = ["scripts/odoo-update", instance, "-d", args["db"]]
+        if args.get("modules"):
+            argv += args["modules"].split(",")
+        if args.get("load_language"):
+            argv.append(f"--load-language={args['load_language']}")
+        return argv
+
     sub = action.action_id.split(":", 1)[1]
     script = {
         "backup": "scripts/odoo_backup",
@@ -224,7 +238,6 @@ def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
         "active_users": "scripts/odoo_active_users",
         "migrate": "scripts/migrate-module",
         "upgrade_manifest": "scripts/odoo-upgrade-manifest",
-        "update": "scripts/odoo-update",
     }[sub]
     argv = [script]
     if sub == "backup":
@@ -247,10 +260,6 @@ def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
         argv += [instance, "-d", args["db"]]
     elif sub == "upgrade_manifest":
         pass
-    elif sub == "update":
-        argv += [instance, "-d", args["db"]]
-        if args.get("modules"):
-            argv += args["modules"].split(",")
     return argv
 
 
@@ -333,6 +342,149 @@ class ConfirmModal(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ModulePicker(ModalScreen[Optional[list]]):
+    """fzf-style two-pane module picker.
+
+    Left pane: filtered list of available modules (those found on disk
+    under the instance's resolved addons paths). Modules already in
+    ``selected`` are prefixed with a check mark.
+    Right pane: the modules the user has picked.
+    Bottom: footer with key hints and an Execute button.
+
+    On dismiss returns:
+      * ``None``  -> user cancelled (Esc)
+      * ``[]``    -> user confirmed with an empty selection (interpreted
+                     as ``all`` by the caller; the Execute button label
+                     changes to "Ejecutar (all)" in that case)
+      * ``[m1, m2, ...]`` -> user-confirmed module list
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel_picker", "Cancel"),
+        Binding("l", "clear_selection", "Limpiar"),
+        Binding("e", "execute_picker", "Ejecutar"),
+    ]
+
+    def __init__(
+        self,
+        instance_name: str,
+        available_modules: list,
+        preselected: Optional[list] = None,
+    ):
+        super().__init__()
+        self.instance_name = instance_name
+        self.available_modules = sorted(available_modules)
+        self.preselected = list(preselected or [])
+        self.selected: list[str] = list(self.preselected)
+        self._filter: str = ""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Label(
+                f"Update módulos — {self.instance_name}", id="modal_title"
+            )
+            yield Label("Filtro:", classes="field_label")
+            yield Input(placeholder="escribí para filtrar", id="filter_input")
+            with Horizontal(id="picker_panes"):
+                with Vertical(id="picker_left"):
+                    yield Label("Disponibles", classes="field_label")
+                    yield ListView(id="available_list")
+                with Vertical(id="picker_right"):
+                    yield Label("A actualizar", classes="field_label")
+                    yield ListView(id="selected_list")
+            with Horizontal(id="modal_buttons"):
+                yield Static(
+                    "[Tab] cambiar   [Enter] +/-   [L] limpiar   "
+                    "[E] ejecutar   [Esc] cancelar",
+                    id="picker_hints",
+                )
+            with Horizontal(id="modal_buttons"):
+                yield Button("Cancelar", id="cancel", variant="error")
+                yield Button("Ejecutar", id="ok", variant="success")
+
+    def on_mount(self) -> None:
+        self._render_available()
+        self._render_selected()
+        self.query_one("#filter_input", Input).focus()
+
+    # ----- rendering -----
+
+    def _render_available(self) -> None:
+        view = self.query_one("#available_list", ListView)
+        view.clear()
+        needle = self._filter.lower()
+        for m in self.available_modules:
+            if needle and needle not in m.lower():
+                continue
+            label = f" ✓ {m}" if m in self.selected else f"   {m}"
+            item = ListItem(Label(label))
+            item.module_name = m  # type: ignore[attr-defined]
+            view.append(item)
+
+    def _render_selected(self) -> None:
+        view = self.query_one("#selected_list", ListView)
+        view.clear()
+        for m in self.selected:
+            item = ListItem(Label(f" ▸ {m}"))
+            item.module_name = m  # type: ignore[attr-defined]
+            view.append(item)
+        self._refresh_execute_label()
+
+    def _refresh_execute_label(self) -> None:
+        btn = self.query_one("#ok", Button)
+        if self.selected:
+            btn.label = f"Ejecutar ({len(self.selected)})"
+        else:
+            btn.label = "Ejecutar (all)"
+
+    # ----- events -----
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "filter_input":
+            return
+        self._filter = event.value
+        self._render_available()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item = event.item
+        name = getattr(item, "module_name", None)
+        if name is None:
+            return
+        if event.list_view.id == "available_list":
+            if name in self.selected:
+                self.selected.remove(name)
+            else:
+                self.selected.append(name)
+            self._render_available()
+            self._render_selected()
+        elif event.list_view.id == "selected_list":
+            if name in self.selected:
+                self.selected.remove(name)
+            self._render_available()
+            self._render_selected()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.action_cancel_picker()
+        elif event.button.id == "ok":
+            self.action_execute_picker()
+
+    # ----- actions -----
+
+    def action_cancel_picker(self) -> None:
+        self.dismiss(None)
+
+    def action_clear_selection(self) -> None:
+        self.selected = []
+        self._render_available()
+        self._render_selected()
+
+    def action_execute_picker(self) -> None:
+        # An empty selection means "all" — the caller handles the
+        # semantics; we just hand back an empty list.
+        self.dismiss(list(self.selected))
+
+
 # ============================================================
 # Main screen
 # ============================================================
@@ -348,15 +500,22 @@ CATEGORY_BADGE = {
 
 
 class InstanceItem(ListItem):
-    def __init__(self, name: str, version: str, port: int, database: str):
-        super().__init__(Label(f" {name:<14}  {version:<5}  :{port:<5}  db: {database}"))
+    def __init__(self, name: str, version: str, port: int, database: str, enabled: bool = True):
+        row = f" {name:<14}  {version:<5}  :{port:<5}  db: {database}"
+        if not enabled:
+            row = f"[dim]{row}  [off][/dim]"
+        super().__init__(Label(row))
         self.instance_name = name
+        self.instance_enabled = enabled
 
 
 class AllInstancesItem(ListItem):
-    def __init__(self):
-        super().__init__(Label(" Todas las instancias"))
+    def __init__(self, enabled_count: int = 0):
+        label = " Todas las instancias" if enabled_count > 0 else \
+            " [dim]Todas las instancias (ninguna habilitada)[/dim]"
+        super().__init__(Label(label))
         self.instance_name = None
+        self.disabled = enabled_count == 0
 
 
 class ActionItem(ListItem):
@@ -450,20 +609,39 @@ class DockerOdooApp(App):
     #modal_buttons Button {
         margin: 0 1;
     }
+    #picker_panes {
+        height: 1fr;
+        margin-top: 1;
+    }
+    #picker_left, #picker_right {
+        width: 1fr;
+        border: round $primary;
+        padding: 0 1;
+    }
+    #picker_left ListView, #picker_right ListView {
+        height: 1fr;
+    }
+    #picker_hints {
+        color: $secondary;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
         Binding("q", "quit", "Salir"),
         Binding("r", "refresh", "Refrescar"),
         Binding("tab", "focus_next", "Siguiente panel"),
+        Binding("space", "toggle_instance", "Toggle enabled"),
     ]
 
     selected_instance: reactive[Optional[str]] = reactive(None)
 
     def __init__(self):
         super().__init__()
-        self.config: dict = {}
+        self.config: dict = {}            # filtered (enabled-only) instances
+        self._raw_config: dict = {}       # unfiltered, used for persistence
         self._last_action: Optional[Action] = None
+        self.module_cache: dict = {}      # instance -> sorted module names
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -489,25 +667,69 @@ class DockerOdooApp(App):
 
     def refresh_instances(self) -> None:
         try:
-            self.config = load_config(BASE_PATH)
+            self._raw_config = load_full_config(BASE_PATH)
         except SystemExit:
-            self.config = {}
+            self._raw_config = {}
         except Exception as exc:
             self._log(f"[red]Error cargando instances.json:[/red] {exc}")
-            self.config = {}
+            self._raw_config = {}
+
+        # Filtered view used by action dispatch (enabled-only).
+        self.config = {
+            "odoo_configs": self._raw_config.get("odoo_configs", {}),
+            "databases": self._raw_config.get("databases", {}),
+            "instances": {
+                name: inst
+                for name, inst in self._raw_config.get("instances", {}).items()
+                if is_instance_enabled(inst)
+            },
+        }
 
         list_view = self.query_one("#instances_list", ListView)
         list_view.clear()
-        list_view.append(AllInstancesItem())
-        for name, inst in self.config.get("instances", {}).items():
+        enabled_count = len(self.config["instances"])
+        list_view.append(AllInstancesItem(enabled_count=enabled_count))
+        for name, inst in self._raw_config.get("instances", {}).items():
             list_view.append(InstanceItem(
                 name=name,
                 version=inst.get("odoo_version", "?"),
                 port=inst.get("external_port", 0),
                 database=inst.get("database", "?"),
+                enabled=is_instance_enabled(inst),
             ))
         list_view.index = 0
         self.selected_instance = None
+
+    def _scan_instance_modules(self, inst_name: str, inst_conf: dict) -> list:
+        """Return the sorted list of module names found in the instance's addons paths.
+
+        Results are memoised in ``self.module_cache``. The scan only
+        happens lazily on first request for an instance, never on
+        ``on_mount`` (which would scan every configured instance
+        regardless of whether the user will ever use the picker).
+        """
+        if inst_name in self.module_cache:
+            return self.module_cache[inst_name]
+        try:
+            from generators.config_loader import resolve_instance_config
+        except ImportError:
+            self.module_cache[inst_name] = []
+            return []
+        addons = resolve_instance_config(inst_conf, self.config).get("addons", [])
+        modules: set[str] = set()
+        for path in addons:
+            abs_path = os.path.join(BASE_PATH, path)
+            if not os.path.isdir(abs_path):
+                continue
+            for entry in os.listdir(abs_path):
+                full = os.path.join(abs_path, entry)
+                if (
+                    os.path.isdir(full)
+                    and os.path.isfile(os.path.join(full, "__manifest__.py"))
+                ):
+                    modules.add(entry)
+        self.module_cache[inst_name] = sorted(modules)
+        return self.module_cache[inst_name]
 
     def refresh_actions(self) -> None:
         list_view = self.query_one("#actions_list", ListView)
@@ -522,6 +744,47 @@ class DockerOdooApp(App):
                 else:
                     list_view.append(NoInstanceActionItem(action))
         list_view.index = 0
+
+    # ---------- toggle persistence ----------
+
+    def action_toggle_instance(self) -> None:
+        """Toggle the ``enabled`` flag of the highlighted instance and persist."""
+        list_view = self.query_one("#instances_list", ListView)
+        item = list_view.highlighted_child
+        if item is None or not isinstance(item, InstanceItem):
+            self._log("[yellow]Space no aplica a 'Todas las instancias'.[/yellow]")
+            return
+        name = item.instance_name
+        if name not in self._raw_config.get("instances", {}):
+            return
+        new_value = not is_instance_enabled(self._raw_config["instances"][name])
+        self._raw_config["instances"][name]["enabled"] = new_value
+        if not self._save_instances_json(self._raw_config):
+            # Revert in-memory change so UI and disk stay in sync.
+            self._raw_config["instances"][name]["enabled"] = not new_value
+            return
+        self._log(
+            f"[green]Instancia[/green] [b]{name}[/b] "
+            f"{'habilitada' if new_value else 'deshabilitada'}."
+        )
+        # Repaint the list, preserving the current selection index.
+        current_index = list_view.index
+        self.refresh_instances()
+        list_view.index = min(current_index, len(list_view.children) - 1)
+
+    def _save_instances_json(self, raw_config: dict) -> bool:
+        """Persist the full (unfiltered) instances.json. Returns True on success."""
+        path = os.path.join(BASE_PATH, "instances.json")
+        try:
+            with open(path, "w") as f:
+                json.dump(raw_config, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            return True
+        except (OSError, PermissionError) as exc:
+            self._log(
+                f"[red]No se pudo guardar instances.json:[/red] {exc}"
+            )
+            return False
 
     # ---------- event wiring ----------
 
@@ -553,18 +816,60 @@ class DockerOdooApp(App):
 
     def _dispatch(self, action: Action) -> None:
         self._last_action = action
-        # Validate that an instance is available when needed
+        if not self._raw_config.get("instances"):
+            self._log("[red]No hay instancias configuradas en instances.json.[/red]")
+            return
+        # If an instance is needed and the user selected a disabled one, fail.
+        if (
+            ARG_INSTANCE in action.needs
+            and self.selected_instance is not None
+            and self.selected_instance not in self.config["instances"]
+        ):
+            self._log(
+                f"[red]La instancia '{self.selected_instance}' está deshabilitada. "
+                f"Reactivala con Space antes de correr acciones.[/red]"
+            )
+            return
         if ARG_INSTANCE in action.needs and self.selected_instance is None and not action.needs_all_option:
             self._log(f"[red]'{action.label}' requiere seleccionar una instancia.[/red]")
             return
-        if not self.config.get("instances"):
-            self._log("[red]No hay instancias configuradas en instances.json.[/red]")
+        if (
+            self.selected_instance is None
+            and action.needs_all_option
+            and not self.config.get("instances")
+        ):
+            self._log("[red]Todas las instancias están deshabilitadas.[/red]")
             return
 
         # Special-cased no-arg actions
         if not action.needs:
             self.run_worker(self._execute(action, {}), exclusive=False)
             return
+
+        # Special case: the consolidated ``update`` action with an
+        # instance selected can use the fzf-style module picker when
+        # addons paths are available on disk. The text modal remains
+        # the fallback for "all instances" or for instances whose
+        # addons paths did not produce any modules.
+        if action.action_id == "update" and self.selected_instance is not None:
+            inst = self.config["instances"].get(self.selected_instance)
+            if inst is not None:
+                available = self._scan_instance_modules(
+                    self.selected_instance, inst
+                )
+                if available:
+                    self.push_screen(
+                        ModulePicker(
+                            instance_name=self.selected_instance,
+                            available_modules=available,
+                        ),
+                        lambda result: self._on_picker_result(action, result),
+                    )
+                    return
+                self._log(
+                    "[yellow]No se detectaron addons locales; "
+                    "usando input de texto.[/yellow]"
+                )
 
         # Build the fields list and launch the input modal.
         # ARG_INSTANCE is pre-selected from the instance list and is NOT
@@ -574,6 +879,12 @@ class DockerOdooApp(App):
             if arg == ARG_INSTANCE:
                 continue
             fields.append(self._arg_to_field(arg))
+
+        # The consolidated ``update`` action exposes an optional
+        # --load-language field on the text modal that is not part of
+        # ``action.needs`` (the fzf-style picker handles its own modal).
+        if action.action_id == "update":
+            fields.append(self._arg_to_field(ARG_LANG))
 
         # If the only thing the action needs was an instance (already
         # selected), skip the modal and run straight away.
@@ -612,6 +923,8 @@ class DockerOdooApp(App):
                             "placeholder": "/binaural_accountant"},
             ARG_INSTALL: {"key": ARG_INSTALL, "label": "Módulos a instalar (-i)",
                           "placeholder": "account,sale"},
+            ARG_LANG: {"key": ARG_LANG, "label": "Load language (opcional)",
+                       "placeholder": "es_VE"},
         }
         return defaults[arg]
 
@@ -622,8 +935,11 @@ class DockerOdooApp(App):
             defaults[ARG_PASSWORD] = "admin"
         if action.action_id == "update":
             defaults[ARG_MODULES] = "all"
-        if action.action_id == "script:update":
-            defaults[ARG_MODULES] = "all"
+            if self.selected_instance:
+                inst = self.config["instances"].get(self.selected_instance, {})
+                defaults[ARG_DB] = inst.get(
+                    "overwrite_odoo_config", {}
+                ).get("db_name", self.selected_instance)
         if action.action_id == "script:test":
             defaults[ARG_DB] = "testing"
             defaults[ARG_TEST_TAGS] = "/binaural_accountant"
@@ -639,7 +955,75 @@ class DockerOdooApp(App):
         # Convert numeric fields where appropriate
         if ARG_TARGET_PG in result and result[ARG_TARGET_PG].isdigit():
             result[ARG_TARGET_PG] = int(result[ARG_TARGET_PG])
+        # Soft-check that typed modules exist in any of the instance's
+        # addons paths. This is only relevant for the text modal flow of
+        # the ``update`` action; the fzf-style picker already filters
+        # against the scanned module list.
+        if action.action_id == "update" and result.get(ARG_MODULES):
+            self._warn_unknown_modules(result[ARG_MODULES])
         self.run_worker(self._execute(action, result), exclusive=False)
+
+    def _on_picker_result(
+        self, action: Action, result: Optional[list]
+    ) -> None:
+        """Handle the ModulePicker dismiss for the update action.
+
+        Empty selection means ``all``; a non-empty list is comma-joined
+        for the ``-u`` flag. The DB default is auto-filled from
+        ``overwrite_odoo_config.db_name`` exactly like the text modal
+        flow does, so the picker path and the text modal path converge
+        before reaching :meth:`_execute`.
+        """
+        if result is None:
+            self._log("[yellow]Cancelado.[/yellow]")
+            return
+        modules_str = ",".join(result) if result else "all"
+        if self.selected_instance:
+            inst = self.config["instances"].get(self.selected_instance, {})
+            db_default = inst.get("overwrite_odoo_config", {}).get(
+                "db_name", self.selected_instance
+            )
+        else:
+            db_default = ""
+        args = {ARG_DB: db_default, ARG_MODULES: modules_str}
+        self.run_worker(self._execute(action, args), exclusive=False)
+
+    def _warn_unknown_modules(self, modules_str: str) -> None:
+        """Log a yellow warning listing modules not found in addons paths."""
+        if not modules_str or modules_str.strip().lower() == "all":
+            return
+        if self.selected_instance is None:
+            return
+        inst = self.config["instances"].get(self.selected_instance)
+        if inst is None:
+            return
+        try:
+            from generators.config_loader import resolve_instance_config
+        except ImportError:
+            return
+        addons = resolve_instance_config(inst, self.config).get("addons", [])
+        valid_paths = [
+            a for a in addons
+            if os.path.isdir(os.path.join(BASE_PATH, a))
+        ]
+        missing: list[str] = []
+        for raw in modules_str.split(","):
+            name = raw.strip()
+            if not name:
+                continue
+            found = any(
+                os.path.isfile(
+                    os.path.join(BASE_PATH, a, name, "__manifest__.py")
+                )
+                for a in valid_paths
+            )
+            if not found:
+                missing.append(name)
+        if missing:
+            self._log(
+                f"[yellow]Aviso:[/yellow] módulo(s) no encontrado(s) en "
+                f"addons: {', '.join(missing)}"
+            )
 
     # ---------- execution ----------
 
@@ -658,8 +1042,17 @@ class DockerOdooApp(App):
 
     async def _execute_all(self, action: Action, args: dict) -> None:
         instances = list(self.config["instances"].keys())
+        disabled = [
+            name for name, inst in self._raw_config.get("instances", {}).items()
+            if not is_instance_enabled(inst)
+        ]
+        if disabled:
+            self._log(
+                f"[dim]Saltando instancia(s) deshabilitada(s): "
+                f"{', '.join(disabled)}[/dim]"
+            )
         self._log(f"[cyan]→ {action.label} para {len(instances)} instancia(s): "
-                  f"{', '.join(instances)}[/cyan]")
+                  f"{', '.join(instances) or '(ninguna habilitada)'}[/cyan]")
         rc_total = 0
         for name in instances:
             self._log(f"[dim]-- {name} --[/dim]")
@@ -671,7 +1064,9 @@ class DockerOdooApp(App):
             self._log(f"[red]✗ {action.label} salió con código {rc_total} en al menos una instancia[/red]")
 
     async def _execute_one(self, action: Action, instance: Optional[str], args: dict, *, echo_cmd: bool = True) -> int:
-        if action.action_id.startswith("script:"):
+        # The consolidated ``update`` action routes through scripts/odoo-update
+        # just like the legacy ``script:update`` did.
+        if action.action_id == "update" or action.action_id.startswith("script:"):
             argv = _script_args(action, instance, args)
         else:
             argv = _odoo_cli_args(action, instance, args)
