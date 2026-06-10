@@ -1,0 +1,748 @@
+#!/usr/bin/env python3
+"""
+TUI launcher for docker-odoo.
+
+Provides a Textual-based interactive interface that wraps the existing
+``./odoo`` CLI and the helper scripts under ``./scripts/``. The CLI
+behaviour is untouched: the TUI shells out to the same entrypoints a
+developer would type by hand.
+
+Usage:
+    ./tui.py
+    python3 tui.py
+"""
+
+import asyncio
+import os
+import shlex
+import shutil
+import sys
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.reactive import reactive
+from textual.screen import ModalScreen
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    RichLog,
+    Static,
+)
+
+BASE_PATH = str(Path(__file__).resolve().parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import load_config  # noqa: E402
+
+
+# ============================================================
+# Action definitions
+# ============================================================
+
+# Arg kinds requested from the user before the command is built.
+ARG_INSTANCE = "instance"   # pre-selected from the instance list
+ARG_DB = "db"               # database name (with picker when possible)
+ARG_MODULES = "modules"     # comma-separated modules
+ARG_USER = "user"           # login
+ARG_PASSWORD = "password"   # password (default: admin)
+ARG_REPO = "repo"           # git repo name
+ARG_BRANCH = "branch"       # git branch
+ARG_ZIP = "zip"             # backup zip file
+ARG_DEST_DB = "dest_db"     # destination database name
+ARG_TARGET_PG = "pg_major"  # target postgres major version
+ARG_PATH = "path"           # generic output path
+ARG_TEST_TAGS = "test_tags"
+ARG_INSTALL = "install_modules"
+
+
+@dataclass
+class Action:
+    action_id: str
+    label: str
+    category: str
+    description: str
+    needs: list = field(default_factory=list)
+    interactive: bool = False  # bash/logs: suspend TUI, run, resume
+    needs_all_option: bool = False  # show "Todas las instancias" entry
+    needs_db_first: bool = False    # also expose DB picker (helper scripts)
+
+    def to_dict(self):
+        return {
+            "id": self.action_id,
+            "label": self.label,
+            "category": self.category,
+            "description": self.description,
+            "needs": list(self.needs),
+            "interactive": self.interactive,
+        }
+
+
+ACTIONS: list[Action] = [
+    # Lifecycle
+    Action("build", "Build images", "Lifecycle",
+           "Genera Dockerfiles, compose y nginx; construye imágenes",
+           needs_all_option=True),
+    Action("start", "Start", "Lifecycle",
+           "Inicia instancia(s) y DB(s) managed",
+           needs=[ARG_INSTANCE], needs_all_option=True),
+    Action("stop", "Stop", "Lifecycle",
+           "Detiene instancia(s) y DB(s) si quedan huérfanas",
+           needs=[ARG_INSTANCE], needs_all_option=True),
+    Action("restart", "Restart", "Lifecycle",
+           "Reinicia instancia(s)",
+           needs=[ARG_INSTANCE], needs_all_option=True),
+    Action("list", "List containers", "Lifecycle",
+           "Lista contenedores docker compose en ejecución"),
+
+    # Acceso
+    Action("bash", "Bash en contenedor", "Acceso",
+           "Abre una shell interactiva dentro del contenedor Odoo",
+           needs=[ARG_INSTANCE], interactive=True),
+    Action("logs", "Logs", "Acceso",
+           "Sigue los logs en tiempo real",
+           needs=[ARG_INSTANCE], interactive=True, needs_all_option=True),
+    Action("psql", "psql", "Acceso",
+           "Conecta a PostgreSQL dentro del contenedor Odoo",
+           needs=[ARG_INSTANCE, ARG_DB], interactive=True),
+
+    # Mantenimiento
+    Action("fix-files", "Fix filestore perms", "Mantenimiento",
+           "Corrige permisos del filestore",
+           needs=[ARG_INSTANCE], needs_all_option=True),
+    Action("init", "Init addons check", "Mantenimiento",
+           "Verifica que los addons referenciados existen",
+           needs=[ARG_INSTANCE], needs_all_option=True),
+    Action("validate-instances", "Validate instances.json", "Mantenimiento",
+           "Valida el archivo instances.json"),
+    Action("remove", "Remove", "Mantenimiento",
+           "Elimina contenedores y volúmenes de la instancia",
+           needs=[ARG_INSTANCE], needs_all_option=True),
+
+    # Módulos / DB
+    Action("update", "Update módulos", "Módulos / DB",
+           "Actualiza módulos de Odoo (con -d y -m)",
+           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES]),
+    Action("pw", "Reset password", "Módulos / DB",
+           "Restablece la contraseña de un usuario",
+           needs=[ARG_INSTANCE, ARG_DB, ARG_USER, ARG_PASSWORD]),
+
+    # Sync
+    Action("sync", "Sync submódulos", "Sync",
+           "Sincroniza submódulos de un repo custom",
+           needs=[ARG_REPO, ARG_BRANCH]),
+
+    # Scripts auxiliares
+    Action("script:backup", "Backup", "Scripts",
+           "Genera dump SQL + filestore en ZIP",
+           needs=[ARG_INSTANCE, ARG_DB, ARG_TARGET_PG, ARG_PATH],
+           needs_db_first=True),
+    Action("script:restore", "Restore", "Scripts",
+           "Restaura un backup ZIP a una nueva DB",
+           needs=[ARG_INSTANCE, ARG_ZIP, ARG_DEST_DB],
+           needs_db_first=True),
+    Action("script:test", "Run tests", "Scripts",
+           "Ejecuta tests Odoo con tags y módulos",
+           needs=[ARG_INSTANCE, ARG_DB, ARG_TEST_TAGS, ARG_INSTALL],
+           needs_db_first=True),
+    Action("script:precommit", "Pre-commit", "Scripts",
+           "Corre pre-commit sobre los módulos de la instancia",
+           needs=[ARG_INSTANCE]),
+    Action("script:active_users", "Active users", "Scripts",
+           "Cuenta usuarios activos por DB (bus_presence)",
+           needs=[ARG_INSTANCE]),
+    Action("script:migrate", "Migrate module", "Scripts",
+           "Instala un módulo cargando el helper de migración de vistas OCA",
+           needs=[ARG_INSTANCE, ARG_DB]),
+    Action("script:upgrade_manifest", "Bump manifest version", "Scripts",
+           "Asistente para incrementar la versión en __manifest__.py"),
+    Action("script:update", "Update (script)", "Scripts",
+           "Actualiza módulos vía scripts/odoo-update",
+           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES],
+           needs_db_first=True),
+]
+
+
+def get_action(action_id: str) -> Action:
+    for a in ACTIONS:
+        if a.action_id == action_id:
+            return a
+    raise KeyError(f"Unknown action: {action_id}")
+
+
+CATEGORY_ORDER = [
+    "Lifecycle",
+    "Acceso",
+    "Mantenimiento",
+    "Módulos / DB",
+    "Sync",
+    "Scripts",
+]
+
+
+# ============================================================
+# Helpers
+# ============================================================
+
+def _odoo_cli_args(action: Action, instance: Optional[str], args: dict) -> list:
+    """Build argv for invoking ./odoo <action>."""
+    argv = ["./odoo", action.action_id]
+    if ARG_INSTANCE in action.needs and instance:
+        argv.append(instance)
+
+    if ARG_DB in action.needs and args.get("db"):
+        argv += ["-d", args["db"]]
+    if ARG_MODULES in action.needs and args.get("modules"):
+        argv += ["-m", args["modules"]]
+    if ARG_USER in action.needs and args.get("user"):
+        argv += ["-l", args["user"]]
+    if ARG_PASSWORD in action.needs and args.get("password"):
+        argv += ["-p", args["password"]]
+    if ARG_REPO in action.needs and args.get("repo"):
+        argv.append(args["repo"])
+    if ARG_BRANCH in action.needs and args.get("branch"):
+        argv.append(args["branch"])
+    return argv
+
+
+def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
+    """Build argv for invoking scripts/<script>."""
+    sub = action.action_id.split(":", 1)[1]
+    script = {
+        "backup": "scripts/odoo_backup",
+        "restore": "scripts/odoo_restore",
+        "test": "scripts/odoo-test",
+        "precommit": "scripts/precommit",
+        "active_users": "scripts/odoo_active_users",
+        "migrate": "scripts/migrate-module",
+        "upgrade_manifest": "scripts/odoo-upgrade-manifest",
+        "update": "scripts/odoo-update",
+    }[sub]
+    argv = [script]
+    if sub == "backup":
+        argv += ["backup", instance, "-d", args["db"],
+                 "--target-pg-major", str(args["pg_major"]),
+                 "-p", args["path"]]
+    elif sub == "restore":
+        argv += ["restore", instance, "-z", args["zip"], "-d", args["dest_db"]]
+    elif sub == "test":
+        argv += [instance, "-d", args["db"]]
+        if args.get("test_tags"):
+            argv += ["-t", args["test_tags"]]
+        if args.get("install_modules"):
+            argv += ["-i", args["install_modules"]]
+    elif sub == "precommit":
+        argv += [instance, "-m", "all"]
+    elif sub == "active_users":
+        argv += [instance]
+    elif sub == "migrate":
+        argv += [instance, "-d", args["db"]]
+    elif sub == "upgrade_manifest":
+        pass
+    elif sub == "update":
+        argv += [instance, "-d", args["db"]]
+        if args.get("modules"):
+            argv += args["modules"].split(",")
+    return argv
+
+
+# ============================================================
+# Modals
+# ============================================================
+
+class InputModal(ModalScreen[Optional[dict]]):
+    """Generic modal that asks one or more labelled inputs."""
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, title: str, fields: list, defaults: Optional[dict] = None):
+        super().__init__()
+        self.title_text = title
+        self.fields = fields  # list of dicts: {key, label, placeholder, password}
+        self.defaults = defaults or {}
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Label(self.title_text, id="modal_title")
+            with Vertical(id="modal_fields"):
+                self._inputs = {}
+                for f in self.fields:
+                    yield Label(f["label"], classes="field_label")
+                    placeholder = f.get("placeholder", "")
+                    pw = f.get("password", False)
+                    inp = Input(placeholder=placeholder, password=pw, id=f"inp_{f['key']}")
+                    if f["key"] in self.defaults:
+                        inp.value = str(self.defaults[f["key"]])
+                    self._inputs[f["key"]] = inp
+                    yield inp
+            with Horizontal(id="modal_buttons"):
+                yield Button("Cancelar", id="cancel", variant="error")
+                yield Button("Ejecutar", id="ok", variant="success")
+
+    def on_mount(self) -> None:
+        first = self.query(Input).first()
+        if first is not None:
+            first.focus()
+        else:
+            ok = self.query_one("#ok", Button)
+            ok.focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.dismiss(None)
+        elif event.button.id == "ok":
+            if not self._inputs:
+                self.dismiss({})
+            else:
+                self.dismiss({k: inp.value.strip() for k, inp in self._inputs.items()})
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class ConfirmModal(ModalScreen[bool]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self, title: str, message: str, yes_label: str = "Sí", no_label: str = "No"):
+        super().__init__()
+        self.title_text = title
+        self.message = message
+        self.yes_label = yes_label
+        self.no_label = no_label
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Label(self.title_text, id="modal_title")
+            yield Label(self.message, id="modal_message")
+            with Horizontal(id="modal_buttons"):
+                yield Button(self.no_label, id="no", variant="error")
+                yield Button(self.yes_label, id="yes", variant="success")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id == "yes")
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+# ============================================================
+# Main screen
+# ============================================================
+
+CATEGORY_BADGE = {
+    "Lifecycle": "[Lifecycle]",
+    "Acceso": "[Acceso]",
+    "Mantenimiento": "[Mant.]",
+    "Módulos / DB": "[Módulos]",
+    "Sync": "[Sync]",
+    "Scripts": "[Scripts]",
+}
+
+
+class InstanceItem(ListItem):
+    def __init__(self, name: str, version: str, port: int, database: str):
+        super().__init__(Label(f" {name:<14}  {version:<5}  :{port:<5}  db: {database}"))
+        self.instance_name = name
+
+
+class AllInstancesItem(ListItem):
+    def __init__(self):
+        super().__init__(Label(" Todas las instancias"))
+        self.instance_name = None
+
+
+class ActionItem(ListItem):
+    def __init__(self, action: Action):
+        badge = CATEGORY_BADGE.get(action.category, "")
+        super().__init__(Label(f" {badge:<10} {action.label}"))
+        self.action = action
+
+
+class NoInstanceActionItem(ListItem):
+    """Special: actions that don't need an instance (build, list, validate, sync, upgrade_manifest)."""
+
+    def __init__(self, action: Action):
+        badge = CATEGORY_BADGE.get(action.category, "")
+        super().__init__(Label(f" {badge:<10} {action.label}"))
+        self.action = action
+
+
+class DockerOdooApp(App):
+    CSS = """
+    Screen {
+        background: $surface;
+    }
+    #main {
+        height: 1fr;
+    }
+    #left, #right {
+        width: 1fr;
+        border: round $primary;
+        padding: 0 1;
+    }
+    #left {
+        width: 38%;
+    }
+    Header {
+        dock: top;
+    }
+    Footer {
+        dock: bottom;
+    }
+    ListView {
+        height: 1fr;
+    }
+    ListView > ListItem {
+        padding: 0 1;
+    }
+    ListView > ListItem.--highlight {
+        background: $accent;
+    }
+    Static#subtitle {
+        color: $secondary;
+        padding: 0 1;
+        text-style: bold;
+    }
+    RichLog {
+        height: 30%;
+        border: round $primary;
+        background: $surface-darken-1;
+    }
+    #modal_box {
+        background: $panel;
+        border: thick $accent;
+        padding: 1 2;
+        width: 70;
+        height: auto;
+        align: center middle;
+    }
+    #modal_box Label {
+        width: 100%;
+        content-align: center middle;
+    }
+    #modal_title {
+        text-style: bold;
+        color: $accent;
+        padding-bottom: 1;
+    }
+    #modal_message {
+        padding: 1 0;
+    }
+    #modal_fields Input {
+        margin-bottom: 1;
+    }
+    .field_label {
+        color: $secondary;
+    }
+    #modal_buttons {
+        align-horizontal: center;
+        height: 3;
+        padding-top: 1;
+    }
+    #modal_buttons Button {
+        margin: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        Binding("q", "quit", "Salir"),
+        Binding("r", "refresh", "Refrescar"),
+        Binding("tab", "focus_next", "Siguiente panel"),
+    ]
+
+    selected_instance: reactive[Optional[str]] = reactive(None)
+
+    def __init__(self):
+        super().__init__()
+        self.config: dict = {}
+        self._last_action: Optional[Action] = None
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=False)
+        with Horizontal(id="main"):
+            with Vertical(id="left"):
+                yield Static("Instancias (instances.json)", id="subtitle")
+                yield ListView(id="instances_list")
+            with Vertical(id="right"):
+                yield Static("Acciones disponibles", id="subtitle")
+                yield ListView(id="actions_list")
+        yield RichLog(id="output", highlight=False, markup=True, wrap=True)
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.title = "docker-odoo TUI"
+        self.sub_title = "Launcher interactivo"
+        self.refresh_instances()
+        self.refresh_actions()
+        self._log("[green]Listo.[/green] Elegí una instancia y luego una acción. "
+                  "Atajos: [b]q[/b] salir, [b]r[/b] refrescar, [b]Tab[/b] cambiar panel.")
+
+    # ---------- data loading ----------
+
+    def refresh_instances(self) -> None:
+        try:
+            self.config = load_config(BASE_PATH)
+        except SystemExit:
+            self.config = {}
+        except Exception as exc:
+            self._log(f"[red]Error cargando instances.json:[/red] {exc}")
+            self.config = {}
+
+        list_view = self.query_one("#instances_list", ListView)
+        list_view.clear()
+        list_view.append(AllInstancesItem())
+        for name, inst in self.config.get("instances", {}).items():
+            list_view.append(InstanceItem(
+                name=name,
+                version=inst.get("odoo_version", "?"),
+                port=inst.get("external_port", 0),
+                database=inst.get("database", "?"),
+            ))
+        list_view.index = 0
+        self.selected_instance = None
+
+    def refresh_actions(self) -> None:
+        list_view = self.query_one("#actions_list", ListView)
+        list_view.clear()
+        # Show all categories; user can pick a no-instance action directly
+        for cat in CATEGORY_ORDER:
+            for action in ACTIONS:
+                if action.category != cat:
+                    continue
+                if ARG_INSTANCE in action.needs:
+                    list_view.append(ActionItem(action))
+                else:
+                    list_view.append(NoInstanceActionItem(action))
+        list_view.index = 0
+
+    # ---------- event wiring ----------
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.list_view.id == "instances_list":
+            item = event.item
+            if isinstance(item, InstanceItem):
+                self.selected_instance = item.instance_name
+            else:
+                self.selected_instance = None
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.list_view.id == "instances_list":
+            item = event.item
+            if isinstance(item, InstanceItem):
+                self.selected_instance = item.instance_name
+                self._log(f"Instancia seleccionada: [b]{item.instance_name}[/b]")
+            else:
+                self.selected_instance = None
+                self._log("Selección: [b]Todas las instancias[/b]")
+            self.query_one("#actions_list", ListView).focus()
+        elif event.list_view.id == "actions_list":
+            item = event.item
+            action = getattr(item, "action", None)
+            if action is not None:
+                self._dispatch(action)
+
+    # ---------- dispatch ----------
+
+    def _dispatch(self, action: Action) -> None:
+        self._last_action = action
+        # Validate that an instance is available when needed
+        if ARG_INSTANCE in action.needs and self.selected_instance is None and not action.needs_all_option:
+            self._log(f"[red]'{action.label}' requiere seleccionar una instancia.[/red]")
+            return
+        if not self.config.get("instances"):
+            self._log("[red]No hay instancias configuradas en instances.json.[/red]")
+            return
+
+        # Special-cased no-arg actions
+        if not action.needs:
+            self.run_worker(self._execute(action, {}), exclusive=False)
+            return
+
+        # Build the fields list and launch the input modal.
+        # ARG_INSTANCE is pre-selected from the instance list and is NOT
+        # asked again as a modal input.
+        fields = []
+        for arg in action.needs:
+            if arg == ARG_INSTANCE:
+                continue
+            fields.append(self._arg_to_field(arg))
+
+        # If the only thing the action needs was an instance (already
+        # selected), skip the modal and run straight away.
+        if not fields:
+            self.run_worker(self._execute(action, {}), exclusive=False)
+            return
+        defaults = self._arg_defaults(action)
+        modal = InputModal(
+            title=f"{action.label} — completar datos",
+            fields=fields,
+            defaults=defaults,
+        )
+        self.push_screen(modal, lambda result: self._on_modal_result(action, result))
+
+    def _arg_to_field(self, arg: str) -> dict:
+        defaults = {
+            ARG_DB: {"key": ARG_DB, "label": "Base de datos (-d)",
+                     "placeholder": "ej: bananera_prod"},
+            ARG_MODULES: {"key": ARG_MODULES, "label": "Módulos (-m)",
+                          "placeholder": "sale,purchase o 'all'"},
+            ARG_USER: {"key": ARG_USER, "label": "Login (-l)", "placeholder": "admin"},
+            ARG_PASSWORD: {"key": ARG_PASSWORD, "label": "Nueva contraseña (-p)",
+                           "placeholder": "admin", "password": True},
+            ARG_REPO: {"key": ARG_REPO, "label": "Repo (carpeta bajo src/custom/)",
+                       "placeholder": "ej: server-ux"},
+            ARG_BRANCH: {"key": ARG_BRANCH, "label": "Branch", "placeholder": "19.0"},
+            ARG_ZIP: {"key": ARG_ZIP, "label": "Archivo ZIP de backup",
+                      "placeholder": "/ruta/al/backup.zip"},
+            ARG_DEST_DB: {"key": ARG_DEST_DB, "label": "Nombre de la nueva DB",
+                          "placeholder": "ej: restored_db"},
+            ARG_TARGET_PG: {"key": ARG_TARGET_PG, "label": "Target pg major",
+                            "placeholder": "16"},
+            ARG_PATH: {"key": ARG_PATH, "label": "Ruta de salida del ZIP",
+                       "placeholder": "/tmp/backup.zip"},
+            ARG_TEST_TAGS: {"key": ARG_TEST_TAGS, "label": "Test tags (-t)",
+                            "placeholder": "/binaural_accountant"},
+            ARG_INSTALL: {"key": ARG_INSTALL, "label": "Módulos a instalar (-i)",
+                          "placeholder": "account,sale"},
+        }
+        return defaults[arg]
+
+    def _arg_defaults(self, action: Action) -> dict:
+        defaults = {}
+        if action.action_id == "pw":
+            defaults[ARG_USER] = "admin"
+            defaults[ARG_PASSWORD] = "admin"
+        if action.action_id == "update":
+            defaults[ARG_MODULES] = "all"
+        if action.action_id == "script:update":
+            defaults[ARG_MODULES] = "all"
+        if action.action_id == "script:test":
+            defaults[ARG_DB] = "testing"
+            defaults[ARG_TEST_TAGS] = "/binaural_accountant"
+            defaults[ARG_INSTALL] = "l10n_ve,binaural_rate,account,binaural_accountant"
+        if action.action_id == "script:backup":
+            defaults[ARG_TARGET_PG] = "16"
+        return defaults
+
+    def _on_modal_result(self, action: Action, result: Optional[dict]) -> None:
+        if result is None:
+            self._log("[yellow]Cancelado.[/yellow]")
+            return
+        # Convert numeric fields where appropriate
+        if ARG_TARGET_PG in result and result[ARG_TARGET_PG].isdigit():
+            result[ARG_TARGET_PG] = int(result[ARG_TARGET_PG])
+        self.run_worker(self._execute(action, result), exclusive=False)
+
+    # ---------- execution ----------
+
+    async def _execute(self, action: Action, args: dict) -> None:
+        # If the action supports "all instances" and no instance was picked,
+        # fan out across every enabled instance.
+        if (
+            action.needs_all_option
+            and self.selected_instance is None
+            and self.config.get("instances")
+        ):
+            await self._execute_all(action, args)
+            return
+
+        await self._execute_one(action, self.selected_instance, args)
+
+    async def _execute_all(self, action: Action, args: dict) -> None:
+        instances = list(self.config["instances"].keys())
+        self._log(f"[cyan]→ {action.label} para {len(instances)} instancia(s): "
+                  f"{', '.join(instances)}[/cyan]")
+        rc_total = 0
+        for name in instances:
+            self._log(f"[dim]-- {name} --[/dim]")
+            rc = await self._execute_one(action, name, args, echo_cmd=False)
+            rc_total = rc_total or rc
+        if rc_total == 0:
+            self._log(f"[green]✓ {action.label} OK en todas las instancias[/green]")
+        else:
+            self._log(f"[red]✗ {action.label} salió con código {rc_total} en al menos una instancia[/red]")
+
+    async def _execute_one(self, action: Action, instance: Optional[str], args: dict, *, echo_cmd: bool = True) -> int:
+        if action.action_id.startswith("script:"):
+            argv = _script_args(action, instance, args)
+        else:
+            argv = _odoo_cli_args(action, instance, args)
+        if not shutil.which("docker") and action.action_id != "list":
+            self._log("[yellow]Aviso:[/yellow] 'docker' no está en PATH; el comando va a fallar.")
+        if action.interactive:
+            await self._run_interactive(argv, action)
+            return 0
+        return await self._run_streamed(argv, action.label, echo_cmd=echo_cmd)
+
+    async def _run_interactive(self, argv: list, action: Action) -> None:
+        self._log(f"[cyan]→ {' '.join(shlex.quote(a) for a in argv)}[/cyan]")
+        self._log("[dim]Suspendiendo TUI para comando interactivo. Volvé cuando termine.[/dim]")
+        with self.suspend():
+            try:
+                await asyncio.to_thread(subprocess.run, argv, cwd=BASE_PATH)
+            except FileNotFoundError as exc:
+                print(f"\n[ERROR] No se pudo ejecutar: {exc}", file=sys.stderr)
+            except KeyboardInterrupt:
+                print("\n[interrumpido]", file=sys.stderr)
+        self._log(f"[green]✓ {action.label} finalizado.[/green]")
+
+    async def _run_streamed(self, argv: list, label: str, *, echo_cmd: bool = True) -> int:
+        if echo_cmd:
+            self._log(f"[cyan]→ {' '.join(shlex.quote(a) for a in argv)}[/cyan]")
+        self._log("[dim]Ejecutando... (Ctrl+C para abortar)[/dim]")
+        loop = asyncio.get_running_loop()
+
+        def _run() -> int:
+            try:
+                proc = subprocess.Popen(
+                    argv, cwd=BASE_PATH,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, bufsize=1,
+                )
+            except FileNotFoundError as exc:
+                self.call_from_thread(self._log, f"[red]No encontrado:[/red] {exc}")
+                return 127
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                self.call_from_thread(self._log, line.rstrip())
+            rc = proc.wait()
+            return rc
+
+        rc = await asyncio.to_thread(_run)
+        if echo_cmd:
+            if rc == 0:
+                self._log(f"[green]✓ {label} OK[/green]")
+            else:
+                self._log(f"[red]✗ {label} salió con código {rc}[/red]")
+        return rc
+
+    def _log(self, message: str) -> None:
+        try:
+            self.query_one("#output", RichLog).write(message)
+        except Exception:
+            pass
+
+
+# ============================================================
+# Entry point
+# ============================================================
+
+def main() -> int:
+    try:
+        DockerOdooApp().run()
+    except Exception as exc:
+        print(f"TUI crashed: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
