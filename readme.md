@@ -192,7 +192,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 ./odoo restart
 ```
 
-## TUI interactiva: `./tui.py`
+## TUI interactiva: `./odoo-tui`
 
 Una interfaz de terminal (Textual) que envuelve `./odoo` y los scripts de
 `scripts/`. **No reemplaza el CLI**: `./odoo <comando>` sigue funcionando
@@ -204,7 +204,7 @@ comandos por vos y muestra el output en pantalla.
 pip install --user textual
 
 # Lanzar la TUI
-./tui.py
+./odoo-tui
 ```
 
 ### Flujo

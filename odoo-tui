@@ -8,8 +8,8 @@ behaviour is untouched: the TUI shells out to the same entrypoints a
 developer would type by hand.
 
 Usage:
-    ./tui.py
-    python3 tui.py
+    ./odoo-tui
+    python3 odoo-tui
 """
 
 import asyncio
