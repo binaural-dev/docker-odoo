@@ -192,6 +192,55 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 ./odoo restart
 ```
 
+## TUI interactiva: `./tui.py`
+
+Una interfaz de terminal (Textual) que envuelve `./odoo` y los scripts de
+`scripts/`. **No reemplaza el CLI**: `./odoo <comando>` sigue funcionando
+exactamente igual que antes. La TUI es una capa aditiva que arma los
+comandos por vos y muestra el output en pantalla.
+
+```bash
+# Dependencia: textual (>= 0.50). Instalar con:
+pip install --user textual
+
+# Lanzar la TUI
+./tui.py
+```
+
+### Flujo
+
+1. Lista las instancias definidas en `instances.json` (izquierda).
+2. Lista las acciones disponibles agrupadas por categoría (derecha):
+   `Lifecycle`, `Acceso`, `Mantenimiento`, `Módulos / DB`, `Sync`, `Scripts`.
+3. Elegís instancia → elegís acción → si la acción requiere datos
+   (DB, módulos, login, archivo ZIP, etc.) aparece un modal para completarlos.
+4. El comando se invoca y el output se stream en el panel inferior.
+
+### Atajos de teclado
+
+| Tecla | Acción |
+|-------|--------|
+| `Tab` | Cambia el foco entre paneles |
+| `↑` / `↓` | Navegar dentro de un panel |
+| `Enter` | Seleccionar instancia / ejecutar acción |
+| `r` | Refrescar instancias desde `instances.json` |
+| `q` / `Esc` | Salir / cancelar modal |
+
+### Acciones soportadas
+
+- **Lifecycle**: `build`, `start`, `stop`, `restart`, `list`
+- **Acceso**: `bash`, `logs`, `psql` (suspenden la TUI y devuelven el control
+  al terminar el comando interactivo)
+- **Mantenimiento**: `fix-files`, `init`, `validate-instances`, `remove`
+- **Módulos / DB**: `update`, `pw` (reset de password)
+- **Sync**: `sync` (submódulos git de un repo custom)
+- **Scripts**: `backup`, `restore`, `test`, `precommit`, `active-users`,
+  `migrate`, `update-manifest`, `odoo-update`
+
+`start`/`stop`/`restart`/`logs`/`fix-files`/`init`/`remove` aceptan la
+opción **"Todas las instancias"**; la TUI los itera por vos y evita que
+tengas que tipear el flag ni enfrentar el prompt interactivo del CLI.
+
 ## Scripts auxiliares
 
 En la carpeta `scripts/` se encuentran herramientas de administración. Todos requieren el nombre de instancia como primer argumento:
