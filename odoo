@@ -8,6 +8,7 @@ Reads instances.json and generates/manages Docker containers for multiple Odoo i
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -94,7 +95,7 @@ def validate_instances(config):
                 errors.append(f"Puerto duplicado: {ext_port} usado por '{name}' y '{ports_seen[ext_port]}'")
             else:
                 ports_seen[ext_port] = f"instancia {name} (external_port)"
-        
+
         # Check longpolling_port
         lp_port = inst.get("longpolling_port")
         if lp_port:
@@ -102,7 +103,7 @@ def validate_instances(config):
                 errors.append(f"Puerto duplicado: {lp_port} usado por '{name}' y '{ports_seen[lp_port]}'")
             else:
                 ports_seen[lp_port] = f"instancia {name} (longpolling_port)"
-                
+
         # Check db existence
         db_name = inst.get("database")
         if db_name and db_name not in config.get("databases", {}):
@@ -262,7 +263,7 @@ def run_bash(config, instance):
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
     )
     is_running = result.stdout.strip()
-    
+
     if is_running != "true":
         print(f"\n❌ El contenedor '{container}' no está en ejecución.")
         print(f"Prueba iniciando la instancia con: ./odoo start {instance}")
@@ -306,7 +307,7 @@ def fix_filestore(config, instance=None):
         print(f"\n\033[1;33m=== 🔧 CORRIGIENDO PERMISOS: {instance.upper()} ===\033[0m\n")
     else:
         print("\n\033[1;33m=== 🔧 CORRIGIENDO PERMISOS EN TODAS LAS INSTANCIAS ===\033[0m\n")
-    
+
     services = _get_instance_services(config, instance)
     for svc in services:
         print(f"→ Corrigiendo permisos en {svc}...")
@@ -341,7 +342,7 @@ def prompt_for_user(config, instance, dbname):
     users = get_users(config, instance, dbname)
     if not users:
         return input(f"\nNo se pudieron auto-detectar usuarios. Ingresa el login del usuario: ").strip()
-    
+
     options = [(u, u) for u in users]
     return prompt_selection(options, f"Selecciona usuario en '{dbname}'")
 
@@ -351,7 +352,7 @@ def prompt_for_repos():
     if not repos:
         print("\nNo se encontraron repositorios en src/custom/.")
         sys.exit(1)
-    
+
     options = [(r, r) for r in repos]
     selected = prompt_selection(options, "Selecciona repositorios para sincronizar (Espacio para marcar, Enter para confirmar)", multi=True)
     if not selected:
@@ -397,7 +398,7 @@ def init_addons(config, instance=None):
         print(f"\n\033[1;35m=== 📦 INICIALIZANDO ADDONS EN: {instance.upper()} ===\033[0m\n")
     else:
         print("\n\033[1;35m=== 📦 INICIALIZANDO ADDONS EN TODAS LAS INSTANCIAS ===\033[0m\n")
-    
+
     instances_to_init = [instance] if instance else list(config["instances"].keys())
     sources_path = os.path.join(BASE_PATH, "src")
 
@@ -433,28 +434,107 @@ def sync(repo_names, branch, show=False):
 
         print(f"\n=== Sincronizando {repo_name} (Rama: {branch}) ===")
         os.chdir(repo_path)
-        
+
         stdout = subprocess.DEVNULL if not show else None
-        
+
         try:
             print(f"→ Guardando cambios locales (stash)...")
             subprocess.run(["git", "stash"], stdout=stdout)
-            
+
             print(f"→ Cambiando a rama {branch}...")
             subprocess.run(["git", "checkout", branch], stdout=stdout)
-            
+
             print(f"→ Trayendo últimos cambios (pull)...")
             subprocess.run(["git", "pull", "origin", branch], stdout=stdout)
-            
+
             print(f"→ Actualizando submódulos (init --recursive)...")
             # Using --init --recursive to ensure all levels are updated
             subprocess.run(["git", "submodule", "update", "--init", "--recursive"], stdout=stdout)
-            
+
             print(f"✅ {repo_name} sincronizado.")
         except Exception as e:
             print(f"❌ Error sincronizando {repo_name}: {e}")
         finally:
             os.chdir(BASE_PATH)
+
+
+def mcp_start(config):
+    """Setup and configure bin-odoo-mcp for opencode."""
+    print("\n\033[1;36m=== 🔧 CONFIGURANDO BIN-ODOO-MCP ===\033[0m\n")
+
+    opencode_bin = shutil.which("opencode")
+    if not opencode_bin:
+        fallback = Path.home() / ".opencode" / "bin" / "opencode"
+        if fallback.exists():
+            opencode_bin = str(fallback)
+
+    if not opencode_bin:
+        print("\033[91m❌ opencode no está instalado.\033[0m")
+        print("Instalalo con: curl -fsSL https://opencode.ai/install.sh | bash")
+        sys.exit(1)
+
+    print(f"✓ opencode encontrado en: {opencode_bin}")
+
+    mcp_server_path = Path(BASE_PATH) / "mcp-server"
+    venv_path = mcp_server_path / ".venv"
+
+    if not venv_path.exists():
+        print("\n→ Creando entorno virtual...")
+        result = subprocess.run(
+            [sys.executable, "-m", "venv", str(venv_path)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"\033[91m❌ Error creando venv: {result.stderr}\033[0m")
+            sys.exit(1)
+        print("✓ Entorno virtual creado")
+    else:
+        print("✓ Entorno virtual ya existe")
+
+    venv_pip = venv_path / "bin" / "pip"
+    print("\n→ Instalando dependencias...")
+    result = subprocess.run(
+        [str(venv_pip), "install", "-e", "."],
+        cwd=str(mcp_server_path),
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"\033[91m❌ Error instalando dependencias: {result.stderr}\033[0m")
+        sys.exit(1)
+    print("✓ Dependencias instaladas")
+
+    opencode_json_path = Path.home() / ".config" / "opencode" / "opencode.json"
+    if not opencode_json_path.exists():
+        print(f"\033[91m❌ No se encontró {opencode_json_path}\033[0m")
+        sys.exit(1)
+
+    with open(opencode_json_path, "r") as f:
+        opencode_config = json.load(f)
+
+    if "mcp" not in opencode_config:
+        opencode_config["mcp"] = {}
+
+    opencode_config["mcp"].pop("odoo-db", None)
+
+    venv_python = venv_path / "bin" / "python"
+    instances_json = str(Path(BASE_PATH) / "instances.json")
+
+    opencode_config["mcp"]["bin-odoo-mcp"] = {
+        "type": "local",
+        "command": [str(venv_python), "-m", "odoo_mcp_server"],
+        "environment": {
+            "INSTANCES_JSON": instances_json,
+            "ALLOW_WRITE": "false"
+        }
+    }
+
+    with open(opencode_json_path, "w") as f:
+        json.dump(opencode_config, f, indent=2)
+
+    print(f"✓ MCP configurado en {opencode_json_path}")
+
+    print("\n\033[92m✅ bin-odoo-mcp configurado correctamente.\033[0m")
+    print("\nReinicia opencode para que los cambios surtan efecto.\n")
 
 
 # ============================================================
@@ -517,7 +597,7 @@ def get_custom_repos():
     if not os.path.isdir(custom_path):
         return []
     return sorted([
-        d for d in os.listdir(custom_path) 
+        d for d in os.listdir(custom_path)
         if os.path.isdir(os.path.join(custom_path, d))
     ])
 
@@ -528,7 +608,7 @@ def get_custom_modules(config, instance):
         inst_conf = config["instances"][instance]
         odoo_conf = resolve_instance_config(inst_conf, config)
         addons_paths = odoo_conf.get("addons", [])
-        
+
         modules = []
         for path in addons_paths:
             full_path = os.path.join(BASE_PATH, path)
@@ -560,7 +640,7 @@ def prompt_for_instance(config, action):
         options.append(("Todas las instancias", None))
     for name in instances:
         options.append((name, name))
-    
+
     return prompt_selection(options, "Selecciona una instancia (Usa las flechas, números y Enter para confirmar)")
 
 
@@ -568,7 +648,7 @@ def prompt_for_database(config, instance):
     databases = get_databases(config, instance)
     if not databases:
         return input(f"\nNo se pudieron auto-detectar bases de datos. Ingresa el nombre de la base de datos para '{instance}': ").strip()
-    
+
     options = [(db, db) for db in databases]
     return prompt_selection(options, f"Selecciona base de datos para '{instance}'")
 
@@ -578,7 +658,7 @@ def prompt_for_modules(config, instance):
     if not modules:
         print(f"\nNo se encontraron módulos custom en los addons de '{instance}'.")
         return "all"
-    
+
     options = [(mod, mod) for mod in modules]
     selected = prompt_selection(options, f"Selecciona módulos a actualizar para '{instance}' (Espacio para marcar, Enter para confirmar)", multi=True)
     if not selected:
@@ -660,6 +740,16 @@ def main():
     # validate-instances
     subparsers.add_parser("validate-instances", help="Valida el archivo instances.json")
 
+    # new
+    new_inst_p = subparsers.add_parser("new", help="Crea una nueva instancia (interactivo o por argumentos)")
+    new_inst_p.add_argument("name", nargs="?", default=None, help="Nombre de instancia")
+    new_inst_p.add_argument("repo", nargs="?", default=None, help="URL del repositorio (SSH)")
+    new_inst_p.add_argument("branch", nargs="?", default=None, help="Rama del repositorio")
+    new_inst_p.add_argument("version", nargs="?", default=None, help="Versión de Odoo")
+
+    # mcp-start
+    subparsers.add_parser("mcp-start", help="Configura bin-odoo-mcp para opencode")
+
     args = parser.parse_args()
 
     if not args.action:
@@ -673,10 +763,10 @@ def main():
     validate_instances(config)
 
     actions_with_instance = {
-        "start", "stop", "restart", "logs", "remove", 
+        "start", "stop", "restart", "logs", "remove",
         "fix-files", "init", "bash", "psql", "pw", "update"
     }
-    
+
     if args.action in actions_with_instance and getattr(args, "instance", None) is None:
         args.instance = prompt_for_instance(config, args.action)
 
@@ -728,6 +818,15 @@ def main():
     elif args.action == "validate-instances":
         print("\n\033[1;32m✅ El archivo instances.json es válido.\033[0m\n")
 
+    elif args.action == "new":
+        cmd = [sys.executable, os.path.join(BASE_PATH, "scripts", "create_instance.py")]
+        if args.name: cmd.append(args.name)
+        if args.repo: cmd.append(args.repo)
+        if args.branch: cmd.append(args.branch)
+        if args.version: cmd.append(args.version)
+        subprocess.run(cmd)
+    elif args.action == "mcp-start":
+        mcp_start(config)
 
 if __name__ == "__main__":
     main()
