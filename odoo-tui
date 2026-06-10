@@ -13,6 +13,7 @@ Usage:
 """
 
 import asyncio
+import json
 import os
 import shlex
 import shutil
@@ -41,7 +42,11 @@ from textual.widgets import (
 
 BASE_PATH = str(Path(__file__).resolve().parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
-from generators.config_loader import load_config  # noqa: E402
+from generators.config_loader import (  # noqa: E402
+    is_instance_enabled,
+    load_config,
+    load_full_config,
+)
 
 
 # ============================================================
@@ -348,15 +353,22 @@ CATEGORY_BADGE = {
 
 
 class InstanceItem(ListItem):
-    def __init__(self, name: str, version: str, port: int, database: str):
-        super().__init__(Label(f" {name:<14}  {version:<5}  :{port:<5}  db: {database}"))
+    def __init__(self, name: str, version: str, port: int, database: str, enabled: bool = True):
+        row = f" {name:<14}  {version:<5}  :{port:<5}  db: {database}"
+        if not enabled:
+            row = f"[dim]{row}  [off][/dim]"
+        super().__init__(Label(row))
         self.instance_name = name
+        self.instance_enabled = enabled
 
 
 class AllInstancesItem(ListItem):
-    def __init__(self):
-        super().__init__(Label(" Todas las instancias"))
+    def __init__(self, enabled_count: int = 0):
+        label = " Todas las instancias" if enabled_count > 0 else \
+            " [dim]Todas las instancias (ninguna habilitada)[/dim]"
+        super().__init__(Label(label))
         self.instance_name = None
+        self.disabled = enabled_count == 0
 
 
 class ActionItem(ListItem):
@@ -456,13 +468,15 @@ class DockerOdooApp(App):
         Binding("q", "quit", "Salir"),
         Binding("r", "refresh", "Refrescar"),
         Binding("tab", "focus_next", "Siguiente panel"),
+        Binding("space", "toggle_instance", "Toggle enabled"),
     ]
 
     selected_instance: reactive[Optional[str]] = reactive(None)
 
     def __init__(self):
         super().__init__()
-        self.config: dict = {}
+        self.config: dict = {}            # filtered (enabled-only) instances
+        self._raw_config: dict = {}       # unfiltered, used for persistence
         self._last_action: Optional[Action] = None
 
     def compose(self) -> ComposeResult:
@@ -489,22 +503,35 @@ class DockerOdooApp(App):
 
     def refresh_instances(self) -> None:
         try:
-            self.config = load_config(BASE_PATH)
+            self._raw_config = load_full_config(BASE_PATH)
         except SystemExit:
-            self.config = {}
+            self._raw_config = {}
         except Exception as exc:
             self._log(f"[red]Error cargando instances.json:[/red] {exc}")
-            self.config = {}
+            self._raw_config = {}
+
+        # Filtered view used by action dispatch (enabled-only).
+        self.config = {
+            "odoo_configs": self._raw_config.get("odoo_configs", {}),
+            "databases": self._raw_config.get("databases", {}),
+            "instances": {
+                name: inst
+                for name, inst in self._raw_config.get("instances", {}).items()
+                if is_instance_enabled(inst)
+            },
+        }
 
         list_view = self.query_one("#instances_list", ListView)
         list_view.clear()
-        list_view.append(AllInstancesItem())
-        for name, inst in self.config.get("instances", {}).items():
+        enabled_count = len(self.config["instances"])
+        list_view.append(AllInstancesItem(enabled_count=enabled_count))
+        for name, inst in self._raw_config.get("instances", {}).items():
             list_view.append(InstanceItem(
                 name=name,
                 version=inst.get("odoo_version", "?"),
                 port=inst.get("external_port", 0),
                 database=inst.get("database", "?"),
+                enabled=is_instance_enabled(inst),
             ))
         list_view.index = 0
         self.selected_instance = None
@@ -522,6 +549,47 @@ class DockerOdooApp(App):
                 else:
                     list_view.append(NoInstanceActionItem(action))
         list_view.index = 0
+
+    # ---------- toggle persistence ----------
+
+    def action_toggle_instance(self) -> None:
+        """Toggle the ``enabled`` flag of the highlighted instance and persist."""
+        list_view = self.query_one("#instances_list", ListView)
+        item = list_view.highlighted_child
+        if item is None or not isinstance(item, InstanceItem):
+            self._log("[yellow]Space no aplica a 'Todas las instancias'.[/yellow]")
+            return
+        name = item.instance_name
+        if name not in self._raw_config.get("instances", {}):
+            return
+        new_value = not is_instance_enabled(self._raw_config["instances"][name])
+        self._raw_config["instances"][name]["enabled"] = new_value
+        if not self._save_instances_json(self._raw_config):
+            # Revert in-memory change so UI and disk stay in sync.
+            self._raw_config["instances"][name]["enabled"] = not new_value
+            return
+        self._log(
+            f"[green]Instancia[/green] [b]{name}[/b] "
+            f"{'habilitada' if new_value else 'deshabilitada'}."
+        )
+        # Repaint the list, preserving the current selection index.
+        current_index = list_view.index
+        self.refresh_instances()
+        list_view.index = min(current_index, len(list_view.children) - 1)
+
+    def _save_instances_json(self, raw_config: dict) -> bool:
+        """Persist the full (unfiltered) instances.json. Returns True on success."""
+        path = os.path.join(BASE_PATH, "instances.json")
+        try:
+            with open(path, "w") as f:
+                json.dump(raw_config, f, indent=2, ensure_ascii=False)
+                f.write("\n")
+            return True
+        except (OSError, PermissionError) as exc:
+            self._log(
+                f"[red]No se pudo guardar instances.json:[/red] {exc}"
+            )
+            return False
 
     # ---------- event wiring ----------
 
@@ -553,12 +621,29 @@ class DockerOdooApp(App):
 
     def _dispatch(self, action: Action) -> None:
         self._last_action = action
-        # Validate that an instance is available when needed
+        if not self._raw_config.get("instances"):
+            self._log("[red]No hay instancias configuradas en instances.json.[/red]")
+            return
+        # If an instance is needed and the user selected a disabled one, fail.
+        if (
+            ARG_INSTANCE in action.needs
+            and self.selected_instance is not None
+            and self.selected_instance not in self.config["instances"]
+        ):
+            self._log(
+                f"[red]La instancia '{self.selected_instance}' está deshabilitada. "
+                f"Reactivala con Space antes de correr acciones.[/red]"
+            )
+            return
         if ARG_INSTANCE in action.needs and self.selected_instance is None and not action.needs_all_option:
             self._log(f"[red]'{action.label}' requiere seleccionar una instancia.[/red]")
             return
-        if not self.config.get("instances"):
-            self._log("[red]No hay instancias configuradas en instances.json.[/red]")
+        if (
+            self.selected_instance is None
+            and action.needs_all_option
+            and not self.config.get("instances")
+        ):
+            self._log("[red]Todas las instancias están deshabilitadas.[/red]")
             return
 
         # Special-cased no-arg actions
@@ -658,8 +743,17 @@ class DockerOdooApp(App):
 
     async def _execute_all(self, action: Action, args: dict) -> None:
         instances = list(self.config["instances"].keys())
+        disabled = [
+            name for name, inst in self._raw_config.get("instances", {}).items()
+            if not is_instance_enabled(inst)
+        ]
+        if disabled:
+            self._log(
+                f"[dim]Saltando instancia(s) deshabilitada(s): "
+                f"{', '.join(disabled)}[/dim]"
+            )
         self._log(f"[cyan]→ {action.label} para {len(instances)} instancia(s): "
-                  f"{', '.join(instances)}[/cyan]")
+                  f"{', '.join(instances) or '(ninguna habilitada)'}[/cyan]")
         rc_total = 0
         for name in instances:
             self._log(f"[dim]-- {name} --[/dim]")

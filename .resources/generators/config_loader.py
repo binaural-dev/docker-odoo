@@ -31,6 +31,38 @@ def load_config(base_path):
     return config
 
 
+def load_full_config(base_path):
+    """Load instances.json from the project root WITHOUT filtering.
+
+    Use this when the caller needs to see / toggle the ``enabled`` flag
+    (e.g. the interactive TUI). For dispatch paths (./odoo CLI, generators)
+    prefer :func:`load_config`, which enforces the enabled filter.
+
+    The same validation as ``load_config`` is applied to the unfiltered
+    structure so that downstream resolvers don't see inconsistent data.
+    """
+    config_path = os.path.join(base_path, "instances.json")
+    if not os.path.exists(config_path):
+        print(f"Error: instances.json no encontrado en {base_path}")
+        print("Copia instances.example.json a instances.json y configúralo.")
+        sys.exit(1)
+
+    with open(config_path, "r") as f:
+        config = json.load(f)
+
+    _validate_config(config)
+    return config
+
+
+def is_instance_enabled(inst_conf) -> bool:
+    """Return whether an instance config block is enabled.
+
+    Defaults to ``True`` when the flag is missing, matching the behaviour
+    of :func:`load_config`.
+    """
+    return inst_conf.get("enabled", True)
+
+
 def _validate_config(config):
     """Validate the configuration structure."""
     required_sections = ["odoo_configs", "databases", "instances"]

@@ -224,6 +224,7 @@ pip install --user textual
 | `↑` / `↓` | Navegar dentro de un panel |
 | `Enter` | Seleccionar instancia / ejecutar acción |
 | `r` | Refrescar instancias desde `instances.json` |
+| `Space` | Toggle `enabled` de la instancia seleccionada (persiste en `instances.json`) |
 | `q` / `Esc` | Salir / cancelar modal |
 
 ### Acciones soportadas
