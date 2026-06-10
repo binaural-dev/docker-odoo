@@ -83,7 +83,7 @@ Define las conexiones a PostgreSQL. `create_container` (default: `true`) control
 
 ### `instances` — Instancias de Odoo
 
-Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`.
+Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`. El flag opcional `"enabled"` (default `true`) controla si la instancia aparece en `./odoo build/start/stop/...` y en la TUI; podés togglerlo desde la TUI con `Space` y el cambio se persiste en `instances.json`.
 
 ```json
 {
@@ -106,6 +106,16 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
       "odoo_config": "17.0_default",
       "overwrite_odoo_config": {
         "addons": ["src/enterprise", "src/custom/client-b"]
+      }
+    },
+    "client-paused": {
+      "enabled": false,
+      "odoo_version": "19.0",
+      "external_port": 8072,
+      "database": "pg16",
+      "odoo_config": "19.0_default",
+      "overwrite_odoo_config": {
+        "addons": ["src/enterprise", "src/custom/client-paused"]
       }
     }
   }
