@@ -259,7 +259,7 @@ def run_bash(config, instance):
     # Check if container is running
     result = subprocess.run(
         ["docker", "inspect", "-f", "{{.State.Running}}", container],
-        capture_output=True, text=True, stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
     )
     is_running = result.stdout.strip()
     
