@@ -216,6 +216,26 @@ pip install --user textual
    (DB, módulos, login, archivo ZIP, etc.) aparece un modal para completarlos.
 4. El comando se invoca y el output se stream en el panel inferior.
 
+### Picker fzf para `Update módulos`
+
+La acción `Update módulos` detecta los addons locales de la instancia
+seleccionada (recorriendo los paths declarados en `overwrite_odoo_config`)
+y abre un picker estilo fzf con dos paneles: `Disponibles` (módulos
+encontrados en disco) y `A actualizar` (los que vas acumulando).
+
+- Filtrá tipeando en el campo `Filtro` (match por substring case-insensitive).
+- `Enter` sobre un módulo disponible lo agrega (o lo quita) de la selección.
+- `Tab` cambia el foco entre el campo de filtro y las listas.
+- `L` limpia la selección.
+- `E` ejecuta (o el botón `Ejecutar`).
+- `Esc` cancela.
+
+Si confirmás con la selección vacía, se ejecuta `all` (etiqueta del
+botón cambia a `Ejecutar (all)`). Si la instancia no tiene addons en
+disco, el picker se salta y se usa el modal de texto clásico, que
+además acepta un campo opcional `Load language` para pasarlo como
+`--load-language=es_VE` a `scripts/odoo-update`.
+
 ### Atajos de teclado
 
 | Tecla | Acción |

@@ -342,6 +342,149 @@ class ConfirmModal(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class ModulePicker(ModalScreen[Optional[list]]):
+    """fzf-style two-pane module picker.
+
+    Left pane: filtered list of available modules (those found on disk
+    under the instance's resolved addons paths). Modules already in
+    ``selected`` are prefixed with a check mark.
+    Right pane: the modules the user has picked.
+    Bottom: footer with key hints and an Execute button.
+
+    On dismiss returns:
+      * ``None``  -> user cancelled (Esc)
+      * ``[]``    -> user confirmed with an empty selection (interpreted
+                     as ``all`` by the caller; the Execute button label
+                     changes to "Ejecutar (all)" in that case)
+      * ``[m1, m2, ...]`` -> user-confirmed module list
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel_picker", "Cancel"),
+        Binding("l", "clear_selection", "Limpiar"),
+        Binding("e", "execute_picker", "Ejecutar"),
+    ]
+
+    def __init__(
+        self,
+        instance_name: str,
+        available_modules: list,
+        preselected: Optional[list] = None,
+    ):
+        super().__init__()
+        self.instance_name = instance_name
+        self.available_modules = sorted(available_modules)
+        self.preselected = list(preselected or [])
+        self.selected: list[str] = list(self.preselected)
+        self._filter: str = ""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="modal_box"):
+            yield Label(
+                f"Update módulos — {self.instance_name}", id="modal_title"
+            )
+            yield Label("Filtro:", classes="field_label")
+            yield Input(placeholder="escribí para filtrar", id="filter_input")
+            with Horizontal(id="picker_panes"):
+                with Vertical(id="picker_left"):
+                    yield Label("Disponibles", classes="field_label")
+                    yield ListView(id="available_list")
+                with Vertical(id="picker_right"):
+                    yield Label("A actualizar", classes="field_label")
+                    yield ListView(id="selected_list")
+            with Horizontal(id="modal_buttons"):
+                yield Static(
+                    "[Tab] cambiar   [Enter] +/-   [L] limpiar   "
+                    "[E] ejecutar   [Esc] cancelar",
+                    id="picker_hints",
+                )
+            with Horizontal(id="modal_buttons"):
+                yield Button("Cancelar", id="cancel", variant="error")
+                yield Button("Ejecutar", id="ok", variant="success")
+
+    def on_mount(self) -> None:
+        self._render_available()
+        self._render_selected()
+        self.query_one("#filter_input", Input).focus()
+
+    # ----- rendering -----
+
+    def _render_available(self) -> None:
+        view = self.query_one("#available_list", ListView)
+        view.clear()
+        needle = self._filter.lower()
+        for m in self.available_modules:
+            if needle and needle not in m.lower():
+                continue
+            label = f" ✓ {m}" if m in self.selected else f"   {m}"
+            item = ListItem(Label(label))
+            item.module_name = m  # type: ignore[attr-defined]
+            view.append(item)
+
+    def _render_selected(self) -> None:
+        view = self.query_one("#selected_list", ListView)
+        view.clear()
+        for m in self.selected:
+            item = ListItem(Label(f" ▸ {m}"))
+            item.module_name = m  # type: ignore[attr-defined]
+            view.append(item)
+        self._refresh_execute_label()
+
+    def _refresh_execute_label(self) -> None:
+        btn = self.query_one("#ok", Button)
+        if self.selected:
+            btn.label = f"Ejecutar ({len(self.selected)})"
+        else:
+            btn.label = "Ejecutar (all)"
+
+    # ----- events -----
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id != "filter_input":
+            return
+        self._filter = event.value
+        self._render_available()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item = event.item
+        name = getattr(item, "module_name", None)
+        if name is None:
+            return
+        if event.list_view.id == "available_list":
+            if name in self.selected:
+                self.selected.remove(name)
+            else:
+                self.selected.append(name)
+            self._render_available()
+            self._render_selected()
+        elif event.list_view.id == "selected_list":
+            if name in self.selected:
+                self.selected.remove(name)
+            self._render_available()
+            self._render_selected()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel":
+            self.action_cancel_picker()
+        elif event.button.id == "ok":
+            self.action_execute_picker()
+
+    # ----- actions -----
+
+    def action_cancel_picker(self) -> None:
+        self.dismiss(None)
+
+    def action_clear_selection(self) -> None:
+        self.selected = []
+        self._render_available()
+        self._render_selected()
+
+    def action_execute_picker(self) -> None:
+        # An empty selection means "all" — the caller handles the
+        # semantics; we just hand back an empty list.
+        self.dismiss(list(self.selected))
+
+
 # ============================================================
 # Main screen
 # ============================================================
@@ -466,6 +609,22 @@ class DockerOdooApp(App):
     #modal_buttons Button {
         margin: 0 1;
     }
+    #picker_panes {
+        height: 1fr;
+        margin-top: 1;
+    }
+    #picker_left, #picker_right {
+        width: 1fr;
+        border: round $primary;
+        padding: 0 1;
+    }
+    #picker_left ListView, #picker_right ListView {
+        height: 1fr;
+    }
+    #picker_hints {
+        color: $secondary;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
@@ -482,6 +641,7 @@ class DockerOdooApp(App):
         self.config: dict = {}            # filtered (enabled-only) instances
         self._raw_config: dict = {}       # unfiltered, used for persistence
         self._last_action: Optional[Action] = None
+        self.module_cache: dict = {}      # instance -> sorted module names
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -539,6 +699,37 @@ class DockerOdooApp(App):
             ))
         list_view.index = 0
         self.selected_instance = None
+
+    def _scan_instance_modules(self, inst_name: str, inst_conf: dict) -> list:
+        """Return the sorted list of module names found in the instance's addons paths.
+
+        Results are memoised in ``self.module_cache``. The scan only
+        happens lazily on first request for an instance, never on
+        ``on_mount`` (which would scan every configured instance
+        regardless of whether the user will ever use the picker).
+        """
+        if inst_name in self.module_cache:
+            return self.module_cache[inst_name]
+        try:
+            from generators.config_loader import resolve_instance_config
+        except ImportError:
+            self.module_cache[inst_name] = []
+            return []
+        addons = resolve_instance_config(inst_conf, self.config).get("addons", [])
+        modules: set[str] = set()
+        for path in addons:
+            abs_path = os.path.join(BASE_PATH, path)
+            if not os.path.isdir(abs_path):
+                continue
+            for entry in os.listdir(abs_path):
+                full = os.path.join(abs_path, entry)
+                if (
+                    os.path.isdir(full)
+                    and os.path.isfile(os.path.join(full, "__manifest__.py"))
+                ):
+                    modules.add(entry)
+        self.module_cache[inst_name] = sorted(modules)
+        return self.module_cache[inst_name]
 
     def refresh_actions(self) -> None:
         list_view = self.query_one("#actions_list", ListView)
@@ -655,6 +846,31 @@ class DockerOdooApp(App):
             self.run_worker(self._execute(action, {}), exclusive=False)
             return
 
+        # Special case: the consolidated ``update`` action with an
+        # instance selected can use the fzf-style module picker when
+        # addons paths are available on disk. The text modal remains
+        # the fallback for "all instances" or for instances whose
+        # addons paths did not produce any modules.
+        if action.action_id == "update" and self.selected_instance is not None:
+            inst = self.config["instances"].get(self.selected_instance)
+            if inst is not None:
+                available = self._scan_instance_modules(
+                    self.selected_instance, inst
+                )
+                if available:
+                    self.push_screen(
+                        ModulePicker(
+                            instance_name=self.selected_instance,
+                            available_modules=available,
+                        ),
+                        lambda result: self._on_picker_result(action, result),
+                    )
+                    return
+                self._log(
+                    "[yellow]No se detectaron addons locales; "
+                    "usando input de texto.[/yellow]"
+                )
+
         # Build the fields list and launch the input modal.
         # ARG_INSTANCE is pre-selected from the instance list and is NOT
         # asked again as a modal input.
@@ -746,6 +962,31 @@ class DockerOdooApp(App):
         if action.action_id == "update" and result.get(ARG_MODULES):
             self._warn_unknown_modules(result[ARG_MODULES])
         self.run_worker(self._execute(action, result), exclusive=False)
+
+    def _on_picker_result(
+        self, action: Action, result: Optional[list]
+    ) -> None:
+        """Handle the ModulePicker dismiss for the update action.
+
+        Empty selection means ``all``; a non-empty list is comma-joined
+        for the ``-u`` flag. The DB default is auto-filled from
+        ``overwrite_odoo_config.db_name`` exactly like the text modal
+        flow does, so the picker path and the text modal path converge
+        before reaching :meth:`_execute`.
+        """
+        if result is None:
+            self._log("[yellow]Cancelado.[/yellow]")
+            return
+        modules_str = ",".join(result) if result else "all"
+        if self.selected_instance:
+            inst = self.config["instances"].get(self.selected_instance, {})
+            db_default = inst.get("overwrite_odoo_config", {}).get(
+                "db_name", self.selected_instance
+            )
+        else:
+            db_default = ""
+        args = {ARG_DB: db_default, ARG_MODULES: modules_str}
+        self.run_worker(self._execute(action, args), exclusive=False)
 
     def _warn_unknown_modules(self, modules_str: str) -> None:
         """Log a yellow warning listing modules not found in addons paths."""
