@@ -24,41 +24,31 @@ los pedazos async (Textual Pilot).
 
 import argparse
 import asyncio
-import importlib.util
 import io
 import os
 import subprocess
 import sys
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
-from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from tui.parser import parse_progress, classify_level
+from tui.models import Action
+from tui.actions import get_action
+from tui.app import DockerOdooApp
+from tui.widgets.update_progress import UpdateProgress
+from tui.__main__ import _parse_args
+
 ODOO_TUI = REPO_ROOT / "odoo-tui"
-TCSS_PATH = REPO_ROOT / "odoo-tui.tcss"
-
-
-def _load_odoo_tui():
-    """Carga el script odoo-tui como modulo importable."""
-    loader = SourceFileLoader("_tui_smoke", str(ODOO_TUI))
-    spec = importlib.util.spec_from_loader("_tui_smoke", loader)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["_tui_smoke"] = mod
-    loader.exec_module(mod)
-    return mod
-
-
-# Cargar el modulo una vez a nivel de modulo para compartirlo entre
-# todas las clases de test (unittest no garantiza orden de setUpClass).
-_TUI_MOD = _load_odoo_tui()
+TCSS_PATH = REPO_ROOT / "tui" / "styles" / "odoo-tui.tcss"
 
 
 class TuiSmokeTest(unittest.TestCase):
     """Suite de smoke tests para la TUI v3."""
-
-    mod = _TUI_MOD
 
     @classmethod
     def setUpClass(cls):
@@ -75,11 +65,19 @@ class TuiSmokeTest(unittest.TestCase):
 
     def test_css_path_declared(self):
         """Sim 4b: DockerOdooApp declara CSS_PATH apuntando al archivo."""
-        declared = self.mod.DockerOdooApp.__dict__.get("CSS_PATH")
+        from textual._path import _make_path_object_relative
+
+        declared = DockerOdooApp.__dict__.get("CSS_PATH")
         self.assertIsNotNone(declared, "DockerOdooApp no define CSS_PATH")
+        app = DockerOdooApp()
+        resolved = _make_path_object_relative(declared, app)
         self.assertTrue(
-            (REPO_ROOT / declared).exists(),
-            f"CSS_PATH apunta a archivo inexistente: {declared}",
+            resolved.exists(),
+            f"CSS_PATH ({declared!r}) resuelve a archivo inexistente: {resolved}",
+        )
+        self.assertEqual(
+            resolved, TCSS_PATH,
+            f"CSS_PATH resuelve a {resolved}, se esperaba {TCSS_PATH}",
         )
 
     def test_css_loads_in_app(self):
@@ -113,17 +111,17 @@ class TuiSmokeTest(unittest.TestCase):
 
     def test_dev_flag_absent(self):
         """Sim 7a: sin flag, args.dev es False."""
-        args = self.mod._parse_args([])
+        args = _parse_args([])
         self.assertFalse(args.dev)
 
     def test_dev_flag_present(self):
         """Sim 7b: con --dev, args.dev es True."""
-        args = self.mod._parse_args(["--dev"])
+        args = _parse_args(["--dev"])
         self.assertTrue(args.dev)
 
     def test_dev_flag_with_value(self):
         """Sim 7c: con --dev=all, args.dev es 'all'."""
-        args = self.mod._parse_args(["--dev=all"])
+        args = _parse_args(["--dev=all"])
         self.assertEqual(args.dev, "all")
 
     # ------------------------------------------------------------------
@@ -135,7 +133,7 @@ class TuiSmokeTest(unittest.TestCase):
         buf_out, buf_err = io.StringIO(), io.StringIO()
         with redirect_stdout(buf_out), redirect_stderr(buf_err):
             with self.assertRaises(SystemExit):
-                self.mod._parse_args(["--help"])
+                _parse_args(["--help"])
         output = buf_out.getvalue() + buf_err.getvalue()
         self.assertIn("--dev", output, f"--help no menciona --dev:\n{output}")
 
@@ -158,7 +156,7 @@ class TuiSmokeTest(unittest.TestCase):
     def test_headless_app_boot(self):
         """Sim 2: DockerOdooApp arranca en headless y termina limpio."""
         async def go():
-            app = self.mod.DockerOdooApp()
+            app = DockerOdooApp()
             async with app.run_test(headless=True, size=(120, 40)) as pilot:
                 await pilot.pause()
                 return "ok"
@@ -169,7 +167,7 @@ class TuiSmokeTest(unittest.TestCase):
     def test_dev_mode_boot(self):
         """Sim 3: dev=True arranca limpio y self.dev queda accesible."""
         async def go():
-            app = self.mod.DockerOdooApp(dev=True)
+            app = DockerOdooApp(dev=True)
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
                 return app.dev
@@ -180,7 +178,7 @@ class TuiSmokeTest(unittest.TestCase):
     def test_dev_mode_all(self):
         """Sim 3b: dev='all' tambien arranca limpio."""
         async def go():
-            app = self.mod.DockerOdooApp(dev="all")
+            app = DockerOdooApp(dev="all")
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
                 return app.dev
@@ -197,7 +195,7 @@ class TuiSmokeTest(unittest.TestCase):
         from textual.widgets import ListView
 
         async def go():
-            app = self.mod.DockerOdooApp()
+            app = DockerOdooApp()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
                 lv = app.query_one("#instances_list", ListView)
@@ -213,7 +211,7 @@ class TuiSmokeTest(unittest.TestCase):
         from textual.widgets import ListView
 
         async def go():
-            app = self.mod.DockerOdooApp()
+            app = DockerOdooApp()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
                 lv = app.query_one("#actions_list", ListView)
@@ -231,6 +229,7 @@ class TuiSmokeTest(unittest.TestCase):
         """Sim 5: ModulePicker monta sin MountError por id duplicado."""
         from textual.app import App
         from textual.widgets import Static
+        from tui.screens.module_picker import ModulePicker
 
         async def go():
             class _Host(App):
@@ -240,7 +239,7 @@ class TuiSmokeTest(unittest.TestCase):
             app = _Host()
             async with app.run_test(headless=True, size=(120, 40)) as pilot:
                 await pilot.pause()
-                picker = self.mod.ModulePicker(
+                picker = ModulePicker(
                     instance_name="test",
                     available_modules=["sale", "purchase", "stock"],
                 )
@@ -268,6 +267,7 @@ class TuiSmokeTest(unittest.TestCase):
         """Sim 6: con Pilot, press('down') cambia highlighted del OptionList."""
         from textual.app import App
         from textual.widgets import Static
+        from tui.screens.module_picker import ModulePicker
 
         async def go():
             class _Host(App):
@@ -277,7 +277,7 @@ class TuiSmokeTest(unittest.TestCase):
             app = _Host()
             async with app.run_test(headless=True, size=(120, 40)) as pilot:
                 await pilot.pause()
-                picker = self.mod.ModulePicker(
+                picker = ModulePicker(
                     instance_name="test",
                     available_modules=["sale", "purchase", "stock"],
                 )
@@ -328,32 +328,32 @@ class TuiProgressParserTest(unittest.TestCase):
 
     def test_parse_match_simple(self):
         """(45/234) → (45, 234)"""
-        r = _TUI_MOD.parse_progress("(45/234)")
+        r = parse_progress("(45/234)")
         self.assertEqual(r, (45, 234))
 
     def test_parse_no_match(self):
         """linea sin parentesis → None"""
-        r = _TUI_MOD.parse_progress("INFO: sale module updated")
+        r = parse_progress("INFO: sale module updated")
         self.assertIsNone(r)
 
     def test_parse_zero_current(self):
         """(0/1) → (0, 1)"""
-        r = _TUI_MOD.parse_progress("(0/1)")
+        r = parse_progress("(0/1)")
         self.assertEqual(r, (0, 1))
 
     def test_parse_large_numbers(self):
         """(999/1000) → (999, 1000)"""
-        r = _TUI_MOD.parse_progress("(999/1000)")
+        r = parse_progress("(999/1000)")
         self.assertEqual(r, (999, 1000))
 
     def test_parse_multiple_matches(self):
         """linea con dos matches → primer match (0/1)"""
-        r = _TUI_MOD.parse_progress("(0/1) (45/234)")
+        r = parse_progress("(0/1) (45/234)")
         self.assertEqual(r, (0, 1))
 
     def test_parse_with_surrounding_text(self):
         """linea con texto envolvente → (5, 10)"""
-        r = _TUI_MOD.parse_progress(
+        r = parse_progress(
             "2024-01-01 10:00:00 INFO (5/10) sale"
         )
         self.assertEqual(r, (5, 10))
@@ -364,39 +364,39 @@ class TuiLevelClassifierTest(unittest.TestCase):
 
     def test_critical(self):
         self.assertEqual(
-            _TUI_MOD.classify_level("CRITICAL: Odoo crashed"),
+            classify_level("CRITICAL: Odoo crashed"),
             "CRITICAL",
         )
 
     def test_error(self):
         self.assertEqual(
-            _TUI_MOD.classify_level("ERROR: sale module failed"),
+            classify_level("ERROR: sale module failed"),
             "ERROR",
         )
 
     def test_warning(self):
         self.assertEqual(
-            _TUI_MOD.classify_level("WARNING: account deprecated"),
+            classify_level("WARNING: account deprecated"),
             "WARNING",
         )
 
     def test_info(self):
         self.assertEqual(
-            _TUI_MOD.classify_level("INFO: update module sale"),
+            classify_level("INFO: update module sale"),
             "INFO",
         )
 
     def test_no_prefix_defaults_to_info(self):
         """linea sin prefijo → INFO"""
         self.assertEqual(
-            _TUI_MOD.classify_level("  some log message"),
+            classify_level("  some log message"),
             "INFO",
         )
 
     def test_error_with_indent(self):
         """linea con espacio previo → ERROR"""
         self.assertEqual(
-            _TUI_MOD.classify_level("  ERROR: something"),
+            classify_level("  ERROR: something"),
             "ERROR",
         )
 
@@ -412,7 +412,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
             app = App()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
-                up = _TUI_MOD.UpdateProgress(instance_name="test", modules="sale")
+                up = UpdateProgress(instance_name="test", modules="sale")
                 await app.mount(up)
                 await pilot.pause()
                 self.assertIsNotNone(up.query_one("#up_progress"))
@@ -433,7 +433,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
             app = App()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
-                up = _TUI_MOD.UpdateProgress()
+                up = UpdateProgress()
                 await app.mount(up)
                 await pilot.pause()
                 up.set_progress(45, 234)
@@ -458,7 +458,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
             app = App()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
-                up = _TUI_MOD.UpdateProgress()
+                up = UpdateProgress()
                 await app.mount(up)
                 await pilot.pause()
                 self.assertIn("WARNING", up.filter_levels)
@@ -479,7 +479,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
             app = App()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
-                up = _TUI_MOD.UpdateProgress()
+                up = UpdateProgress()
                 await app.mount(up)
                 await pilot.pause()
                 up.add_line("ERROR", "ERROR: test error")
@@ -505,7 +505,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
             app = App()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
-                up = _TUI_MOD.UpdateProgress()
+                up = UpdateProgress()
                 await app.mount(up)
                 await pilot.pause()
                 up.add_line("ERROR", "e")
@@ -527,7 +527,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
             app = App()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
-                up = _TUI_MOD.UpdateProgress()
+                up = UpdateProgress()
                 await app.mount(up)
                 await pilot.pause()
                 up.add_line("ERROR", "e")
@@ -552,7 +552,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
             app = App()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
-                up = _TUI_MOD.UpdateProgress()
+                up = UpdateProgress()
                 await app.mount(up)
                 await pilot.pause()
                 up.set_progress(45, 234)
@@ -574,7 +574,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
             app = App()
             async with app.run_test(headless=True, size=(80, 24)) as pilot:
                 await pilot.pause()
-                up = _TUI_MOD.UpdateProgress()
+                up = UpdateProgress()
                 await app.mount(up)
                 await pilot.pause()
                 pb = up.query_one("#up_progress")
@@ -604,17 +604,17 @@ class TuiProgressIntegrationTest(unittest.TestCase):
         ]
 
         async def go():
-            app = _TUI_MOD.DockerOdooApp()
+            app = DockerOdooApp()
             async with app.run_test(headless=True, size=(120, 40)) as pilot:
                 await pilot.pause()
-                up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
+                up = app.query_one("#update_progress", UpdateProgress)
                 up.display = True
                 up.clear()
                 for line in odoo_lines:
-                    parsed = _TUI_MOD.parse_progress(line)
+                    parsed = parse_progress(line)
                     if parsed is not None:
                         up.set_progress(parsed[0], parsed[1])
-                    level = _TUI_MOD.classify_level(line)
+                    level = classify_level(line)
                     up.add_line(level, line)
                 await pilot.pause()
                 self.assertEqual(up.progress_total, 5)
@@ -638,13 +638,13 @@ class TuiProgressIntegrationTest(unittest.TestCase):
         ]
 
         async def go():
-            app = _TUI_MOD.DockerOdooApp()
+            app = DockerOdooApp()
             async with app.run_test(headless=True, size=(120, 40)) as pilot:
                 await pilot.pause()
-                up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
+                up = app.query_one("#update_progress", UpdateProgress)
                 up.display = True
                 for line in odoo_lines:
-                    level = _TUI_MOD.classify_level(line)
+                    level = classify_level(line)
                     up.add_line(level, line)
                 # Ver estado inicial: 5 lineas pasan
                 self.assertEqual(len(up.get_filtered_lines()), 5)
@@ -664,10 +664,10 @@ class TuiProgressIntegrationTest(unittest.TestCase):
         from textual.app import App
 
         async def go():
-            app = _TUI_MOD.DockerOdooApp()
+            app = DockerOdooApp()
             async with app.run_test(headless=True, size=(120, 40)) as pilot:
                 await pilot.pause()
-                up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
+                up = app.query_one("#update_progress", UpdateProgress)
                 up.display = True
                 up.add_line("ERROR", "e1")
                 up.add_line("WARNING", "w1")
@@ -690,10 +690,10 @@ class TuiProgressIntegrationTest(unittest.TestCase):
         from textual.app import App
 
         async def go():
-            app = _TUI_MOD.DockerOdooApp()
+            app = DockerOdooApp()
             async with app.run_test(headless=True, size=(120, 40)) as pilot:
                 await pilot.pause()
-                up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
+                up = app.query_one("#update_progress", UpdateProgress)
                 up.display = True
                 up.add_line("ERROR", "e1")
                 up.add_line("WARNING", "w1")
@@ -713,7 +713,7 @@ class TuiProgressIntegrationTest(unittest.TestCase):
         from textual.app import App
 
         async def go():
-            app = _TUI_MOD.DockerOdooApp()
+            app = DockerOdooApp()
             async with app.run_test(headless=True, size=(120, 40)) as pilot:
                 await pilot.pause()
                 mock_proc = MagicMock()
@@ -729,24 +729,24 @@ class TuiProgressIntegrationTest(unittest.TestCase):
 
     def test_integration_no_modules_no_widget(self):
         """Sim 10: update sin modulos (all) no muestra el widget."""
-        update_action = _TUI_MOD.get_action("update")
-        app = _TUI_MOD.DockerOdooApp()
+        update_action = get_action("update")
+        app = DockerOdooApp()
         self.assertFalse(
             app._is_update_with_modules(update_action, {"modules": "all"})
         )
 
     def test_integration_with_modules_shows_widget(self):
         """update con modulos conocidos usa el widget."""
-        update_action = _TUI_MOD.get_action("update")
-        app = _TUI_MOD.DockerOdooApp()
+        update_action = get_action("update")
+        app = DockerOdooApp()
         self.assertTrue(
             app._is_update_with_modules(update_action, {"modules": "sale,purchase"})
         )
 
     def test_integration_non_update_no_widget(self):
         """accion no-update no usa el widget."""
-        start_action = _TUI_MOD.get_action("start")
-        app = _TUI_MOD.DockerOdooApp()
+        start_action = get_action("start")
+        app = DockerOdooApp()
         self.assertFalse(
             app._is_update_with_modules(start_action, {})
         )
