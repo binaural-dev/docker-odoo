@@ -395,7 +395,7 @@ class ModulePicker(ModalScreen[Optional[list]]):
                 with Vertical(id="picker_right"):
                     yield Label("A actualizar", classes="field_label")
                     yield OptionList(id="selected_list")
-            with Horizontal(id="modal_buttons"):
+            with Horizontal(id="picker_hints_row"):
                 yield Static(
                     "[Tab] cambiar   [Enter] +/-   [L] limpiar   "
                     "[E] ejecutar   [Esc] cancelar",
