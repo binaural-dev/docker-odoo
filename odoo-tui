@@ -22,7 +22,8 @@ import sys
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+import re
+from typing import Optional, Tuple
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -264,6 +265,55 @@ def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
     elif sub == "upgrade_manifest":
         pass
     return argv
+
+
+# ============================================================
+# Pure functions for stream parsing
+# ============================================================
+
+def parsear_progreso(line: str) -> Optional[Tuple[int, int]]:
+    """Extrae (current, total) de una línea que matchee (N/M).
+
+    Returns:
+        Tuple (current, total) si hay match, None si no.
+        La primera aparicion setea el total; cada match actualiza el current.
+    """
+    match = re.search(r'\((\d+)/(\d+)\)', line)
+    if match:
+        return (int(match.group(1)), int(match.group(2)))
+    return None
+
+
+def clasificar_nivel(line: str) -> str:
+    """Clasifica el nivel de log de una línea de stdout de Odoo.
+
+    Busca el primer token de nivel en mayusculas al inicio de la línea
+    o tras un espacio. Si no hay match, retorna 'INFO' por defecto.
+    """
+    for level in ("CRITICAL", "ERROR", "WARNING", "INFO"):
+        if (
+            line.startswith(level)
+            or line.startswith(level + ":")
+            or f" {level} " in line
+            or f" {level}:" in line
+        ):
+            return level
+    return "INFO"
+
+
+LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO")
+LOG_LEVEL_COLORS = {
+    "CRITICAL": "red bold",
+    "ERROR": "red",
+    "WARNING": "yellow",
+    "INFO": "blue",
+}
+LOG_LEVEL_SHORT = {
+    "CRITICAL": "C",
+    "ERROR": "E",
+    "WARNING": "W",
+    "INFO": "I",
+}
 
 
 # ============================================================
