@@ -36,9 +36,11 @@ from textual.widgets import (
     Label,
     ListItem,
     ListView,
+    OptionList,
     RichLog,
     Static,
 )
+from textual.widgets.option_list import Option
 
 BASE_PATH = str(Path(__file__).resolve().parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
