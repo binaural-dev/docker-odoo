@@ -24,22 +24,11 @@ import argparse
 import asyncio
 import sys
 import time
-from importlib.machinery import SourceFileLoader
-from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CSS = REPO_ROOT / "odoo-tui.tcss"
-
-
-def _load_odoo_tui() -> object:
-    """Carga el modulo odoo-tui como si fuera un modulo Python normal."""
-    loader = SourceFileLoader("_odoo_tui_probe", str(REPO_ROOT / "odoo-tui"))
-    spec = spec_from_loader("_odoo_tui_probe", loader)
-    mod = module_from_spec(spec)
-    sys.modules["_odoo_tui_probe"] = mod
-    loader.exec_module(mod)
-    return mod
+sys.path.insert(0, str(REPO_ROOT))
+DEFAULT_CSS = REPO_ROOT / "tui" / "styles" / "odoo-tui.tcss"
 
 
 async def _load_css_in_app(css_path: Path) -> tuple[int, float]:
@@ -103,17 +92,23 @@ def main() -> int:
 
     # Verificacion cruzada: que el CSS_PATH de la app apunte a este mismo archivo
     try:
-        mod = _load_odoo_tui()
-        declared = mod.DockerOdooApp.__dict__.get("CSS_PATH")
+        from textual._path import _make_path_object_relative
+        from tui.app import DockerOdooApp
+
+        declared = DockerOdooApp.__dict__.get("CSS_PATH")
         if declared is None:
             print("[tui_check_css] NOTE: DockerOdooApp no define CSS_PATH (usa CSS inline)")
         else:
+            app = DockerOdooApp()
+            resolved_path = _make_path_object_relative(declared, app)
             print(f"[tui_check_css] DockerOdooApp.CSS_PATH = {declared!r}")
-            declared_path = (REPO_ROOT / declared).resolve()
-            if declared_path != css_path.resolve():
+            print(
+                f"[tui_check_css]   -> resuelve a {resolved_path}"
+            )
+            if resolved_path != css_path.resolve():
                 print(
-                    f"[tui_check_css] WARN: CSS_PATH apunta a {declared_path}, "
-                    f"distinto de {css_path}"
+                    f"[tui_check_css] WARN: CSS_PATH resuelve a {resolved_path}, "
+                    f"distinto del CSS validado {css_path}"
                 )
             else:
                 print("[tui_check_css] CSS_PATH resuelve al mismo archivo validado: OK")
