@@ -544,8 +544,9 @@ class DockerOdooApp(App):
 
     selected_instance: reactive[Optional[str]] = reactive(None)
 
-    def __init__(self):
+    def __init__(self, dev: bool | str = False):
         super().__init__()
+        self.dev = dev                    # False / True / "all" (CLI --dev flag)
         self.config: dict = {}            # filtered (enabled-only) instances
         self._raw_config: dict = {}       # unfiltered, used for persistence
         self._last_action: Optional[Action] = None
@@ -566,6 +567,8 @@ class DockerOdooApp(App):
     def on_mount(self) -> None:
         self.title = "docker-odoo TUI"
         self.sub_title = "Launcher interactivo"
+        if self.dev:
+            self._log(f"[yellow]Dev mode activo:[/yellow] dev={self.dev!r}")
         self.refresh_instances()
         self.refresh_actions()
         self._log("[green]Listo.[/green] Elegí una instancia y luego una acción. "
@@ -1065,7 +1068,7 @@ def _parse_args(argv: list) -> argparse.Namespace:
 def main() -> int:
     args = _parse_args(sys.argv[1:])
     try:
-        DockerOdooApp().run()
+        DockerOdooApp(dev=args.dev).run()
     except Exception as exc:
         print(f"TUI crashed: {exc}", file=sys.stderr)
         return 1
