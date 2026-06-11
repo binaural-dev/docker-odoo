@@ -763,6 +763,8 @@ class DockerOdooApp(App):
         self._raw_config: dict = {}       # unfiltered, used for persistence
         self._last_action: Optional[Action] = None
         self.module_cache: dict = {}      # instance -> sorted module names
+        self._update_proc: Optional[subprocess.Popen] = None  # current update proc
+        self._progress_label: str = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -1187,6 +1189,18 @@ class DockerOdooApp(App):
         else:
             self._log(f"[red]✗ {action.label} salió con código {rc_total} en al menos una instancia[/red]")
 
+    def _is_update_with_modules(self, action: Action, args: dict) -> bool:
+        """Determina si podemos mostrar el widget de progreso.
+
+        Solo para action ``update`` con módulos conocidos (no 'all').
+        """
+        if action.action_id != "update":
+            return False
+        modules = (args or {}).get("modules", "")
+        if not modules or modules == "all":
+            return False
+        return True
+
     async def _execute_one(self, action: Action, instance: Optional[str], args: dict, *, echo_cmd: bool = True) -> int:
         # The consolidated ``update`` action routes through scripts/odoo-update
         # just like the legacy ``script:update`` did.
@@ -1199,7 +1213,10 @@ class DockerOdooApp(App):
         if action.interactive:
             await self._run_interactive(argv, action)
             return 0
-        return await self._run_streamed(argv, action.label, echo_cmd=echo_cmd)
+        use_progress = self._is_update_with_modules(action, args)
+        if use_progress:
+            self._progress_label = action.label
+        return await self._run_streamed(argv, action.label, echo_cmd=echo_cmd, use_progress_widget=use_progress)
 
     async def _run_interactive(self, argv: list, action: Action) -> None:
         self._log(f"[cyan]→ {' '.join(shlex.quote(a) for a in argv)}[/cyan]")
@@ -1213,11 +1230,21 @@ class DockerOdooApp(App):
                 print("\n[interrumpido]", file=sys.stderr)
         self._log(f"[green]✓ {action.label} finalizado.[/green]")
 
-    async def _run_streamed(self, argv: list, label: str, *, echo_cmd: bool = True) -> int:
+    async def _run_streamed(
+        self, argv: list, label: str, *,
+        echo_cmd: bool = True, use_progress_widget: bool = False,
+    ) -> int:
         if echo_cmd:
             self._log(f"[cyan]→ {' '.join(shlex.quote(a) for a in argv)}[/cyan]")
         self._log("[dim]Ejecutando... (Ctrl+C para abortar)[/dim]")
-        loop = asyncio.get_running_loop()
+
+        # Mostrar widget de progreso si corresponde
+        up: Optional[UpdateProgress] = None
+        if use_progress_widget:
+            up = self.query_one("#update_progress", UpdateProgress)
+            up.display = True
+            up.clear()
+            up.filter_levels = set(LOG_LEVELS)
 
         def _run() -> int:
             try:
@@ -1229,19 +1256,45 @@ class DockerOdooApp(App):
             except FileNotFoundError as exc:
                 self.call_from_thread(self._log, f"[red]No encontrado:[/red] {exc}")
                 return 127
+            # Guardar referencia para cancelacion con Esc
+            self._update_proc = proc
             assert proc.stdout is not None
             for line in proc.stdout:
-                self.call_from_thread(self._log, line.rstrip())
+                line = line.rstrip()
+                if up is not None:
+                    parsed = parsear_progreso(line)
+                    if parsed is not None:
+                        self.call_from_thread(up.set_progress, parsed[0], parsed[1])
+                    level = clasificar_nivel(line)
+                    self.call_from_thread(up.add_line, level, line)
+                    if level in up.filter_levels:
+                        self.call_from_thread(self._log, line)
+                else:
+                    self.call_from_thread(self._log, line)
             rc = proc.wait()
+            self._update_proc = None
             return rc
 
         rc = await asyncio.to_thread(_run)
+
+        # Ocultar widget de progreso
+        if up is not None:
+            up.display = False
+
         if echo_cmd:
             if rc == 0:
                 self._log(f"[green]✓ {label} OK[/green]")
             else:
                 self._log(f"[red]✗ {label} salió con código {rc}[/red]")
         return rc
+
+    def action_cancel_update(self) -> None:
+        """Cancela la actualización en curso con Esc."""
+        if self._update_proc is not None:
+            self._log("[yellow]Cancelando actualización...[/yellow]")
+            self._update_proc.terminate()
+        else:
+            self._log("[dim]No hay actualización en curso.[/dim]")
 
     def _log(self, message: str) -> None:
         try:
