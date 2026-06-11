@@ -73,17 +73,22 @@ class OdooPwReturncodeTest(unittest.TestCase):
         config = _make_config()
         buf_out, buf_err = io.StringIO(), io.StringIO()
         with redirect_stdout(buf_out), redirect_stderr(buf_err):
-            with mock.patch.object(subprocess, "run") as mock_run:
-                mock_run.return_value = subprocess.CompletedProcess(
-                    args=[], returncode=0, stdout="", stderr="",
-                )
-                try:
-                    self.mod.reset_password(
-                        config, "inst1", "rea", "admin", "admin",
+            # Bypass el chequeo de existencia de DB (probado en
+            # test_pw_db_validation.py) y centrar el test en el
+            # comportamiento de returncode.
+            with mock.patch.object(self.mod, "_check_db_exists",
+                                   return_value=(True, [])):
+                with mock.patch.object(subprocess, "run") as mock_run:
+                    mock_run.return_value = subprocess.CompletedProcess(
+                        args=[], returncode=0, stdout="", stderr="",
                     )
-                    exit_code = 0
-                except SystemExit as e:
-                    exit_code = e.code
+                    try:
+                        self.mod.reset_password(
+                            config, "inst1", "rea", "admin", "admin",
+                        )
+                        exit_code = 0
+                    except SystemExit as e:
+                        exit_code = e.code
         out = buf_out.getvalue()
         self.assertEqual(exit_code, 0, f"reset_password aborte con rc={exit_code}")
         self.assertIn("✅", out, "no se imprime el emoji de exito en flujo feliz")
@@ -97,17 +102,19 @@ class OdooPwReturncodeTest(unittest.TestCase):
         buf_out, buf_err = io.StringIO(), io.StringIO()
         exit_code = None
         with redirect_stdout(buf_out), redirect_stderr(buf_err):
-            with mock.patch.object(subprocess, "run") as mock_run:
-                mock_run.return_value = subprocess.CompletedProcess(
-                    args=[], returncode=1, stdout="", stderr="FATAL",
-                )
-                try:
-                    self.mod.reset_password(
-                        config, "inst1", "rea", "admin", "admin",
+            with mock.patch.object(self.mod, "_check_db_exists",
+                                   return_value=(True, [])):
+                with mock.patch.object(subprocess, "run") as mock_run:
+                    mock_run.return_value = subprocess.CompletedProcess(
+                        args=[], returncode=1, stdout="", stderr="FATAL",
                     )
-                    exit_code = 0
-                except SystemExit as e:
-                    exit_code = e.code
+                    try:
+                        self.mod.reset_password(
+                            config, "inst1", "rea", "admin", "admin",
+                        )
+                        exit_code = 0
+                    except SystemExit as e:
+                        exit_code = e.code
         self.assertEqual(
             exit_code, 1,
             f"reset_password NO aborte con rc=1 (got {exit_code})",
@@ -125,16 +132,18 @@ class OdooPwReturncodeTest(unittest.TestCase):
         config = _make_config()
         exit_code = None
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            with mock.patch.object(subprocess, "run") as mock_run:
-                mock_run.return_value = subprocess.CompletedProcess(
-                    args=[], returncode=42, stdout="", stderr="",
-                )
-                try:
-                    self.mod.reset_password(
-                        config, "inst1", "rea", "admin", "admin",
+            with mock.patch.object(self.mod, "_check_db_exists",
+                                   return_value=(True, [])):
+                with mock.patch.object(subprocess, "run") as mock_run:
+                    mock_run.return_value = subprocess.CompletedProcess(
+                        args=[], returncode=42, stdout="", stderr="",
                     )
-                except SystemExit as e:
-                    exit_code = e.code
+                    try:
+                        self.mod.reset_password(
+                            config, "inst1", "rea", "admin", "admin",
+                        )
+                    except SystemExit as e:
+                        exit_code = e.code
         self.assertEqual(
             exit_code, 42,
             f"reset_password propago rc=42? got {exit_code}",
@@ -156,6 +165,11 @@ class OdooPwReturncodeTest(unittest.TestCase):
              mock.patch(
                  "generators.config_loader.load_config",
                  return_value=config,
+                 create=True,
+             ), \
+             mock.patch(
+                 "generators.pw_helpers._check_db_exists",
+                 return_value=(True, []),
                  create=True,
              ):
             mock_run.return_value = subprocess.CompletedProcess(
@@ -195,6 +209,11 @@ class OdooPwReturncodeTest(unittest.TestCase):
              mock.patch(
                  "generators.config_loader.load_config",
                  return_value=config,
+                 create=True,
+             ), \
+             mock.patch(
+                 "generators.pw_helpers._check_db_exists",
+                 return_value=(True, []),
                  create=True,
              ):
             mock_run.return_value = subprocess.CompletedProcess(

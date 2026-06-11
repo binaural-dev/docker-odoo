@@ -29,6 +29,7 @@ from generators.dockerfile_generator import generate_dockerfiles
 from generators.compose_generator import generate_compose
 from generators.nginx_generator import generate_nginx_config
 from generators.prompt_utils import prompt_selection
+from generators.pw_helpers import _check_db_exists
 
 COMPOSE_FILE = "docker-compose.generated.yml"
 
@@ -380,6 +381,21 @@ def reset_password(config, instance, dbname, login, password):
     db_password = db_conf["password"]
     db_port = db_conf["port"]
     container = f"odoo-{instance}"
+
+    # Validar que la DB exista en el contenedor antes de tocar res_users.
+    # Sin esto, psql falla con 'database does not exist' y el usuario
+    # no se da cuenta si el returncode no se chequea (o el script termina
+    # con error confuso).
+    existe, disponibles = _check_db_exists(
+        container, db_host, db_user, db_port, db_password, dbname,
+    )
+    if not existe:
+        bases_str = ", ".join(disponibles) if disponibles else "(no se pudo listar)"
+        print(
+            f"\n\033[1;31m✗ La base de datos '{dbname}' no existe en la instancia '{instance}'.\033[0m"
+            f"\nBases disponibles en '{instance}': {bases_str}\n"
+        )
+        sys.exit(1)
 
     safe_pw = "'{}'".format(password.replace("'", "''"))
     safe_login = "'{}'".format(login.replace("'", "''"))
