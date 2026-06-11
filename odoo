@@ -663,6 +663,78 @@ def prompt_for_instance(config, action):
     return prompt_selection(options, "Selecciona una instancia (Usa las flechas, números y Enter para confirmar)")
 
 
+def _instance_has_db(instance, dbname, config):
+    """Devuelve True si ``dbname`` existe en el contenedor de la instancia."""
+    from generators.config_loader import resolve_db_config, get_db_host
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    db_port = db_conf["port"]
+    container = f"odoo-{instance}"
+    env = {"PGPASSWORD": db_password, "PATH": os.environ.get("PATH", "")}
+    proc = subprocess.run(
+        [
+            "docker", "exec", container,
+            "psql",
+            "--host", db_host,
+            "--port", str(db_port),
+            "-U", db_user,
+            "-d", "postgres",
+            "-tAc",
+            f"SELECT 1 FROM pg_database WHERE datname='{dbname}'",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return False
+    return "1" in (proc.stdout or "").strip().splitlines()
+
+
+def _resolve_instance_for_action(config, args):
+    """Decide que instancia usar para ``args.action``.
+
+    - Si el usuario ya paso la instancia posicionalmente, devolverla.
+    - Si la accion es 'pw' y paso '-d <dbname>', buscar en todas
+      las instancias cual tiene esa DB. Si hay 0 matches, pedir
+      instancia (comportamiento legacy). Si hay 1 match, devolverla
+      sin prompt. Si hay >1 match, prompt con la lista de candidatas.
+    - Para el resto de acciones, mantener el comportamiento legacy
+      (siempre pedir instancia con prompt_for_instance).
+    """
+    if getattr(args, "instance", None) is not None:
+        return args.instance
+
+    if args.action == "pw" and getattr(args, "d", None):
+        dbname = args.d
+        candidatas = [
+            inst for inst in config["instances"]
+            if _instance_has_db(inst, dbname, config)
+        ]
+        if len(candidatas) == 1:
+            print(
+                f"\n\033[1;36mℹ La base de datos '{dbname}' solo existe en "
+                f"la instancia '{candidatas[0]}'. Usando esa.\033[0m\n"
+            )
+            return candidatas[0]
+        if len(candidatas) > 1:
+            options = [(name, name) for name in candidatas]
+            print(
+                f"\nLa base de datos '{dbname}' existe en varias "
+                f"instancias. Selecciona una:"
+            )
+            return prompt_selection(
+                options,
+                f"Selecciona instancia que contiene '{dbname}'",
+            )
+        # 0 matches: cae al prompt normal al final.
+
+    return prompt_for_instance(config, args.action)
+
+
 def prompt_for_database(config, instance):
     databases = get_databases(config, instance)
     if not databases:
@@ -787,7 +859,7 @@ def main():
     }
 
     if args.action in actions_with_instance and getattr(args, "instance", None) is None:
-        args.instance = prompt_for_instance(config, args.action)
+        args.instance = _resolve_instance_for_action(config, args)
 
     # Dispatch
     if args.action == "build":
