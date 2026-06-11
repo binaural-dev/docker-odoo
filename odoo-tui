@@ -752,6 +752,13 @@ class DockerOdooApp(App):
         Binding("r", "refresh", "Refrescar"),
         Binding("tab", "focus_next", "Siguiente panel"),
         Binding("space", "toggle_instance", "Toggle enabled"),
+        Binding("escape", "cancel_update", "Cancelar"),
+        Binding("1", "toggle_level_info", "INFO"),
+        Binding("2", "toggle_level_warning", "WARNING"),
+        Binding("3", "toggle_level_error", "ERROR"),
+        Binding("4", "toggle_level_critical", "CRITICAL"),
+        Binding("0", "filter_all_levels", "Todos"),
+        Binding("9", "filter_errors_only", "Solo error/warn"),
     ]
 
     selected_instance: reactive[Optional[str]] = reactive(None)
@@ -1295,6 +1302,60 @@ class DockerOdooApp(App):
             self._update_proc.terminate()
         else:
             self._log("[dim]No hay actualización en curso.[/dim]")
+
+    def _rebuild_richlog_from_up(self, up: "UpdateProgress") -> None:
+        """Reconstruye el RichLog con las líneas que pasan el filtro actual."""
+        rl = self.query_one("#output", RichLog)
+        rl.clear()
+        for line in up.get_filtered_lines():
+            rl.write(line)
+
+    def _toggle_log_level(self, level: str) -> None:
+        """Alterna un nivel de log en el UpdateProgress y reconstruye el RichLog."""
+        try:
+            up = self.query_one("#update_progress", UpdateProgress)
+        except Exception:
+            return
+        if not up.display:
+            return
+        up._toggle_level(level)
+        self._rebuild_richlog_from_up(up)
+
+    def action_toggle_level_info(self) -> None:
+        self._toggle_log_level("INFO")
+
+    def action_toggle_level_warning(self) -> None:
+        self._toggle_log_level("WARNING")
+
+    def action_toggle_level_error(self) -> None:
+        self._toggle_log_level("ERROR")
+
+    def action_toggle_level_critical(self) -> None:
+        self._toggle_log_level("CRITICAL")
+
+    def action_filter_all_levels(self) -> None:
+        """Activa todos los niveles [0]."""
+        try:
+            up = self.query_one("#update_progress", UpdateProgress)
+        except Exception:
+            return
+        if not up.display:
+            return
+        up.set_all_levels(True)
+        self._rebuild_richlog_from_up(up)
+        self._log("[green]Filtro: todos los niveles activados[/green]")
+
+    def action_filter_errors_only(self) -> None:
+        """Activa solo ERROR y CRITICAL [9]."""
+        try:
+            up = self.query_one("#update_progress", UpdateProgress)
+        except Exception:
+            return
+        if not up.display:
+            return
+        up.set_errors_only()
+        self._rebuild_richlog_from_up(up)
+        self._log("[yellow]Filtro: solo ERROR + CRITICAL[/yellow]")
 
     def _log(self, message: str) -> None:
         try:
