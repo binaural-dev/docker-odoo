@@ -390,7 +390,7 @@ class ModulePicker(ModalScreen[Optional[list]]):
             with Horizontal(id="picker_panes"):
                 with Vertical(id="picker_left"):
                     yield Label("Disponibles", classes="field_label")
-                    yield ListView(id="available_list")
+                    yield OptionList(id="available_list")
                 with Vertical(id="picker_right"):
                     yield Label("A actualizar", classes="field_label")
                     yield ListView(id="selected_list")
@@ -412,16 +412,14 @@ class ModulePicker(ModalScreen[Optional[list]]):
     # ----- rendering -----
 
     def _render_available(self) -> None:
-        view = self.query_one("#available_list", ListView)
-        view.clear()
+        view = self.query_one("#available_list", OptionList)
+        view.clear_options()
         needle = self._filter.lower()
         for m in self.available_modules:
             if needle and needle not in m.lower():
                 continue
             label = f" ✓ {m}" if m in self.selected else f"   {m}"
-            item = ListItem(Label(label))
-            item.module_name = m  # type: ignore[attr-defined]
-            view.append(item)
+            view.add_option(Option(label, id=m))
 
     def _render_selected(self) -> None:
         view = self.query_one("#selected_list", ListView)
