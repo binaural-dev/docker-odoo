@@ -385,10 +385,13 @@ def reset_password(config, instance, dbname, login, password):
     safe_login = "'{}'".format(login.replace("'", "''"))
     print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
     sql = f"update res_users set password = {safe_pw} where login = {safe_login};"
-    subprocess.run(
+    proc = subprocess.run(
         ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname, "-c", sql],
         env={**os.environ, "PGPASSWORD": db_password},
     )
+    if proc.returncode != 0:
+        print(f"\n\033[1;31m✗ Error ejecutando psql (código {proc.returncode}). Contraseña NO actualizada.\033[0m\n")
+        sys.exit(proc.returncode)
     print("✅ Contraseña actualizada.\n")
 
 

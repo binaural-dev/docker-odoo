@@ -36,7 +36,8 @@ def run_command(instance, d, l, password):
     safe_login = shlex.quote(l)
     env = os.environ.copy()
     env["PGPASSWORD"] = db_password
-    subprocess.run(
+    click.echo(f"\n→ Restableciendo contraseña para el usuario '{l}' en la base de datos '{d}'...")
+    proc = subprocess.run(
         [
             "docker", "exec",
             container,
@@ -49,6 +50,10 @@ def run_command(instance, d, l, password):
         ],
         env=env,
     )
+    if proc.returncode != 0:
+        click.echo(f"\n\033[1;31m✗ Error ejecutando psql (código {proc.returncode}). Contraseña NO actualizada.\033[0m\n", err=True)
+        sys.exit(proc.returncode)
+    click.echo("✅ Contraseña actualizada.\n")
 
 
 if __name__ == "__main__":
