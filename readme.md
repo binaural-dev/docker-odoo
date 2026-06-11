@@ -213,9 +213,16 @@ comandos por vos y muestra el output en pantalla.
 # Dependencia: textual (>= 0.50). Instalar con:
 pip install --user textual
 
-# Lanzar la TUI
+# Lanzar la TUI (modo normal)
 ./odoo-tui
+
+# Lanzar la TUI con herramientas de desarrollo (hot-reload de CSS, consola)
+./odoo-tui --dev
 ```
+
+El flag `--dev` activa el modo desarrollo de Textual: recarga el CSS en
+caliente al editar `tui/styles/odoo-tui.tcss` y abre una consola interactiva
+con `Ctrl+P` → devtools. Ideal para diseñar componentes.
 
 ### Flujo
 
@@ -240,11 +247,30 @@ encontrados en disco) y `A actualizar` (los que vas acumulando).
 - `E` ejecuta (o el botón `Ejecutar`).
 - `Esc` cancela.
 
-Si confirmás con la selección vacía, se ejecuta `all` (etiqueta del
-botón cambia a `Ejecutar (all)`). Si la instancia no tiene addons en
-disco, el picker se salta y se usa el modal de texto clásico, que
-además acepta un campo opcional `Load language` para pasarlo como
-`--load-language=es_VE` a `scripts/odoo-update`.
+**Selección vacía = todos los módulos.** Si confirmás sin elegir ninguno,
+se ejecuta `all` (la etiqueta del botón cambia a `Ejecutar (all)`).
+Si la instancia no tiene addons en disco, el picker se salta y se usa
+el modal de texto clásico, que además acepta `--load-language=es_VE`.
+
+### Progreso en vivo durante la actualización
+
+Cuando ejecutás `Update` con módulos seleccionados, aparece un recuadro
+verde arriba del panel de output que muestra:
+
+```
+┌─ Actualizando módulos ─ bananera_prod ───────────────────┐
+│  Progreso:  ████████░░░░░░░░░░░░  45 / 234 (19%)        │
+│  Quedan: 189 módulos                                     │
+│  [I]INFO ✓  [W]WARNING ✓  [E]ERROR ✓  [C]CRITICAL ✓     │
+│  [Esc] Cancelar   [0] Todos   [9] Solo error/warn       │
+└──────────────────────────────────────────────────────────┘
+```
+
+- Odoo emite el formato `(N/M)` en su stdout mientras actualiza módulos;
+  la TUI lo parsea y actualiza la barra en tiempo real.
+- Podés filtrar el nivel de log que se muestra en el panel inferior
+  usando las teclas `1`-`4` para togglear cada nivel, `0` para todos,
+  y `9` para solo errores y warnings.
 
 ### Atajos de teclado
 
@@ -256,6 +282,15 @@ además acepta un campo opcional `Load language` para pasarlo como
 | `r` | Refrescar instancias desde `instances.json` |
 | `Space` | Toggle `enabled` de la instancia seleccionada (persiste en `instances.json`) |
 | `q` / `Esc` | Salir / cancelar modal |
+
+**Durante la actualización de módulos:**
+
+| Tecla | Acción |
+|-------|--------|
+| `1`-`4` | Toggle nivel de log (1=INFO, 2=WARNING, 3=ERROR, 4=CRITICAL) |
+| `0` | Mostrar todos los niveles |
+| `9` | Mostrar solo ERROR + CRITICAL |
+| `Esc` | Cancelar la actualización en curso |
 
 ### Acciones soportadas
 
@@ -271,6 +306,31 @@ además acepta un campo opcional `Load language` para pasarlo como
 `start`/`stop`/`restart`/`logs`/`fix-files`/`init`/`remove` aceptan la
 opción **"Todas las instancias"**; la TUI los itera por vos y evita que
 tengas que tipear el flag ni enfrentar el prompt interactivo del CLI.
+
+### Tests automatizados de la TUI
+
+La TUI tiene una suite de tests de humo que verifica que los componentes
+arrancan, los widgets se componen, y las features clave no se rompen:
+
+```bash
+# Todos los tests de la TUI (sin Docker, mockea subprocess)
+python3 scripts/tui_smoke_test.py -v
+
+# Validación del CSS (verifica que el archivo .tcss parsea correctamente)
+python3 scripts/tui_check_css.py
+```
+
+El package `tui/` está estructurado por capas:
+
+| Ruta | Contenido |
+|------|-----------|
+| `tui/app.py` | `DockerOdooApp` — lógica principal, bindings, dispatch |
+| `tui/models.py` | `Action`, constantes, tipos |
+| `tui/actions.py` | Constructores de comandos (`_odoo_cli_args`, `_script_args`) |
+| `tui/parser.py` | Parseo de progreso `(N/M)` y clasificación de niveles de log |
+| `tui/screens/` | Modales: `InputModal`, `ConfirmModal`, `ModulePicker` |
+| `tui/widgets/` | Componentes: `UpdateProgress`, `InstanceItem`, `ActionItem` |
+| `tui/styles/odoo-tui.tcss` | Estilos en Textual CSS |
 
 ## Scripts auxiliares
 
