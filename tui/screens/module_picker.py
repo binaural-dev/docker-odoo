@@ -63,7 +63,8 @@ class ModulePicker(ModalScreen[Optional[list]]):
             with Horizontal(id="picker_hints_row"):
                 yield Static(
                     "[Tab] cambiar   [Enter] +/-   [L] limpiar   "
-                    "[E] ejecutar   [Esc] cancelar",
+                    "[E] ejecutar   [Esc] cancelar     "
+                    "[dim](vacío = todos los módulos)[/dim]",
                     id="picker_hints",
                 )
             with Horizontal(id="modal_buttons"):
