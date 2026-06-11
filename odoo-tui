@@ -393,7 +393,7 @@ class ModulePicker(ModalScreen[Optional[list]]):
                     yield OptionList(id="available_list")
                 with Vertical(id="picker_right"):
                     yield Label("A actualizar", classes="field_label")
-                    yield ListView(id="selected_list")
+                    yield OptionList(id="selected_list")
             with Horizontal(id="modal_buttons"):
                 yield Static(
                     "[Tab] cambiar   [Enter] +/-   [L] limpiar   "
@@ -422,12 +422,10 @@ class ModulePicker(ModalScreen[Optional[list]]):
             view.add_option(Option(label, id=m))
 
     def _render_selected(self) -> None:
-        view = self.query_one("#selected_list", ListView)
-        view.clear()
+        view = self.query_one("#selected_list", OptionList)
+        view.clear_options()
         for m in self.selected:
-            item = ListItem(Label(f" ▸ {m}"))
-            item.module_name = m  # type: ignore[attr-defined]
-            view.append(item)
+            view.add_option(Option(f" ▸ {m}", id=m))
         self._refresh_execute_label()
 
     def _refresh_execute_label(self) -> None:
