@@ -90,3 +90,50 @@ RichLog {
     color: $secondary;
     padding: 0 1;
 }
+
+/* ----- UpdateProgress widget ----- */
+#update_progress {
+    display: none;
+    border: round $success;
+    background: $surface-darken-1;
+    padding: 0 1;
+    height: 11;
+    margin-bottom: 0;
+}
+
+#update_progress #up_title {
+    text-style: bold;
+    color: $success;
+    padding: 0 1;
+}
+
+#update_progress ProgressBar {
+    width: 100%;
+    margin: 0 1;
+}
+
+#update_progress #up_progress_label,
+#update_progress #up_remaining {
+    color: $text;
+    padding: 0 1;
+}
+
+#update_progress #up_filters_row {
+    height: 1;
+    padding: 0 1;
+    align: left middle;
+}
+
+#update_progress #up_filters_row Static {
+    margin-right: 1;
+}
+
+#update_progress #up_hints_row {
+    height: 1;
+    padding: 0 1;
+    color: $secondary;
+}
+
+#update_progress #up_hints_row Static {
+    margin-right: 1;
+}

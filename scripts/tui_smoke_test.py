@@ -33,6 +33,7 @@ import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ODOO_TUI = REPO_ROOT / "odoo-tui"
@@ -49,12 +50,18 @@ def _load_odoo_tui():
     return mod
 
 
+# Cargar el modulo una vez a nivel de modulo para compartirlo entre
+# todas las clases de test (unittest no garantiza orden de setUpClass).
+_TUI_MOD = _load_odoo_tui()
+
+
 class TuiSmokeTest(unittest.TestCase):
     """Suite de smoke tests para la TUI v3."""
 
+    mod = _TUI_MOD
+
     @classmethod
     def setUpClass(cls):
-        cls.mod = _load_odoo_tui()
         cls.tcss_text = TCSS_PATH.read_text()
 
     # ------------------------------------------------------------------
@@ -308,6 +315,440 @@ class TuiSmokeTest(unittest.TestCase):
             len(result["selected_after_enter"]),
             1,
             f"enter no selecciono un modulo: {result}",
+        )
+
+
+# ============================================================
+# TUI v4 — UpdateProgress tests
+# ============================================================
+
+
+class TuiProgressParserTest(unittest.TestCase):
+    """Sim 1: tests del parser de progreso puro."""
+
+    def test_parse_match_simple(self):
+        """(45/234) → (45, 234)"""
+        r = _TUI_MOD.parse_progress("(45/234)")
+        self.assertEqual(r, (45, 234))
+
+    def test_parse_no_match(self):
+        """linea sin parentesis → None"""
+        r = _TUI_MOD.parse_progress("INFO: sale module updated")
+        self.assertIsNone(r)
+
+    def test_parse_zero_current(self):
+        """(0/1) → (0, 1)"""
+        r = _TUI_MOD.parse_progress("(0/1)")
+        self.assertEqual(r, (0, 1))
+
+    def test_parse_large_numbers(self):
+        """(999/1000) → (999, 1000)"""
+        r = _TUI_MOD.parse_progress("(999/1000)")
+        self.assertEqual(r, (999, 1000))
+
+    def test_parse_multiple_matches(self):
+        """linea con dos matches → primer match (0/1)"""
+        r = _TUI_MOD.parse_progress("(0/1) (45/234)")
+        self.assertEqual(r, (0, 1))
+
+    def test_parse_with_surrounding_text(self):
+        """linea con texto envolvente → (5, 10)"""
+        r = _TUI_MOD.parse_progress(
+            "2024-01-01 10:00:00 INFO (5/10) sale"
+        )
+        self.assertEqual(r, (5, 10))
+
+
+class TuiLevelClassifierTest(unittest.TestCase):
+    """Sim 2: tests del clasificador de nivel."""
+
+    def test_critical(self):
+        self.assertEqual(
+            _TUI_MOD.classify_level("CRITICAL: Odoo crashed"),
+            "CRITICAL",
+        )
+
+    def test_error(self):
+        self.assertEqual(
+            _TUI_MOD.classify_level("ERROR: sale module failed"),
+            "ERROR",
+        )
+
+    def test_warning(self):
+        self.assertEqual(
+            _TUI_MOD.classify_level("WARNING: account deprecated"),
+            "WARNING",
+        )
+
+    def test_info(self):
+        self.assertEqual(
+            _TUI_MOD.classify_level("INFO: update module sale"),
+            "INFO",
+        )
+
+    def test_no_prefix_defaults_to_info(self):
+        """linea sin prefijo → INFO"""
+        self.assertEqual(
+            _TUI_MOD.classify_level("  some log message"),
+            "INFO",
+        )
+
+    def test_error_with_indent(self):
+        """linea con espacio previo → ERROR"""
+        self.assertEqual(
+            _TUI_MOD.classify_level("  ERROR: something"),
+            "ERROR",
+        )
+
+
+class TuiUpdateProgressWidgetTest(unittest.TestCase):
+    """Sim 3: tests del widget presentacional UpdateProgress."""
+
+    def test_progress_widget_compose(self):
+        """UpdateProgress se monta con ProgressBar, labels y chips."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = _TUI_MOD.UpdateProgress(instance_name="test", modules="sale")
+                await app.mount(up)
+                await pilot.pause()
+                self.assertIsNotNone(up.query_one("#up_progress"))
+                self.assertIsNotNone(up.query_one("#up_progress_label"))
+                self.assertIsNotNone(up.query_one("#up_remaining"))
+                for fid in ("filt_info", "filter_warning", "filter_error", "filt_critical"):
+                    self.assertIsNotNone(up.query_one(f"#{fid}"))
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_set_progress(self):
+        """UpdateProgress.set_progress(45, 234) actualiza ProgressBar y labels."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = _TUI_MOD.UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.set_progress(45, 234)
+                await pilot.pause()
+                pb = up.query_one("#up_progress")
+                self.assertEqual(pb.total, 234)
+                self.assertEqual(pb.progress, 45)
+                lbl = up.query_one("#up_progress_label")
+                self.assertIn("45 / 234", str(lbl.render()))
+                rem = up.query_one("#up_remaining")
+                self.assertIn("189", str(rem.render()))
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_filter_toggle(self):
+        """UpdateProgress._toggle_level() cambia filter_levels y chips."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = _TUI_MOD.UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                self.assertIn("WARNING", up.filter_levels)
+                up._toggle_level("WARNING")
+                self.assertNotIn("WARNING", up.filter_levels)
+                up._toggle_level("WARNING")
+                self.assertIn("WARNING", up.filter_levels)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_add_and_filter_lines(self):
+        """UpdateProgress.add_line() y get_filtered_lines() filtran correctamente."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = _TUI_MOD.UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.add_line("ERROR", "ERROR: test error")
+                up.add_line("WARNING", "WARNING: test warning")
+                up.add_line("INFO", "INFO: test info")
+                # WARNING activo por defecto -> todas pasan
+                all_lines = up.get_filtered_lines()
+                self.assertEqual(len(all_lines), 3)
+                # Quitar WARNING
+                up._toggle_level("WARNING")
+                filtered = up.get_filtered_lines()
+                self.assertEqual(len(filtered), 2)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_set_all_levels(self):
+        """set_all_levels(True) activa todo, set_all_levels(False) vacia."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = _TUI_MOD.UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.add_line("ERROR", "e")
+                up.add_line("WARNING", "w")
+                up.set_all_levels(False)
+                self.assertEqual(len(up.get_filtered_lines()), 0)
+                up.set_all_levels(True)
+                self.assertEqual(len(up.get_filtered_lines()), 2)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_set_errors_only(self):
+        """set_errors_only() deja solo ERROR y CRITICAL."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = _TUI_MOD.UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.add_line("ERROR", "e")
+                up.add_line("WARNING", "w")
+                up.add_line("INFO", "i")
+                up.add_line("CRITICAL", "c")
+                up.set_errors_only()
+                lines = up.get_filtered_lines()
+                self.assertEqual(len(lines), 2)
+                self.assertIn("e", lines)
+                self.assertIn("c", lines)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_clear(self):
+        """clear() resetea todo."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = _TUI_MOD.UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.set_progress(45, 234)
+                up.add_line("ERROR", "e")
+                up.clear()
+                self.assertEqual(up.progress_current, 0)
+                self.assertEqual(up.progress_total, 0)
+                self.assertEqual(len(up._all_lines), 0)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_idle_timeout_sets_indeterminate(self):
+        """ProgressBar con total=None queda en modo indeterminado."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = _TUI_MOD.UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                pb = up.query_one("#up_progress")
+                self.assertIsNotNone(pb)
+                pb.total = None
+                self.assertIsNone(pb.total)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+
+class TuiProgressIntegrationTest(unittest.TestCase):
+    """Sim 4-9: tests de integracion con subprocess mockeado y bindings."""
+
+    def test_integration_parses_progress_lines(self):
+        """Sim 4: mockear subprocess con lineas de progreso, verificar avance."""
+        from textual.app import App
+
+        odoo_lines = [
+            "INFO: odoo: (0/5) starting",
+            "INFO: odoo: (1/5) sale",
+            "WARNING: odoo: (2/5) account deprecated",
+            "ERROR: odoo: (3/5) stock failed",
+            "INFO: odoo: (4/5) purchase",
+            "INFO: odoo: (5/5) done",
+        ]
+
+        async def go():
+            app = _TUI_MOD.DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
+                up.display = True
+                up.clear()
+                for line in odoo_lines:
+                    parsed = _TUI_MOD.parse_progress(line)
+                    if parsed is not None:
+                        up.set_progress(parsed[0], parsed[1])
+                    level = _TUI_MOD.classify_level(line)
+                    up.add_line(level, line)
+                await pilot.pause()
+                self.assertEqual(up.progress_total, 5)
+                self.assertEqual(up.progress_current, 5)
+                self.assertEqual(len(up._all_lines), 6)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_filter_with_bindings(self):
+        """Sim 5: toggle WARNING con binding, verificar solo ciertos niveles."""
+        from textual.app import App
+
+        odoo_lines = [
+            "ERROR: e1",
+            "WARNING: w1",
+            "INFO: i1",
+            "ERROR: e2",
+            "CRITICAL: c1",
+        ]
+
+        async def go():
+            app = _TUI_MOD.DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
+                up.display = True
+                for line in odoo_lines:
+                    level = _TUI_MOD.classify_level(line)
+                    up.add_line(level, line)
+                # Ver estado inicial: 5 lineas pasan
+                self.assertEqual(len(up.get_filtered_lines()), 5)
+                # Presionar '2' toggle WARNING
+                await pilot.press("2")
+                await pilot.pause()
+                # WARNING desactivado -> quedan 4
+                self.assertNotIn("WARNING", up.filter_levels)
+                self.assertEqual(len(up.get_filtered_lines()), 4)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_filter_errors_only(self):
+        """Sim 6: binding '9' deja solo ERROR+CRITICAL."""
+        from textual.app import App
+
+        async def go():
+            app = _TUI_MOD.DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
+                up.display = True
+                up.add_line("ERROR", "e1")
+                up.add_line("WARNING", "w1")
+                up.add_line("INFO", "i1")
+                up.add_line("CRITICAL", "c1")
+                await pilot.pause()
+                await pilot.press("9")
+                await pilot.pause()
+                lines = up.get_filtered_lines()
+                self.assertEqual(len(lines), 2)
+                self.assertIn("e1", lines)
+                self.assertIn("c1", lines)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_filter_all(self):
+        """Sim 7: binding '0' activa todos los niveles."""
+        from textual.app import App
+
+        async def go():
+            app = _TUI_MOD.DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
+                up.display = True
+                up.add_line("ERROR", "e1")
+                up.add_line("WARNING", "w1")
+                up._toggle_level("WARNING")
+                await pilot.pause()
+                self.assertEqual(len(up.get_filtered_lines()), 1)
+                await pilot.press("0")
+                await pilot.pause()
+                self.assertEqual(len(up.get_filtered_lines()), 2)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_cancel_with_esc(self):
+        """Sim 8: Esc llama a terminate() en el subprocess."""
+        from textual.app import App
+
+        async def go():
+            app = _TUI_MOD.DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                mock_proc = MagicMock()
+                mock_proc.terminate = MagicMock()
+                app._update_proc = mock_proc
+                await pilot.press("escape")
+                await pilot.pause()
+                mock_proc.terminate.assert_called_once()
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_no_modules_no_widget(self):
+        """Sim 10: update sin modulos (all) no muestra el widget."""
+        update_action = _TUI_MOD.get_action("update")
+        app = _TUI_MOD.DockerOdooApp()
+        self.assertFalse(
+            app._is_update_with_modules(update_action, {"modules": "all"})
+        )
+
+    def test_integration_with_modules_shows_widget(self):
+        """update con modulos conocidos usa el widget."""
+        update_action = _TUI_MOD.get_action("update")
+        app = _TUI_MOD.DockerOdooApp()
+        self.assertTrue(
+            app._is_update_with_modules(update_action, {"modules": "sale,purchase"})
+        )
+
+    def test_integration_non_update_no_widget(self):
+        """accion no-update no usa el widget."""
+        start_action = _TUI_MOD.get_action("start")
+        app = _TUI_MOD.DockerOdooApp()
+        self.assertFalse(
+            app._is_update_with_modules(start_action, {})
         )
 
 

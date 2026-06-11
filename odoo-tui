@@ -22,8 +22,10 @@ import sys
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+import re
+from typing import Optional, Tuple
 
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -38,6 +40,7 @@ from textual.widgets import (
     ListItem,
     ListView,
     OptionList,
+    ProgressBar,
     RichLog,
     Static,
 )
@@ -264,6 +267,55 @@ def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
     elif sub == "upgrade_manifest":
         pass
     return argv
+
+
+# ============================================================
+# Pure functions for stream parsing
+# ============================================================
+
+def parse_progress(line: str) -> Optional[Tuple[int, int]]:
+    """Extrae (current, total) de una línea que matchee (N/M).
+
+    Returns:
+        Tuple (current, total) si hay match, None si no.
+        La primera aparicion setea el total; cada match actualiza el current.
+    """
+    match = re.search(r'\((\d+)/(\d+)\)', line)
+    if match:
+        return (int(match.group(1)), int(match.group(2)))
+    return None
+
+
+def classify_level(line: str) -> str:
+    """Clasifica el nivel de log de una línea de stdout de Odoo.
+
+    Busca el primer token de nivel en mayusculas al inicio de la línea
+    o tras un espacio. Si no hay match, retorna 'INFO' por defecto.
+    """
+    for level in ("CRITICAL", "ERROR", "WARNING", "INFO"):
+        if (
+            line.startswith(level)
+            or line.startswith(level + ":")
+            or f" {level} " in line
+            or f" {level}:" in line
+        ):
+            return level
+    return "INFO"
+
+
+LOG_LEVELS = ("CRITICAL", "ERROR", "WARNING", "INFO")
+LOG_LEVEL_COLORS = {
+    "CRITICAL": "red bold",
+    "ERROR": "red",
+    "WARNING": "yellow",
+    "INFO": "blue",
+}
+LOG_LEVEL_SHORT = {
+    "CRITICAL": "C",
+    "ERROR": "E",
+    "WARNING": "W",
+    "INFO": "I",
+}
 
 
 # ============================================================
@@ -532,6 +584,166 @@ class NoInstanceActionItem(ListItem):
         self.action = action
 
 
+# ============================================================
+# UpdateProgress widget
+# ============================================================
+
+FILTER_LEVEL_IDS = {
+    "CRITICAL": "filt_critical",
+    "ERROR": "filter_error",
+    "WARNING": "filter_warning",
+    "INFO": "filt_info",
+}
+
+
+class UpdateProgress(Container):
+    """Widget de progreso de actualización de módulos.
+
+    Se muestra arriba del RichLog durante una operación ``update``
+    con módulos conocidos. Es puramente presentacional: recibe
+    eventos via reactives y bindings, no sabe de subprocesses.
+    """
+
+    progress_current: int = reactive(0)
+    progress_total: int = reactive(0)
+    filter_levels: set[str] = reactive(set(LOG_LEVELS))
+
+    def __init__(self, instance_name: str = "", modules: str = "", **kwargs):
+        super().__init__(**kwargs)
+        self._instance_name = instance_name
+        self._modules = modules
+        self._all_lines: list[tuple[str, str]] = []  # (level, line)
+        self._idle_timer: asyncio.TimerHandle | None = None
+
+    def compose(self) -> ComposeResult:
+        title = (
+            f"Actualizando módulos — {self._instance_name}"
+            if self._instance_name
+            else "Actualizando módulos"
+        )
+        yield Static(title, id="up_title")
+        yield ProgressBar(total=0, id="up_progress", show_percentage=True)
+        yield Label("Progreso: 0 / 0 (0%)", id="up_progress_label")
+        yield Label("Quedan: 0 módulos", id="up_remaining")
+        with Horizontal(id="up_filters_row"):
+            yield Static(self._filter_chip("INFO"), id="filt_info")
+            yield Static(self._filter_chip("WARNING"), id="filter_warning")
+            yield Static(self._filter_chip("ERROR"), id="filter_error")
+            yield Static(self._filter_chip("CRITICAL"), id="filt_critical")
+        with Horizontal(id="up_hints_row"):
+            yield Static(" [Esc] Cancelar ", id="hint_esc")
+            yield Static(" [0] Todos ", id="hint_all")
+            yield Static(" [9] Solo error/warn ", id="hint_errors")
+
+    # ----- filter chip helpers -----
+
+    @staticmethod
+    def _filter_chip(level: str, active: bool = True) -> str:
+        short = LOG_LEVEL_SHORT.get(level, "?")
+        mark = "✓" if active else "✗"
+        color = "green" if active else "gray"
+        return f"[{color}][{short}]{level} {mark}[/{color}]"
+
+    def _refresh_filter_chips(self) -> None:
+        for level, fid in FILTER_LEVEL_IDS.items():
+            chip = self.query_one(f"#{fid}", Static)
+            chip.update(self._filter_chip(level, level in self.filter_levels))
+
+    # ----- progress and timeout -----
+
+    def set_progress(self, current: int, total: int) -> None:
+        self.progress_total = total
+        self.progress_current = current
+        self._reset_idle_timer()
+
+    def _reset_idle_timer(self) -> None:
+        if self._idle_timer is not None:
+            self._idle_timer.cancel()
+            self._idle_timer = None
+
+    def _on_idle_timeout(self) -> None:
+        """Pasaron 5s sin progreso: cambia el ProgressBar a indeterminado."""
+        pb = self.query_one("#up_progress", ProgressBar)
+        pb.total = None
+
+    # ----- reactive watchers -----
+
+    def watch_progress_current(self, value: int) -> None:
+        pb = self.query_one("#up_progress", ProgressBar)
+        total = self.progress_total
+        if total > 0:
+            pb.progress = value
+            pb.total = total
+            pct = int(value / total * 100)
+            self.query_one("#up_progress_label", Label).update(
+                f"Progreso: {value} / {total} ({pct}%)"
+            )
+            remaining = total - value
+            self.query_one("#up_remaining", Label).update(
+                f"Quedan: {remaining} módulo{'s' if remaining != 1 else ''}"
+            )
+
+    def watch_progress_total(self, value: int) -> None:
+        if value > 0:
+            pb = self.query_one("#up_progress", ProgressBar)
+            pb.total = value
+
+    def watch_filter_levels(self, value: set[str]) -> None:
+        self._refresh_filter_chips()
+
+    # ----- line management -----
+
+    def add_line(self, level: str, line: str) -> None:
+        self._all_lines.append((level, line))
+
+    def get_filtered_lines(self) -> list[str]:
+        """Retorna las líneas que pasan el filtro actual."""
+        return [
+            line
+            for lvl, line in self._all_lines
+            if lvl in self.filter_levels
+        ]
+
+    def clear(self) -> None:
+        self._all_lines.clear()
+        self.progress_current = 0
+        self.progress_total = 0
+        self._reset_idle_timer()
+
+    # ----- click handlers for filter chips -----
+
+    def on_click(self, event: events.Click) -> None:
+        """Handle clicks on filter chips."""
+        widget = event.widget
+        if widget is None or not widget.id or not widget.id.startswith("filt_"):
+            return
+        level_map = {
+            "filt_info": "INFO",
+            "filter_warning": "WARNING",
+            "filter_error": "ERROR",
+            "filt_critical": "CRITICAL",
+        }
+        level = level_map.get(widget.id)
+        if level is None:
+            return
+        self._toggle_level(level)
+
+    def _toggle_level(self, level: str) -> None:
+        if level in self.filter_levels:
+            self.filter_levels = self.filter_levels - {level}
+        else:
+            self.filter_levels = self.filter_levels | {level}
+
+    def set_all_levels(self, active: bool) -> None:
+        if active:
+            self.filter_levels = set(LOG_LEVELS)
+        else:
+            self.filter_levels = set()
+
+    def set_errors_only(self) -> None:
+        self.filter_levels = {"ERROR", "CRITICAL"}
+
+
 class DockerOdooApp(App):
     CSS_PATH = "odoo-tui.tcss"
 
@@ -540,6 +752,13 @@ class DockerOdooApp(App):
         Binding("r", "refresh", "Refrescar"),
         Binding("tab", "focus_next", "Siguiente panel"),
         Binding("space", "toggle_instance", "Toggle enabled"),
+        Binding("escape", "cancel_update", "Cancelar"),
+        Binding("1", "toggle_level_info", "INFO"),
+        Binding("2", "toggle_level_warning", "WARNING"),
+        Binding("3", "toggle_level_error", "ERROR"),
+        Binding("4", "toggle_level_critical", "CRITICAL"),
+        Binding("0", "filter_all_levels", "Todos"),
+        Binding("9", "filter_errors_only", "Solo error/warn"),
     ]
 
     selected_instance: reactive[Optional[str]] = reactive(None)
@@ -551,6 +770,8 @@ class DockerOdooApp(App):
         self._raw_config: dict = {}       # unfiltered, used for persistence
         self._last_action: Optional[Action] = None
         self.module_cache: dict = {}      # instance -> sorted module names
+        self._update_proc: Optional[subprocess.Popen] = None  # current update proc
+        self._progress_label: str = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -561,6 +782,7 @@ class DockerOdooApp(App):
             with Vertical(id="right"):
                 yield Static("Acciones disponibles", id="subtitle")
                 yield ListView(id="actions_list")
+        yield UpdateProgress(id="update_progress")
         yield RichLog(id="output", highlight=False, markup=True, wrap=True)
         yield Footer()
 
@@ -974,6 +1196,18 @@ class DockerOdooApp(App):
         else:
             self._log(f"[red]✗ {action.label} salió con código {rc_total} en al menos una instancia[/red]")
 
+    def _is_update_with_modules(self, action: Action, args: dict) -> bool:
+        """Determina si podemos mostrar el widget de progreso.
+
+        Solo para action ``update`` con módulos conocidos (no 'all').
+        """
+        if action.action_id != "update":
+            return False
+        modules = (args or {}).get("modules", "")
+        if not modules or modules == "all":
+            return False
+        return True
+
     async def _execute_one(self, action: Action, instance: Optional[str], args: dict, *, echo_cmd: bool = True) -> int:
         # The consolidated ``update`` action routes through scripts/odoo-update
         # just like the legacy ``script:update`` did.
@@ -986,7 +1220,10 @@ class DockerOdooApp(App):
         if action.interactive:
             await self._run_interactive(argv, action)
             return 0
-        return await self._run_streamed(argv, action.label, echo_cmd=echo_cmd)
+        use_progress = self._is_update_with_modules(action, args)
+        if use_progress:
+            self._progress_label = action.label
+        return await self._run_streamed(argv, action.label, echo_cmd=echo_cmd, use_progress_widget=use_progress)
 
     async def _run_interactive(self, argv: list, action: Action) -> None:
         self._log(f"[cyan]→ {' '.join(shlex.quote(a) for a in argv)}[/cyan]")
@@ -1000,11 +1237,21 @@ class DockerOdooApp(App):
                 print("\n[interrumpido]", file=sys.stderr)
         self._log(f"[green]✓ {action.label} finalizado.[/green]")
 
-    async def _run_streamed(self, argv: list, label: str, *, echo_cmd: bool = True) -> int:
+    async def _run_streamed(
+        self, argv: list, label: str, *,
+        echo_cmd: bool = True, use_progress_widget: bool = False,
+    ) -> int:
         if echo_cmd:
             self._log(f"[cyan]→ {' '.join(shlex.quote(a) for a in argv)}[/cyan]")
         self._log("[dim]Ejecutando... (Ctrl+C para abortar)[/dim]")
-        loop = asyncio.get_running_loop()
+
+        # Mostrar widget de progreso si corresponde
+        up: Optional[UpdateProgress] = None
+        if use_progress_widget:
+            up = self.query_one("#update_progress", UpdateProgress)
+            up.display = True
+            up.clear()
+            up.filter_levels = set(LOG_LEVELS)
 
         def _run() -> int:
             try:
@@ -1016,19 +1263,99 @@ class DockerOdooApp(App):
             except FileNotFoundError as exc:
                 self.call_from_thread(self._log, f"[red]No encontrado:[/red] {exc}")
                 return 127
+            # Guardar referencia para cancelacion con Esc
+            self._update_proc = proc
             assert proc.stdout is not None
             for line in proc.stdout:
-                self.call_from_thread(self._log, line.rstrip())
+                line = line.rstrip()
+                if up is not None:
+                    parsed = parse_progress(line)
+                    if parsed is not None:
+                        self.call_from_thread(up.set_progress, parsed[0], parsed[1])
+                    level = classify_level(line)
+                    self.call_from_thread(up.add_line, level, line)
+                    if level in up.filter_levels:
+                        self.call_from_thread(self._log, line)
+                else:
+                    self.call_from_thread(self._log, line)
             rc = proc.wait()
+            self._update_proc = None
             return rc
 
         rc = await asyncio.to_thread(_run)
+
+        # Ocultar widget de progreso
+        if up is not None:
+            up.display = False
+
         if echo_cmd:
             if rc == 0:
                 self._log(f"[green]✓ {label} OK[/green]")
             else:
                 self._log(f"[red]✗ {label} salió con código {rc}[/red]")
         return rc
+
+    def action_cancel_update(self) -> None:
+        """Cancela la actualización en curso con Esc."""
+        if self._update_proc is not None:
+            self._log("[yellow]Cancelando actualización...[/yellow]")
+            self._update_proc.terminate()
+        else:
+            self._log("[dim]No hay actualización en curso.[/dim]")
+
+    def _rebuild_richlog_from_up(self, up: "UpdateProgress") -> None:
+        """Reconstruye el RichLog con las líneas que pasan el filtro actual."""
+        rl = self.query_one("#output", RichLog)
+        rl.clear()
+        for line in up.get_filtered_lines():
+            rl.write(line)
+
+    def _toggle_log_level(self, level: str) -> None:
+        """Alterna un nivel de log en el UpdateProgress y reconstruye el RichLog."""
+        try:
+            up = self.query_one("#update_progress", UpdateProgress)
+        except Exception:
+            return
+        if not up.display:
+            return
+        up._toggle_level(level)
+        self._rebuild_richlog_from_up(up)
+
+    def action_toggle_level_info(self) -> None:
+        self._toggle_log_level("INFO")
+
+    def action_toggle_level_warning(self) -> None:
+        self._toggle_log_level("WARNING")
+
+    def action_toggle_level_error(self) -> None:
+        self._toggle_log_level("ERROR")
+
+    def action_toggle_level_critical(self) -> None:
+        self._toggle_log_level("CRITICAL")
+
+    def action_filter_all_levels(self) -> None:
+        """Activa todos los niveles [0]."""
+        try:
+            up = self.query_one("#update_progress", UpdateProgress)
+        except Exception:
+            return
+        if not up.display:
+            return
+        up.set_all_levels(True)
+        self._rebuild_richlog_from_up(up)
+        self._log("[green]Filtro: todos los niveles activados[/green]")
+
+    def action_filter_errors_only(self) -> None:
+        """Activa solo ERROR y CRITICAL [9]."""
+        try:
+            up = self.query_one("#update_progress", UpdateProgress)
+        except Exception:
+            return
+        if not up.display:
+            return
+        up.set_errors_only()
+        self._rebuild_richlog_from_up(up)
+        self._log("[yellow]Filtro: solo ERROR + CRITICAL[/yellow]")
 
     def _log(self, message: str) -> None:
         try:
