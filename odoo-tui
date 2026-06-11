@@ -443,19 +443,18 @@ class ModulePicker(ModalScreen[Optional[list]]):
         self._filter = event.value
         self._render_available()
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        item = event.item
-        name = getattr(item, "module_name", None)
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        name = getattr(event.option, "id", None)
         if name is None:
             return
-        if event.list_view.id == "available_list":
+        if event.option_list.id == "available_list":
             if name in self.selected:
                 self.selected.remove(name)
             else:
                 self.selected.append(name)
             self._render_available()
             self._render_selected()
-        elif event.list_view.id == "selected_list":
+        elif event.option_list.id == "selected_list":
             if name in self.selected:
                 self.selected.remove(name)
             self._render_available()
