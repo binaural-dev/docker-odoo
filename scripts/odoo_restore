@@ -20,12 +20,53 @@ class ZipExtractor:
         with zipfile.ZipFile(self.zip_path, "r") as z:
             z.extractall(self.temp_dir)
 
-        dump_path = os.path.join(self.temp_dir, "dump.sql")
-        filestore_path = os.path.join(self.temp_dir, "filestore")
+        dump_candidates = []
+        filestore_candidates = []
 
-        if not os.path.isfile(dump_path):
-            raise FileNotFoundError("dump.sql no encontrado dentro del ZIP")
+        # Buscamos rutas válidas evitando carpetas de metadatos de macOS.
+        for root, dirs, files in os.walk(self.temp_dir):
+            root_parts = root.split(os.sep)
+            if "__MACOSX" in root_parts:
+                continue
 
+            if "dump.sql" in files:
+                dump_candidates.append(os.path.join(root, "dump.sql"))
+            if "filestore" in dirs:
+                filestore_candidates.append(os.path.join(root, "filestore"))
+
+        dump_path = None
+        filestore_path = None
+
+        if dump_candidates:
+            # Elegimos la ruta más alta para evitar rutas anidadas inesperadas.
+            dump_path = sorted(dump_candidates, key=lambda p: (p.count(os.sep), len(p)))[0]
+
+            # Priorizamos el filestore hermano del dump.
+            sibling_filestore = os.path.join(os.path.dirname(dump_path), "filestore")
+            if os.path.isdir(sibling_filestore):
+                filestore_path = sibling_filestore
+
+        # Si no se encontró el dump, listamos qué hay para dar pistas al usuario
+        if not dump_path:
+            contenido_real = os.listdir(self.temp_dir)
+            raise FileNotFoundError(
+                f"ERROR: No se encontró 'dump.sql' en el ZIP.\n"
+                f"Contenido extraído en la raíz: {contenido_real}"
+            )
+
+        # Fallback al primer filestore válido encontrado.
+        if not filestore_path and filestore_candidates:
+            filestore_path = sorted(
+                filestore_candidates, key=lambda p: (p.count(os.sep), len(p))
+            )[0]
+
+        # Si no hay filestore, definimos la ruta default para que no rompa,
+        # pero el FilestoreRestoreManager ya lo maneja.
+        if not filestore_path:
+            filestore_path = os.path.join(self.temp_dir, "filestore")
+
+        print(f"✓ Archivo dump localizado en: {dump_path}")
+        print(f"✓ Carpeta filestore localizada en: {filestore_path}")
         return dump_path, filestore_path, self.temp_dir
 
 
@@ -201,10 +242,27 @@ class FilestoreRestoreManager:
         self.container_filestore_path = container_filestore_path
         self.linux_dump_user = linux_dump_user
 
+    def _cleanup_macos_metadata(self):
+        # Evita copiar metadatos de Finder (._*) y carpetas __MACOSX al contenedor.
+        for root, dirs, files in os.walk(self.local_filestore_path, topdown=True):
+            dirs_to_remove = [d for d in dirs if d == "__MACOSX"]
+            for dirname in dirs_to_remove:
+                shutil.rmtree(os.path.join(root, dirname), ignore_errors=True)
+            dirs[:] = [d for d in dirs if d != "__MACOSX"]
+
+            for filename in files:
+                if filename.startswith("._"):
+                    try:
+                        os.remove(os.path.join(root, filename))
+                    except FileNotFoundError:
+                        pass
+
     def restore_filestore(self):
         if not os.path.isdir(self.local_filestore_path):
             print("No se encontró filestore en el ZIP. Se omitirá.")
             return
+
+        self._cleanup_macos_metadata()
 
         print(f"Restaurando filestore a {self.container_filestore_path}")
 
@@ -232,6 +290,8 @@ class FilestoreRestoreManager:
         cmd_fix_permissions = [
             "docker",
             "exec",
+            "-u",
+            "root",
             self.container,
             "chown",
             "-R",
@@ -239,7 +299,15 @@ class FilestoreRestoreManager:
             self.container_filestore_path,
         ]
 
-        subprocess.run(cmd_fix_permissions, check=True)
+        try:
+            subprocess.run(cmd_fix_permissions, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as err:
+            print(
+                "Advertencia: no se pudieron ajustar permisos del filestore completamente. "
+                "Se continúa igualmente."
+            )
+            if err.stderr:
+                print(err.stderr.strip())
 
 
 class RestoreOrchestrator:

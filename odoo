@@ -249,6 +249,324 @@ def fix_filestore(config, instance=None):
     print("\n✅ Permisos corregidos.\n")
 
 
+def _compute_migration_map(config, instance, dbname):
+    binaural_mods = get_installed_binaural_modules(config, instance, dbname)
+    available_l10n, ve_source = get_available_l10n_ve_modules(config, instance)
+    installed_l10n = get_installed_l10n_ve_modules(config, instance, dbname) if available_l10n else []
+
+    mandatory_install_suffixes = {"purchase"}
+    must_uninstall_suffixes = {"igtf", "fiscal", "base_igtf"}
+    never_uninstall_suffixes = {"purchase"}
+    manual_suffix_map = {
+        "stock_accountant": "stock_account",
+    }
+
+    pending_install = []
+    to_uninstall_ready = []
+    to_uninstall_after = []
+    matched = 0
+
+    for bmod in binaural_mods:
+        suffix = bmod[len("binaural_"):]
+        l10n_suffix = manual_suffix_map.get(suffix)
+        if l10n_suffix is None:
+            l10n_suffix = suffix
+        l10n_equiv = "l10n_ve_" + l10n_suffix
+        if l10n_equiv in available_l10n:
+            matched += 1
+            is_never_uninstall = suffix in never_uninstall_suffixes
+            if l10n_equiv in installed_l10n:
+                if not is_never_uninstall:
+                    to_uninstall_ready.append(bmod)
+            else:
+                pending_install.append(l10n_equiv)
+                if not is_never_uninstall:
+                    to_uninstall_after.append(bmod)
+
+    binaural_suffixes = set(m[len("binaural_"):] for m in binaural_mods)
+    already_l10n_only = [m for m in installed_l10n if m[len("l10n_ve_"):] not in binaural_suffixes]
+
+    forced_uninstall = []
+    for bmod in binaural_mods:
+        suffix = bmod[len("binaural_"):]
+        if suffix in must_uninstall_suffixes and bmod not in to_uninstall_ready and bmod not in to_uninstall_after:
+            forced_uninstall.append(bmod)
+
+    all_to_uninstall = to_uninstall_ready + to_uninstall_after + forced_uninstall
+
+    return {
+        "binaural_mods": binaural_mods,
+        "available_l10n": available_l10n,
+        "ve_source": ve_source,
+        "installed_l10n": installed_l10n,
+        "pending_install": pending_install,
+        "to_uninstall_ready": to_uninstall_ready,
+        "to_uninstall_after": to_uninstall_after,
+        "forced_uninstall": forced_uninstall,
+        "all_to_uninstall": all_to_uninstall,
+        "matched": matched,
+        "mandatory_install_suffixes": mandatory_install_suffixes,
+        "must_uninstall_suffixes": must_uninstall_suffixes,
+        "never_uninstall_suffixes": never_uninstall_suffixes,
+        "already_l10n_only": already_l10n_only,
+        "manual_suffix_map": manual_suffix_map,
+    }
+
+
+def show_binaural_modules(config, instance, dbname):
+    """Show installed binaural_ modules and l10n_ve_ migration mapping."""
+    m = _compute_migration_map(config, instance, dbname)
+
+    print(f"\n\033[1;34m=== 📦 MÓDULOS BINAURAL_ INSTALADOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
+    if not m["binaural_mods"]:
+        print(f"  No se encontraron módulos binaural_ instalados en '{dbname}'.")
+    else:
+        for mod in m["binaural_mods"]:
+            print(f"  • {mod}")
+        print(f"\n  Total: {len(m['binaural_mods'])} módulo(s)")
+
+    if not m["available_l10n"]:
+        print(f"\n\033[93m  ⚠️  No se encontró odoo-venezuela.\033[0m")
+        print(f"     Clona el submódulo en \033[1msrc/custom/odoo-venezuela\033[0m para poder evaluar la migración:")
+        print(f"     \033[90mgit submodule add <url-odoo-venezuela> src/custom/odoo-venezuela\033[0m")
+    else:
+        if m["ve_source"] == "propia":
+            print(f"\n\033[1;35m=== 🔄 MIGRACIÓN A ODOO-VENEZUELA (addons de {instance}) ===\033[0m\n")
+        else:
+            print(f"\n\033[1;35m=== 🔄 MIGRACIÓN A ODOO-VENEZUELA (referencia: {m['ve_source']}) ===\033[0m")
+            addons = _get_instance_addons_paths(config, instance)
+            has_ve_conf = any(p.rstrip("/").endswith("odoo-venezuela") for p in addons)
+            if has_ve_conf:
+                print(f"\033[90m     odoo-venezuela está configurado pero el directorio no existe (¿falta clonar?).\033[0m")
+            else:
+                print(f"\033[90m     odoo-venezuela NO está en los addons de esta instancia. Se muestra como referencia.\033[0m")
+            print()
+
+        print(f"  {'Instalado (integra)':38s} → {'odoo-venezuela':30s}  Estado")
+        print(f"  {'─'*38}   {'─'*30}  ──────")
+
+        for bmod in m["binaural_mods"]:
+            suffix = bmod[len("binaural_"):]
+            l10n_suffix = m.get("manual_suffix_map", {}).get(suffix, suffix)
+            l10n_equiv = "l10n_ve_" + l10n_suffix
+            if l10n_equiv in m["available_l10n"]:
+                is_install_mandatory = suffix in m["mandatory_install_suffixes"]
+                is_never_uninstall = suffix in m["never_uninstall_suffixes"]
+                if l10n_equiv in m["installed_l10n"]:
+                    tag = "\033[91m ⚠️  par obligatorio\033[0m" if is_install_mandatory else ""
+                    if is_never_uninstall:
+                        tag += " \033[1;35m🔒 Debe mantenerse instalado\033[0m"
+                    print(f"  {bmod:38s} → {l10n_equiv:30s}  \033[92m✅ Instalado\033[0m{tag}")
+                else:
+                    tag = "\033[91m ⚠️  DEBE instalarse\033[0m" if is_install_mandatory else ""
+                    if is_never_uninstall:
+                        tag += " \033[1;35m🔒 Debe mantenerse instalado\033[0m"
+                    print(f"  {bmod:38s} → {l10n_equiv:30s}  \033[93m⬜ Pendiente\033[0m{tag}")
+
+        if m["matched"] == 0:
+            print(f"\n  Ninguno de los módulos binaural_ instalados tiene equivalente directo en odoo-venezuela.")
+
+        if m["pending_install"]:
+            print(f"\n\033[93m  📋 Módulos pendientes por instalar ({len(m['pending_install'])}):\033[0m")
+            for mod in m["pending_install"]:
+                print(f"    • {mod}")
+            print(f"\n\033[36m  Comando para instalar:\033[0m")
+            print(f"    \033[90m./odoo migration-homo {instance} -d {dbname} --install\033[0m")
+        elif m["matched"] > 0:
+            print(f"\n\033[92m  ✅ Todos los equivalentes ya están instalados ({m['matched']} módulos).\033[0m")
+
+        if m["already_l10n_only"]:
+            print(f"\n\033[90m  ℹ️  Otros l10n_ve_ ya instalados (sin equivalente binaural_ instalado):\033[0m")
+            for mod in m["already_l10n_only"]:
+                print(f"    • {mod}")
+
+        if m["to_uninstall_ready"] or m["to_uninstall_after"] or m["forced_uninstall"]:
+            print(f"\n\033[1;31m=== 🗑️  MÓDULOS A DESINSTALAR DE INTEGRA (después de migrar) ===\033[0m\n")
+            print(f"  {'Módulo (integra)':38s}  Estado")
+            print(f"  {'─'*38}  ──────")
+
+            for bmod in m["to_uninstall_ready"]:
+                must = "\033[91m 🔴 DEBE desinstalarse\033[0m" if bmod[len("binaural_"):] in m["must_uninstall_suffixes"] else ""
+                print(f"  {bmod:38s}  \033[92m✅ Listo (l10n_ve_ ya instalado)\033[0m{must}")
+
+            for bmod in m["to_uninstall_after"]:
+                suffix = bmod[len("binaural_"):]
+                must = "\033[91m 🔴 DEBE desinstalarse\033[0m" if suffix in m["must_uninstall_suffixes"] else ""
+                print(f"  {bmod:38s}  \033[93m⬜ Pendiente (instalar l10n_ve_{suffix} primero)\033[0m{must}")
+
+            for bmod in m["forced_uninstall"]:
+                print(f"  {bmod:38s}  \033[91m🔴 DEBE desinstalarse (sin equivalente l10n_ve_)\033[0m")
+
+            print(f"\n\033[36m  Comando para desinstalar (cuando todos los l10n_ve_ estén instalados):\033[0m")
+            print(f"    \033[90m./odoo migration-homo {instance} -d {dbname} --uninstall\033[0m")
+
+            if m["forced_uninstall"]:
+                print(f"\n\033[91m  🔴 Deben desinstalarse SIEMPRE en proyecto homologado ({len(m['forced_uninstall'])}):\033[0m")
+                for b in m["forced_uninstall"]:
+                    print(f"    • {b}")
+
+    print()
+
+
+def migration_homo_run(config, instance, dbname, do_install=False, do_uninstall=False):
+    """Run migration-homo --install / --uninstall: install l10n_ve_, uninstall binaural_."""
+    m = _compute_migration_map(config, instance, dbname)
+
+    if not m["available_l10n"]:
+        print("\033[93m⚠️  No se puede migrar sin odoo-venezuela. Clónalo primero.\033[0m")
+        return
+
+    # 1. Buscar vistas personalizadas (Studio/custom) que heredan de vistas binaural_
+    all_binaural_to_uninstall = m["all_to_uninstall"]
+    studio_views = []
+    if all_binaural_to_uninstall:
+        print(f"\033[1;33m  🔍 Buscando vistas personalizadas que dependen de módulos binaural_...\033[0m")
+        studio_views = _get_studio_views_inheriting_from_modules(config, instance, dbname, all_binaural_to_uninstall)
+
+    # 2. Mostrar resumen enfocado según flags
+    print(f"\n\033[1;36m{'='*60}\033[0m")
+    print(f"\033[1;36m  RESUMEN DE OPERACIONES A REALIZAR\033[0m")
+    print(f"\033[1;36m{'='*60}\033[0m")
+    print(f"  Instancia : \033[1m{instance}\033[0m")
+    print(f"  Base datos: \033[1m{dbname}\033[0m\n")
+
+    has_work = False
+
+    if do_install:
+        if m["pending_install"]:
+            has_work = True
+            print(f"\033[1;35m  📦 MÓDULOS A INSTALAR ({len(m['pending_install'])}):\033[0m")
+            for mod in m["pending_install"]:
+                print(f"    • {mod}")
+        else:
+            print(f"\033[92m  📦 MÓDULOS A INSTALAR: 0 (todos ya instalados)\033[0m")
+
+    if do_uninstall:
+        if all_binaural_to_uninstall:
+            has_work = True
+            print(f"\n\033[1;31m  🗑️  MÓDULOS A DESINSTALAR ({len(all_binaural_to_uninstall)}):\033[0m")
+            for bmod in all_binaural_to_uninstall:
+                extra = ""
+                suffix = bmod[len("binaural_"):]
+                if suffix in m["must_uninstall_suffixes"]:
+                    extra = " \033[91m[forzoso]\033[0m"
+                print(f"    • {bmod}{extra}")
+        else:
+            print(f"\n\033[92m  🗑️  MÓDULOS A DESINSTALAR: 0\033[0m")
+
+    if studio_views:
+        print(f"\n\033[1;33m  ⚠️  VISTAS QUE SE DESACTIVARÁN ({len(studio_views)}):\033[0m")
+        print(f"     (heredan de módulos binaural_ y pueden causar errores)")
+        _list_disabled_studio_views(studio_views)
+    elif do_install or do_uninstall:
+        print(f"\n\033[92m  ✅ No se encontraron vistas personalizadas que dependan de módulos binaural_.\033[0m")
+
+    # 3. Confirmación interactiva
+    if do_install and do_uninstall:
+        accion = "instalar y desinstalar"
+    elif do_install:
+        accion = "instalar"
+    else:
+        accion = "desinstalar"
+
+    if not has_work:
+        print(f"\033[93m  ⚠️  No hay módulos pendientes para {accion}.\033[0m\n")
+        return
+
+    print()
+    choice = prompt_selection(
+        [("Continuar → Ejecutar la migración", True),
+         ("Cancelar", False)],
+        f"¿Confirmas {accion} los módulos listados?"
+    )
+
+    if not choice:
+        print(f"\n\033[93m  ❌ Migración cancelada por el usuario.\033[0m\n")
+        return
+
+    print(f"\n\033[92m  ✅ Confirmado. Iniciando migración...\033[0m")
+
+    # 4. Desactivar vistas problemáticas
+    if studio_views:
+        print(f"\n\033[1;33m  Desactivando {len(studio_views)} vista(s) personalizada(s)...\033[0m")
+        _disable_studio_views(config, instance, dbname, studio_views)
+
+    install_ok = True
+    uninstall_ok = True
+    installed_modules = []
+    failed_install_modules = []
+    uninstalled_modules = []
+
+    # 5. Instalar módulos l10n_ve_ (uno por uno)
+    if do_install and m["pending_install"]:
+        print(f"\n\033[1;35m{'='*60}\033[0m")
+        print(f"\033[1;35m  PASO 1: INSTALANDO MÓDULOS HOMOLOGADOS ({len(m['pending_install'])})\033[0m")
+        print(f"\033[1;35m{'='*60}\033[0m")
+        for i, mod in enumerate(m["pending_install"], 1):
+            print(f"\n  \033[1;35m[{i}/{len(m['pending_install'])}] {mod}\033[0m")
+            if _run_odoo_module_op(config, instance, dbname, [mod], "install"):
+                installed_modules.append(mod)
+            else:
+                failed_install_modules.append(mod)
+                install_ok = False
+                print(f"\n  \033[93m  ⚠️  Continuando con los siguientes módulos...\033[0m")
+
+    # 6. Desinstalar módulos binaural_
+    if do_uninstall and all_binaural_to_uninstall:
+        skip_binaural = set()
+
+        if do_install and installed_modules:
+            for bmod in all_binaural_to_uninstall:
+                suffix = bmod[len("binaural_"):]
+                if suffix in m["must_uninstall_suffixes"]:
+                    continue
+                l10n_suffix = m.get("manual_suffix_map", {}).get(suffix, suffix)
+                l10n_equiv = "l10n_ve_" + l10n_suffix
+                if l10n_equiv in m["available_l10n"] and l10n_equiv not in installed_modules and l10n_equiv not in m["installed_l10n"]:
+                    skip_binaural.add(bmod)
+
+        to_uninstall = [b for b in all_binaural_to_uninstall if b not in skip_binaural]
+
+        if skip_binaural:
+            print(f"\n\033[1;33m  ⚠️  Se omite desinstalación de ({len(skip_binaural)}): {', '.join(sorted(skip_binaural))}\033[0m")
+            print(f"     (su equivalente l10n_ve_ no se instaló correctamente)")
+
+        if to_uninstall:
+            print(f"\n\033[1;31m{'='*60}\033[0m")
+            step = "2" if (do_install and m["pending_install"]) else "1"
+            print(f"\033[1;31m  PASO {step}: DESINSTALANDO MÓDULOS BINAURAL_ ({len(to_uninstall)})\033[0m")
+            print(f"\033[1;31m{'='*60}\033[0m")
+            if _run_odoo_module_op(config, instance, dbname, to_uninstall, "uninstall"):
+                uninstalled_modules = to_uninstall
+            else:
+                uninstall_ok = False
+        else:
+            print(f"\n\033[92m  ✅ No hay módulos binaural_ para desinstalar en este momento.\033[0m")
+
+    # 7. Resumen final
+    print(f"\n\033[1;36m{'='*60}\033[0m")
+    print(f"\033[1;36m  RESUMEN FINAL\033[0m")
+    print(f"\033[1;36m{'='*60}\033[0m")
+    if do_install and m["pending_install"]:
+        if installed_modules:
+            print(f"  ✅ Instalados: {', '.join(installed_modules)}")
+        if failed_install_modules:
+            print(f"  ❌ Fallidos: {', '.join(failed_install_modules)}")
+            print(f"     Revisa los logs: \033[90m./odoo logs {instance}\033[0m")
+    if do_uninstall and all_binaural_to_uninstall:
+        if uninstalled_modules:
+            print(f"  🗑️  Desinstalados: {', '.join(uninstalled_modules)}")
+        elif uninstall_ok:
+            pass
+        else:
+            print(f"  ❌ Desinstalación fallida")
+    if studio_views:
+        print(f"\n\033[1;33m  ⚠️  Quedaron {len(studio_views)} vista(s) desactivada(s). Revísalas en Odoo:\033[0m")
+        print(f"     Menú Técnico > Vistas > filtrar por 'active = false'")
+        _list_disabled_studio_views(studio_views)
+    print()
+
+
 def psql_connect(config, instance, dbname):
     """Connect to psql in an instance."""
     inst_conf = config["instances"][instance]
@@ -451,14 +769,144 @@ def get_custom_repos():
     ])
 
 
-def get_custom_modules(config, instance):
-    """List custom modules found in the addons paths of an instance."""
+def _get_installed_modules(config, instance, dbname):
+    """Query the Odoo database for all installed modules (returns set of names)."""
+    try:
+        inst_conf = config["instances"][instance]
+        db_conf = resolve_db_config(inst_conf, config)
+        db_host = get_db_host(inst_conf["database"], db_conf)
+        db_user = db_conf["user"]
+        db_password = db_conf["password"]
+        db_port = db_conf["port"]
+        container = f"odoo-{instance}"
+
+        cmd = (
+            f"docker exec -e PGPASSWORD={db_password} {container} "
+            f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -At -c "
+            f"\"SELECT name FROM ir_module_module WHERE state = 'installed' ORDER BY name;\" 2>/dev/null"
+        )
+        output = subprocess.check_output(cmd, shell=True).decode().strip()
+        if output:
+            return set(output.split("\n"))
+    except Exception:
+        pass
+    return set()
+
+
+def get_installed_binaural_modules(config, instance, dbname):
+    """Query the Odoo database for installed modules with binaural_ prefix."""
+    try:
+        inst_conf = config["instances"][instance]
+        db_conf = resolve_db_config(inst_conf, config)
+        db_host = get_db_host(inst_conf["database"], db_conf)
+        db_user = db_conf["user"]
+        db_password = db_conf["password"]
+        db_port = db_conf["port"]
+        container = f"odoo-{instance}"
+
+        cmd = (
+            f"docker exec -e PGPASSWORD={db_password} {container} "
+            f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -At -c "
+            f"\"SELECT name FROM ir_module_module WHERE state = 'installed' AND name LIKE 'binaural%' ORDER BY name;\" 2>/dev/null"
+        )
+        output = subprocess.check_output(cmd, shell=True).decode().strip()
+        if output:
+            return sorted(output.split("\n"))
+    except Exception:
+        pass
+    return []
+
+
+def get_installed_l10n_ve_modules(config, instance, dbname):
+    """Query the Odoo database for installed modules with l10n_ve_ prefix."""
+    try:
+        inst_conf = config["instances"][instance]
+        db_conf = resolve_db_config(inst_conf, config)
+        db_host = get_db_host(inst_conf["database"], db_conf)
+        db_user = db_conf["user"]
+        db_password = db_conf["password"]
+        db_port = db_conf["port"]
+        container = f"odoo-{instance}"
+
+        cmd = (
+            f"docker exec -e PGPASSWORD={db_password} {container} "
+            f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -At -c "
+            f"\"SELECT name FROM ir_module_module WHERE state = 'installed' AND name LIKE 'l10n_ve%' ORDER BY name;\" 2>/dev/null"
+        )
+        output = subprocess.check_output(cmd, shell=True).decode().strip()
+        if output:
+            return sorted(output.split("\n"))
+    except Exception:
+        pass
+    return []
+
+
+def _get_instance_addons_paths(config, instance):
+    """Get the resolved addons paths for an instance."""
+    inst_conf = config["instances"][instance]
+    odoo_conf = resolve_instance_config(inst_conf, config)
+    return odoo_conf.get("addons", [])
+
+
+def has_odoo_venezuela(config, instance):
+    """Check if an instance has odoo-venezuela in its addons paths."""
+    addons = _get_instance_addons_paths(config, instance)
+    for path in addons:
+        normalized = path.rstrip("/")
+        if normalized.endswith("odoo-venezuela") or normalized.endswith("odoo-venezuela/"):
+            return True
+    return False
+
+
+def get_available_l10n_ve_modules(config, instance):
+    """Get available l10n_ve_ modules.
+    
+    Primero busca en los addons de la instancia. Si no encuentra,
+    busca en src/custom/odoo-venezuela/ como referencia central.
+    Retorna (modules, source) donde source indica de dónde se obtuvieron.
+    """
+    # 1. Buscar en los addons de la instancia
+    addons = _get_instance_addons_paths(config, instance)
+    for path in addons:
+        normalized = path.rstrip("/")
+        if normalized.endswith("odoo-venezuela"):
+            full_path = os.path.join(BASE_PATH, normalized)
+            if os.path.isdir(full_path):
+                modules = _scan_l10n_ve_dir(full_path)
+                if modules:
+                    return modules, "propia"
+
+    # 2. Fallback: buscar en src/custom/odoo-venezuela/ (referencia central)
+    central_ve = os.path.join(BASE_PATH, "src", "custom", "odoo-venezuela")
+    if os.path.isdir(central_ve):
+        modules = _scan_l10n_ve_dir(central_ve)
+        if modules:
+            return modules, "src/custom/odoo-venezuela"
+
+    return [], None
+
+
+def _scan_l10n_ve_dir(dirpath):
+    """Scan a directory for l10n_ve_ Odoo modules."""
+    modules = []
+    for item in sorted(os.listdir(dirpath)):
+        item_path = os.path.join(dirpath, item)
+        if os.path.isdir(item_path) and item.startswith("l10n_ve_"):
+            if os.path.exists(os.path.join(item_path, "__manifest__.py")) or \
+               os.path.exists(os.path.join(item_path, "__openerp__.py")):
+                modules.append(item)
+    return modules
+
+
+def get_custom_modules(config, instance, dbname=None):
+    """List custom modules found in the addons paths of an instance.
+    If dbname is provided, only returns modules installed in that database."""
     try:
         inst_conf = config["instances"][instance]
         odoo_conf = resolve_instance_config(inst_conf, config)
         addons_paths = odoo_conf.get("addons", [])
         
-        modules = []
+        disk_modules = []
         for path in addons_paths:
             full_path = os.path.join(BASE_PATH, path)
             if not os.path.isdir(full_path):
@@ -468,11 +916,171 @@ def get_custom_modules(config, instance):
                 if os.path.isdir(item_path):
                     if os.path.exists(os.path.join(item_path, "__manifest__.py")) or \
                        os.path.exists(os.path.join(item_path, "__openerp__.py")):
-                        modules.append(item)
-        return sorted(list(set(modules)))
+                        disk_modules.append(item)
+        disk_modules = sorted(list(set(disk_modules)))
+
+        if dbname:
+            installed = _get_installed_modules(config, instance, dbname)
+            return [m for m in disk_modules if m in installed]
+
+        return disk_modules
     except Exception:
         pass
     return []
+
+
+# ============================================================
+# Studio views / migration helpers
+# ============================================================
+
+def _get_db_psql_params(config, instance, dbname):
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    return {
+        "host": get_db_host(inst_conf["database"], db_conf),
+        "user": db_conf["user"],
+        "password": db_conf["password"],
+        "port": db_conf["port"],
+        "container": f"odoo-{instance}",
+        "dbname": dbname,
+    }
+
+
+def _run_psql_query(config, instance, dbname, query):
+    db = _get_db_psql_params(config, instance, dbname)
+    cmd = (
+        f"docker exec -e PGPASSWORD={db['password']} {db['container']} "
+        f"psql --host {db['host']} --port {db['port']} -U {db['user']} "
+        f"-d {dbname} -At -c \"{query}\" 2>/dev/null"
+    )
+    try:
+        return subprocess.check_output(cmd, shell=True).decode().strip()
+    except Exception:
+        return ""
+
+
+def _run_psql_update(config, instance, dbname, query):
+    db = _get_db_psql_params(config, instance, dbname)
+    cmd = (
+        f"docker exec -e PGPASSWORD={db['password']} {db['container']} "
+        f"psql --host {db['host']} --port {db['port']} -U {db['user']} "
+        f"-d {dbname} -c \"{query}\" 2>/dev/null"
+    )
+    try:
+        subprocess.check_output(cmd, shell=True)
+    except Exception:
+        pass
+
+
+def _get_studio_views_inheriting_from_modules(config, instance, dbname, modules):
+    if not modules:
+        return []
+    mod_list = ", ".join(f"'{m}'" for m in modules)
+    query = (
+        "SELECT v.id, v.name, v.model, md.module "
+        "FROM ir_ui_view v "
+        "JOIN ir_ui_view parent ON v.inherit_id = parent.id "
+        "JOIN ir_model_data md ON md.res_id = parent.id AND md.model = 'ir.ui.view' "
+        "LEFT JOIN ir_model_data md_v ON md_v.res_id = v.id AND md_v.model = 'ir.ui.view' "
+        f"WHERE (v.studio = true OR md_v.id IS NULL) "
+        f"AND md.module IN ({mod_list}) AND v.active = true "
+        "ORDER BY md.module, v.name"
+    )
+    output = _run_psql_query(config, instance, dbname, query)
+    if not output:
+        return []
+    results = []
+    for line in output.split("\n"):
+        parts = line.split("|")
+        if len(parts) >= 4:
+            try:
+                results.append({
+                    "id": int(parts[0]),
+                    "name": parts[1],
+                    "model": parts[2],
+                    "owner_module": parts[3],
+                })
+            except ValueError:
+                pass
+    return results
+
+
+def _disable_studio_views(config, instance, dbname, views):
+    if not views:
+        return
+    ids = ", ".join(str(v["id"]) for v in views)
+    _run_psql_update(config, instance, dbname,
+                     f"UPDATE ir_ui_view SET active = false WHERE id IN ({ids})")
+
+
+def _list_disabled_studio_views(views):
+    if not views:
+        return
+    print(f"\n\033[1;33m  ⚠️  Vistas personalizadas desactivadas temporalmente ({len(views)}):\033[0m")
+    print(f"     Revísalas después de la migración. Puedes reactivarlas desde Odoo (Técnico > Vistas).")
+    print(f"  {'ID':>6s}  {'Nombre':45s}  {'Modelo':30s}  {'Módulo origen'}")
+    print(f"  {'─'*6}  {'─'*45}  {'─'*30}  {'─'*20}")
+    for v in views:
+        name = (v.get('name') or 'N/A')[:45]
+        model = (v.get('model') or 'N/A')[:30]
+        owner = (v.get('owner_module') or 'N/A')[:20]
+        print(f"  {v['id']:6d}  {name:45s}  {model:30s}  {owner}")
+
+
+def _run_odoo_module_op(config, instance, dbname, modules, operation="update"):
+    container = f"odoo-{instance}"
+    if operation == "uninstall":
+        mod_list = ", ".join(f"'{m}'" for m in modules)
+        _run_psql_update(config, instance, dbname,
+                         f"UPDATE ir_module_module SET state = 'to remove' WHERE name IN ({mod_list})")
+        print(f"  ✅ {len(modules)} módulo(s) marcado(s) para desinstalar.")
+        cmd = (
+            f"docker exec -u root -it {container} odoo "
+            f"--stop-after-init -p 90 --workers=0 -d {dbname}"
+        )
+        print(f"  \033[90m{cmd}\033[0m\n")
+        ret = os.system(cmd)
+        exit_code = os.WEXITSTATUS(ret) if os.name != 'nt' else ret
+        if exit_code != 0:
+            print(f"\n\033[1;31m  ❌ ERROR: La desinstalación falló con código {exit_code}.\033[0m")
+            print(f"     Revisa los logs: \033[90m./odoo logs {instance}\033[0m")
+            return False
+        print(f"\n\033[92m  ✅ Desinstalación completada.\033[0m")
+        print(f"\n  \033[1;36m🔄 Actualizando todos los módulos...\033[0m")
+        cmd2 = (
+            f"docker exec -u root -it {container} odoo "
+            f"--stop-after-init -p 90 --workers=0 -u all -d {dbname}"
+        )
+        print(f"  \033[90m{cmd2}\033[0m\n")
+        ret2 = os.system(cmd2)
+        exit_code2 = os.WEXITSTATUS(ret2) if os.name != 'nt' else ret2
+        if exit_code2 != 0:
+            print(f"\n\033[1;31m  ❌ ERROR: La actualización falló con código {exit_code2}.\033[0m")
+            print(f"     Revisa los logs: \033[90m./odoo logs {instance}\033[0m")
+            return False
+        print(f"\n\033[92m  ✅ Actualización completada correctamente.\033[0m")
+        return True
+    elif operation == "install":
+        cmd = (
+            f"docker exec -u root -it {container} odoo "
+            f"--stop-after-init -p 90 --workers=0 "
+            f"-i {','.join(modules)} -d {dbname}"
+        )
+    else:
+        cmd = (
+            f"docker exec -u root -it {container} odoo "
+            f"--stop-after-init -p 90 --workers=0 "
+            f"-u {','.join(modules)} -d {dbname}"
+        )
+    print(f"  \033[90m{cmd}\033[0m\n")
+    ret = os.system(cmd)
+    exit_code = os.WEXITSTATUS(ret) if os.name != 'nt' else ret
+    if exit_code != 0:
+        print(f"\n\033[1;31m  ❌ ERROR: La operación falló con código {exit_code}.\033[0m")
+        print(f"     Revisa los logs: \033[90m./odoo logs {instance}\033[0m")
+        return False
+    print(f"\n\033[92m  ✅ Operación completada correctamente.\033[0m")
+    return True
 
 
 def prompt_selection(options, title, multi=False):
@@ -698,8 +1306,8 @@ def prompt_for_database(config, instance):
     return prompt_selection(options, f"Selecciona base de datos para '{instance}'")
 
 
-def prompt_for_modules(config, instance):
-    modules = get_custom_modules(config, instance)
+def prompt_for_modules(config, instance, dbname=None):
+    modules = get_custom_modules(config, instance, dbname)
     if not modules:
         print(f"\nNo se encontraron módulos custom en los addons de '{instance}'.")
         return "all"
@@ -782,6 +1390,14 @@ def main():
     sync_p.add_argument("b", nargs="?", default=None, help="Branch (opcional)")
     sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
 
+    # migration-homo
+    migration_homo_p = subparsers.add_parser("migration-homo", help="Migración a homologados: info, instalar y/o desinstalar módulos")
+    migration_homo_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia o 'info' para ver estado")
+    migration_homo_p.add_argument("info_instance", nargs="?", default=None, help="Nombre de instancia (cuando se usa 'info')")
+    migration_homo_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
+    migration_homo_p.add_argument("--install", action="store_true", default=False, help="Instalar módulos l10n_ve_ equivalentes")
+    migration_homo_p.add_argument("--uninstall", action="store_true", default=False, help="Desinstalar módulos binaural_ migrados")
+
     args = parser.parse_args()
 
     if not args.action:
@@ -793,7 +1409,7 @@ def main():
 
     actions_with_instance = {
         "start", "stop", "restart", "logs", "remove", 
-        "fix-files", "init", "bash", "psql", "pw", "update"
+        "fix-files", "init", "bash", "psql", "pw", "update", "migration-homo"
     }
     
     if args.action in actions_with_instance and getattr(args, "instance", None) is None:
@@ -834,8 +1450,27 @@ def main():
         if args.d is None:
             args.d = prompt_for_database(config, args.instance)
         if args.m is None:
-            args.m = prompt_for_modules(config, args.instance)
+            args.m = prompt_for_modules(config, args.instance, args.d)
         bash_update_modules(config, args.instance, args.d, args.m)
+    elif args.action == "migration-homo":
+        if args.instance == "info" or args.instance is None:
+            if args.instance == "info" and args.info_instance:
+                args.instance = args.info_instance
+            else:
+                if args.instance == "info":
+                    args.instance = None
+                args.instance = prompt_for_instance(config, "migration-homo")
+            if args.d is None:
+                args.d = prompt_for_database(config, args.instance)
+            show_binaural_modules(config, args.instance, args.d)
+        elif args.install or args.uninstall:
+            if args.d is None:
+                args.d = prompt_for_database(config, args.instance)
+            migration_homo_run(config, args.instance, args.d, args.install, args.uninstall)
+        else:
+            if args.d is None:
+                args.d = prompt_for_database(config, args.instance)
+            show_binaural_modules(config, args.instance, args.d)
     elif args.action == "init":
         init_addons(config, args.instance)
     elif args.action == "sync":
