@@ -27,6 +27,9 @@ ListView > ListItem {
 ListView > ListItem.--highlight {
     background: $accent;
 }
+OptionList > Option.--highlight {
+    background: $accent;
+}
 Static#subtitle {
     color: $secondary;
     padding: 0 1;
@@ -80,7 +83,7 @@ RichLog {
     border: round $primary;
     padding: 0 1;
 }
-#picker_left ListView, #picker_right ListView {
+#picker_left OptionList, #picker_right OptionList {
     height: 1fr;
 }
 #picker_hints {
