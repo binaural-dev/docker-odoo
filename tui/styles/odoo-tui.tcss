@@ -1,0 +1,139 @@
+Screen {
+    background: $surface;
+}
+#main {
+    height: 1fr;
+}
+#left, #right {
+    width: 1fr;
+    border: round $primary;
+    padding: 0 1;
+}
+#left {
+    width: 38%;
+}
+Header {
+    dock: top;
+}
+Footer {
+    dock: bottom;
+}
+ListView {
+    height: 1fr;
+}
+ListView > ListItem {
+    padding: 0 1;
+}
+ListView > ListItem.--highlight {
+    background: $accent;
+}
+OptionList > Option.--highlight {
+    background: $accent;
+}
+Static#subtitle {
+    color: $secondary;
+    padding: 0 1;
+    text-style: bold;
+}
+RichLog {
+    height: 30%;
+    border: round $primary;
+    background: $surface-darken-1;
+}
+#modal_box {
+    background: $panel;
+    border: thick $accent;
+    padding: 1 2;
+    width: 70;
+    height: auto;
+    align: center middle;
+}
+#modal_box Label {
+    width: 100%;
+    content-align: center middle;
+}
+#modal_title {
+    text-style: bold;
+    color: $accent;
+    padding-bottom: 1;
+}
+#modal_message {
+    padding: 1 0;
+}
+#modal_fields Input {
+    margin-bottom: 1;
+}
+.field_label {
+    color: $secondary;
+}
+#modal_buttons {
+    align-horizontal: center;
+    height: 3;
+    padding-top: 1;
+}
+#modal_buttons Button {
+    margin: 0 1;
+}
+#picker_panes {
+    height: 1fr;
+    margin-top: 1;
+}
+#picker_left, #picker_right {
+    width: 1fr;
+    border: round $primary;
+    padding: 0 1;
+}
+#picker_left OptionList, #picker_right OptionList {
+    height: 1fr;
+}
+#picker_hints {
+    color: $secondary;
+    padding: 0 1;
+}
+
+/* ----- UpdateProgress widget ----- */
+#update_progress {
+    display: none;
+    border: round $success;
+    background: $surface-darken-1;
+    padding: 0 1;
+    height: 11;
+    margin-bottom: 0;
+}
+
+#update_progress #up_title {
+    text-style: bold;
+    color: $success;
+    padding: 0 1;
+}
+
+#update_progress ProgressBar {
+    width: 100%;
+    margin: 0 1;
+}
+
+#update_progress #up_progress_label,
+#update_progress #up_remaining {
+    color: $text;
+    padding: 0 1;
+}
+
+#update_progress #up_filters_row {
+    height: 1;
+    padding: 0 1;
+    align: left middle;
+}
+
+#update_progress #up_filters_row Static {
+    margin-right: 1;
+}
+
+#update_progress #up_hints_row {
+    height: 1;
+    padding: 0 1;
+    color: $secondary;
+}
+
+#update_progress #up_hints_row Static {
+    margin-right: 1;
+}
