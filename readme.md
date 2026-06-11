@@ -157,7 +157,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `remove [instance]` | Elimina contenedores y volúmenes. |
 | `fix-files [instance]` | Corrige permisos del filestore. |
 | `psql <instance> -d <db>` | Conecta a PostgreSQL. |
-| `update <instance> -d <db> [-m modules]` | Actualiza módulos de Odoo. |
+| `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 
@@ -188,9 +188,14 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 # Actualizar módulos
 ./odoo update bananera -d bananera_prod -m sale,purchase
 
+# Actualizar todas las bases de datos de una instancia
+./odoo update bananera -d all
+
 # Reiniciar todo
 ./odoo restart
 ```
+
+En el comando `update`, el selector de bases incluye una opción visible de `all (todas las bases de datos)`.
 
 ## Scripts auxiliares
 
