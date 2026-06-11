@@ -328,32 +328,32 @@ class TuiProgressParserTest(unittest.TestCase):
 
     def test_parse_match_simple(self):
         """(45/234) → (45, 234)"""
-        r = _TUI_MOD.parsear_progreso("(45/234)")
+        r = _TUI_MOD.parse_progress("(45/234)")
         self.assertEqual(r, (45, 234))
 
     def test_parse_no_match(self):
         """linea sin parentesis → None"""
-        r = _TUI_MOD.parsear_progreso("INFO: sale module updated")
+        r = _TUI_MOD.parse_progress("INFO: sale module updated")
         self.assertIsNone(r)
 
     def test_parse_zero_current(self):
         """(0/1) → (0, 1)"""
-        r = _TUI_MOD.parsear_progreso("(0/1)")
+        r = _TUI_MOD.parse_progress("(0/1)")
         self.assertEqual(r, (0, 1))
 
     def test_parse_large_numbers(self):
         """(999/1000) → (999, 1000)"""
-        r = _TUI_MOD.parsear_progreso("(999/1000)")
+        r = _TUI_MOD.parse_progress("(999/1000)")
         self.assertEqual(r, (999, 1000))
 
     def test_parse_multiple_matches(self):
         """linea con dos matches → primer match (0/1)"""
-        r = _TUI_MOD.parsear_progreso("(0/1) (45/234)")
+        r = _TUI_MOD.parse_progress("(0/1) (45/234)")
         self.assertEqual(r, (0, 1))
 
     def test_parse_with_surrounding_text(self):
         """linea con texto envolvente → (5, 10)"""
-        r = _TUI_MOD.parsear_progreso(
+        r = _TUI_MOD.parse_progress(
             "2024-01-01 10:00:00 INFO (5/10) sale"
         )
         self.assertEqual(r, (5, 10))
@@ -364,39 +364,39 @@ class TuiLevelClassifierTest(unittest.TestCase):
 
     def test_critical(self):
         self.assertEqual(
-            _TUI_MOD.clasificar_nivel("CRITICAL: Odoo crashed"),
+            _TUI_MOD.classify_level("CRITICAL: Odoo crashed"),
             "CRITICAL",
         )
 
     def test_error(self):
         self.assertEqual(
-            _TUI_MOD.clasificar_nivel("ERROR: sale module failed"),
+            _TUI_MOD.classify_level("ERROR: sale module failed"),
             "ERROR",
         )
 
     def test_warning(self):
         self.assertEqual(
-            _TUI_MOD.clasificar_nivel("WARNING: account deprecated"),
+            _TUI_MOD.classify_level("WARNING: account deprecated"),
             "WARNING",
         )
 
     def test_info(self):
         self.assertEqual(
-            _TUI_MOD.clasificar_nivel("INFO: update module sale"),
+            _TUI_MOD.classify_level("INFO: update module sale"),
             "INFO",
         )
 
     def test_no_prefix_defaults_to_info(self):
         """linea sin prefijo → INFO"""
         self.assertEqual(
-            _TUI_MOD.clasificar_nivel("  some log message"),
+            _TUI_MOD.classify_level("  some log message"),
             "INFO",
         )
 
     def test_error_with_indent(self):
         """linea con espacio previo → ERROR"""
         self.assertEqual(
-            _TUI_MOD.clasificar_nivel("  ERROR: something"),
+            _TUI_MOD.classify_level("  ERROR: something"),
             "ERROR",
         )
 
@@ -418,7 +418,7 @@ class TuiUpdateProgressWidgetTest(unittest.TestCase):
                 self.assertIsNotNone(up.query_one("#up_progress"))
                 self.assertIsNotNone(up.query_one("#up_progress_label"))
                 self.assertIsNotNone(up.query_one("#up_remaining"))
-                for fid in ("filt_info", "filt_warning", "filt_error", "filt_critical"):
+                for fid in ("filt_info", "filter_warning", "filter_error", "filt_critical"):
                     self.assertIsNotNone(up.query_one(f"#{fid}"))
                 return "ok"
 
@@ -611,10 +611,10 @@ class TuiProgressIntegrationTest(unittest.TestCase):
                 up.display = True
                 up.clear()
                 for line in odoo_lines:
-                    parsed = _TUI_MOD.parsear_progreso(line)
+                    parsed = _TUI_MOD.parse_progress(line)
                     if parsed is not None:
                         up.set_progress(parsed[0], parsed[1])
-                    level = _TUI_MOD.clasificar_nivel(line)
+                    level = _TUI_MOD.classify_level(line)
                     up.add_line(level, line)
                 await pilot.pause()
                 self.assertEqual(up.progress_total, 5)
@@ -644,7 +644,7 @@ class TuiProgressIntegrationTest(unittest.TestCase):
                 up = app.query_one("#update_progress", _TUI_MOD.UpdateProgress)
                 up.display = True
                 for line in odoo_lines:
-                    level = _TUI_MOD.clasificar_nivel(line)
+                    level = _TUI_MOD.classify_level(line)
                     up.add_line(level, line)
                 # Ver estado inicial: 5 lineas pasan
                 self.assertEqual(len(up.get_filtered_lines()), 5)

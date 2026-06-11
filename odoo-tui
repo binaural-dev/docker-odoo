@@ -273,7 +273,7 @@ def _script_args(action: Action, instance: Optional[str], args: dict) -> list:
 # Pure functions for stream parsing
 # ============================================================
 
-def parsear_progreso(line: str) -> Optional[Tuple[int, int]]:
+def parse_progress(line: str) -> Optional[Tuple[int, int]]:
     """Extrae (current, total) de una línea que matchee (N/M).
 
     Returns:
@@ -286,7 +286,7 @@ def parsear_progreso(line: str) -> Optional[Tuple[int, int]]:
     return None
 
 
-def clasificar_nivel(line: str) -> str:
+def classify_level(line: str) -> str:
     """Clasifica el nivel de log de una línea de stdout de Odoo.
 
     Busca el primer token de nivel en mayusculas al inicio de la línea
@@ -590,8 +590,8 @@ class NoInstanceActionItem(ListItem):
 
 FILTER_LEVEL_IDS = {
     "CRITICAL": "filt_critical",
-    "ERROR": "filt_error",
-    "WARNING": "filt_warning",
+    "ERROR": "filter_error",
+    "WARNING": "filter_warning",
     "INFO": "filt_info",
 }
 
@@ -627,8 +627,8 @@ class UpdateProgress(Container):
         yield Label("Quedan: 0 módulos", id="up_remaining")
         with Horizontal(id="up_filters_row"):
             yield Static(self._filter_chip("INFO"), id="filt_info")
-            yield Static(self._filter_chip("WARNING"), id="filt_warning")
-            yield Static(self._filter_chip("ERROR"), id="filt_error")
+            yield Static(self._filter_chip("WARNING"), id="filter_warning")
+            yield Static(self._filter_chip("ERROR"), id="filter_error")
             yield Static(self._filter_chip("CRITICAL"), id="filt_critical")
         with Horizontal(id="up_hints_row"):
             yield Static(" [Esc] Cancelar ", id="hint_esc")
@@ -719,8 +719,8 @@ class UpdateProgress(Container):
             return
         level_map = {
             "filt_info": "INFO",
-            "filt_warning": "WARNING",
-            "filt_error": "ERROR",
+            "filter_warning": "WARNING",
+            "filter_error": "ERROR",
             "filt_critical": "CRITICAL",
         }
         level = level_map.get(widget.id)
@@ -1269,10 +1269,10 @@ class DockerOdooApp(App):
             for line in proc.stdout:
                 line = line.rstrip()
                 if up is not None:
-                    parsed = parsear_progreso(line)
+                    parsed = parse_progress(line)
                     if parsed is not None:
                         self.call_from_thread(up.set_progress, parsed[0], parsed[1])
-                    level = clasificar_nivel(line)
+                    level = classify_level(line)
                     self.call_from_thread(up.add_line, level, line)
                     if level in up.filter_levels:
                         self.call_from_thread(self._log, line)
