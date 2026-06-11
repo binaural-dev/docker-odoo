@@ -11,6 +11,7 @@ from pathlib import Path
 BASE_PATH = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 from generators.config_loader import load_config, resolve_db_config, get_db_host
+from generators.pw_helpers import _check_db_exists
 
 
 @click.command()
@@ -34,9 +35,26 @@ def run_command(instance, d, l, password):
 
     safe_pw = shlex.quote(password)
     safe_login = shlex.quote(l)
+
+    # Validar que la DB exista en el contenedor antes de correr psql.
+    # Sin esto, psql falla con 'database does not exist' y termina con
+    # error confuso cuando la instancia no coincide con la DB.
+    existe, disponibles = _check_db_exists(
+        container, db_host, db_user, db_port, db_password, d,
+    )
+    if not existe:
+        bases_str = ", ".join(disponibles) if disponibles else "(no se pudo listar)"
+        click.echo(
+            f"\n\033[1;31m✗ La base de datos '{d}' no existe en la instancia '{instance}'.\033[0m"
+            f"\nBases disponibles en '{instance}': {bases_str}\n",
+            err=True,
+        )
+        sys.exit(1)
+
     env = os.environ.copy()
     env["PGPASSWORD"] = db_password
-    subprocess.run(
+    click.echo(f"\n→ Restableciendo contraseña para el usuario '{l}' en la base de datos '{d}'...")
+    proc = subprocess.run(
         [
             "docker", "exec",
             container,
@@ -49,6 +67,10 @@ def run_command(instance, d, l, password):
         ],
         env=env,
     )
+    if proc.returncode != 0:
+        click.echo(f"\n\033[1;31m✗ Error ejecutando psql (código {proc.returncode}). Contraseña NO actualizada.\033[0m\n", err=True)
+        sys.exit(proc.returncode)
+    click.echo("✅ Contraseña actualizada.\n")
 
 
 if __name__ == "__main__":
