@@ -6,6 +6,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from typing import Optional
 
 from textual.app import App, ComposeResult
@@ -96,7 +97,7 @@ class DockerOdooApp(App):
                 yield Static("Acciones disponibles", id="subtitle")
                 yield ListView(id="actions_list")
         yield UpdateProgress(id="update_progress")
-        yield RichLog(id="output", highlight=False, markup=True, wrap=True)
+        yield RichLog(id="output", highlight=False, markup=True, wrap=True, max_lines=2000)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -304,13 +305,34 @@ class DockerOdooApp(App):
                     self.selected_instance, inst
                 )
                 if available:
-                    self.push_screen(
-                        ModulePicker(
-                            instance_name=self.selected_instance,
-                            available_modules=available,
-                        ),
-                        lambda result: self._on_picker_result(action, result),
+                    fields = [
+                        self._arg_to_field(ARG_DB),
+                        self._arg_to_field(ARG_LANG),
+                    ]
+                    defaults = self._arg_defaults(action)
+                    modal = InputModal(
+                        title=f"{action.label} — base de datos",
+                        fields=fields,
+                        defaults=defaults,
                     )
+
+                    def _on_db_modal_result(db_result: Optional[dict]) -> None:
+                        if db_result is None:
+                            self._log("[yellow]Cancelado.[/yellow]")
+                            return
+                        selected_db = db_result.get(ARG_DB, "")
+                        selected_lang = db_result.get(ARG_LANG, "")
+                        self.push_screen(
+                            ModulePicker(
+                                instance_name=self.selected_instance,
+                                available_modules=available,
+                            ),
+                            lambda picker_result: self._on_picker_result_with_db(
+                                action, picker_result, selected_db, selected_lang
+                            ),
+                        )
+
+                    self.push_screen(modal, _on_db_modal_result)
                     return
                 self._log(
                     "[yellow]No se detectaron addons locales; "
@@ -331,6 +353,25 @@ class DockerOdooApp(App):
         # ``action.needs`` (the fzf-style picker handles its own modal).
         if action.action_id == "update":
             fields.append(self._arg_to_field(ARG_LANG))
+
+        # Confirm destructive actions before execution.
+        if action.action_id == "remove":
+            target = self.selected_instance or "TODAS las instancias"
+            self.push_screen(
+                ConfirmModal(
+                    title="Eliminar instancia",
+                    message=(
+                        f"¿Eliminar contenedores y volúmenes de "
+                        f"[b]{target}[/b]?"
+                    ),
+                ),
+                lambda confirmed: (
+                    self.run_worker(self._execute(action, {}), exclusive=False)
+                    if confirmed
+                    else self._log("[yellow]Eliminación cancelada.[/yellow]")
+                ),
+            )
+            return
 
         # If the only thing the action needs was an instance (already
         # selected), skip the modal and run straight away.
@@ -408,6 +449,19 @@ class DockerOdooApp(App):
         if action.action_id == "update" and result.get(ARG_MODULES):
             self._warn_unknown_modules(result[ARG_MODULES])
         self.run_worker(self._execute(action, result), exclusive=False)
+
+    def _on_picker_result_with_db(
+        self, action: Action, result: Optional[list], db: str, lang: Optional[str] = None
+    ) -> None:
+        """Handle the ModulePicker dismiss for the update action with a pre-selected database."""
+        if result is None:
+            self._log("[yellow]Cancelado.[/yellow]")
+            return
+        modules_str = ",".join(result) if result else "all"
+        args = {ARG_DB: db, ARG_MODULES: modules_str}
+        if lang:
+            args[ARG_LANG] = lang
+        self.run_worker(self._execute(action, args), exclusive=False)
 
     def _on_picker_result(
         self, action: Action, result: Optional[list]
@@ -673,5 +727,5 @@ class DockerOdooApp(App):
     def _log(self, message: str) -> None:
         try:
             self.query_one("#output", RichLog).write(message)
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[TUI _log fallback] {message} (error: {exc})", file=sys.stderr)

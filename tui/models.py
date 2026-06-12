@@ -32,17 +32,6 @@ class Action:
     needs: list = field(default_factory=list)
     interactive: bool = False  # bash/logs: suspend TUI, run, resume
     needs_all_option: bool = False  # show "Todas las instancias" entry
-    needs_db_first: bool = False    # also expose DB picker (helper scripts)
-
-    def to_dict(self):
-        return {
-            "id": self.action_id,
-            "label": self.label,
-            "category": self.category,
-            "description": self.description,
-            "needs": list(self.needs),
-            "interactive": self.interactive,
-        }
 
 
 ACTIONS: list[Action] = [
@@ -89,8 +78,7 @@ ACTIONS: list[Action] = [
     # Módulos / DB
     Action("update", "Update módulos", "Módulos / DB",
            "Actualiza módulos via scripts/odoo-update (admite --load-language)",
-           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES],
-           needs_db_first=True),
+           needs=[ARG_INSTANCE, ARG_DB, ARG_MODULES]),
     Action("pw", "Reset password", "Módulos / DB",
            "Restablece la contraseña de un usuario",
            needs=[ARG_INSTANCE, ARG_DB, ARG_USER, ARG_PASSWORD]),
@@ -103,16 +91,13 @@ ACTIONS: list[Action] = [
     # Scripts auxiliares
     Action("script:backup", "Backup", "Scripts",
            "Genera dump SQL + filestore en ZIP",
-           needs=[ARG_INSTANCE, ARG_DB, ARG_TARGET_PG, ARG_PATH],
-           needs_db_first=True),
+           needs=[ARG_INSTANCE, ARG_DB, ARG_TARGET_PG, ARG_PATH]),
     Action("script:restore", "Restore", "Scripts",
            "Restaura un backup ZIP a una nueva DB",
-           needs=[ARG_INSTANCE, ARG_ZIP, ARG_DEST_DB],
-           needs_db_first=True),
+           needs=[ARG_INSTANCE, ARG_ZIP, ARG_DEST_DB]),
     Action("script:test", "Run tests", "Scripts",
            "Ejecuta tests Odoo con tags y módulos",
-           needs=[ARG_INSTANCE, ARG_DB, ARG_TEST_TAGS, ARG_INSTALL],
-           needs_db_first=True),
+           needs=[ARG_INSTANCE, ARG_DB, ARG_TEST_TAGS, ARG_INSTALL]),
     Action("script:precommit", "Pre-commit", "Scripts",
            "Corre pre-commit sobre los módulos de la instancia",
            needs=[ARG_INSTANCE]),

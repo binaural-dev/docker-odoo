@@ -76,6 +76,9 @@ class UpdateProgress(Vertical):
         if self._idle_timer is not None:
             self._idle_timer.cancel()
             self._idle_timer = None
+        self._idle_timer = asyncio.get_event_loop().call_later(
+            5.0, self._on_idle_timeout
+        )
 
     def _on_idle_timeout(self) -> None:
         """Pasaron 5s sin progreso: cambia el ProgressBar a indeterminado."""
@@ -111,6 +114,8 @@ class UpdateProgress(Vertical):
 
     def add_line(self, level: str, line: str) -> None:
         self._all_lines.append((level, line))
+        if len(self._all_lines) > 2000:
+            self._all_lines.pop(0)
 
     def get_filtered_lines(self) -> list[str]:
         """Retorna las líneas que pasan el filtro actual."""
