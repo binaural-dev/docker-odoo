@@ -30,6 +30,8 @@ def run_command(instance, d, load_language, modules):
         "odoo",
         "-d", d,
         "-u", modules_str,
+        "--http-port=0",
+        "--workers=0",
     ]
     if load_language:
         cmd.append(f"--load-language={load_language}")
