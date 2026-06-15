@@ -404,10 +404,21 @@ def reset_password(config, instance, dbname, login, password):
     proc = subprocess.run(
         ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname, "-c", sql],
         env={**os.environ, "PGPASSWORD": db_password},
+        capture_output=True,
+        text=True,
     )
     if proc.returncode != 0:
         print(f"\n\033[1;31m✗ Error ejecutando psql (código {proc.returncode}). Contraseña NO actualizada.\033[0m\n")
         sys.exit(proc.returncode)
+    # psql retorna 0 cuando el SQL es válido aunque UPDATE afecte 0 filas.
+    # Necesitamos chequear el output para detectar "UPDATE 0" (login no existe).
+    if "UPDATE 0" in (proc.stdout or ""):
+        print(
+            f"\n\033[1;31m✗ No se encontró el usuario '{login}' en la base de datos '{dbname}'.\033[0m"
+            f"\n  Contraseña NO actualizada. Verificá que el login exista con:"
+            f"\n  docker exec {container} psql -U {db_user} -d {dbname} -c \"SELECT id, login FROM res_users ORDER BY id;\"\n"
+        )
+        sys.exit(1)
     print("✅ Contraseña actualizada.\n")
 
 
