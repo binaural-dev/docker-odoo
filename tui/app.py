@@ -91,10 +91,10 @@ class DockerOdooApp(App):
         yield Header(show_clock=False)
         with Horizontal(id="main"):
             with Vertical(id="left"):
-                yield Static("Instancias (instances.json)", id="subtitle")
+                yield Static("Instancias", id="instances_subtitle")
                 yield ListView(id="instances_list")
             with Vertical(id="right"):
-                yield Static("Acciones disponibles", id="subtitle")
+                yield Static("Acciones", id="actions_subtitle")
                 yield ListView(id="actions_list")
         yield UpdateProgress(id="update_progress")
         yield RichLog(id="output", highlight=False, markup=True, wrap=True, max_lines=2000)
@@ -135,15 +135,30 @@ class DockerOdooApp(App):
         list_view = self.query_one("#instances_list", ListView)
         list_view.clear()
         enabled_count = len(self.config["instances"])
-        list_view.append(AllInstancesItem(enabled_count=enabled_count))
-        for name, inst in self._raw_config.get("instances", {}).items():
-            list_view.append(InstanceItem(
-                name=name,
-                version=inst.get("odoo_version", "?"),
-                port=inst.get("external_port", 0),
-                database=inst.get("database", "?"),
-                enabled=is_instance_enabled(inst),
+        total_count = len(self._raw_config.get("instances", {}))
+        if total_count == 0:
+            list_view.append(EmptyStateItem(
+                "No hay instancias configuradas",
+                "Editá instances.json y apretá 'r' para refrescar",
             ))
+        else:
+            list_view.append(AllInstancesItem(enabled_count=enabled_count))
+            for name, inst in self._raw_config.get("instances", {}).items():
+                list_view.append(InstanceItem(
+                    name=name,
+                    version=inst.get("odoo_version", "?"),
+                    port=inst.get("external_port", 0),
+                    database=inst.get("database", "?"),
+                    enabled=is_instance_enabled(inst),
+                ))
+        # Update subtitle with counts
+        subtitle = self.query_one("#instances_subtitle", Static)
+        if total_count > 0:
+            subtitle.update(
+                f"Instancias  [dim]({enabled_count}/{total_count} habilitadas)[/dim]"
+            )
+        else:
+            subtitle.update("Instancias")
         list_view.index = 0
         self.selected_instance = None
 
@@ -181,16 +196,27 @@ class DockerOdooApp(App):
     def refresh_actions(self) -> None:
         list_view = self.query_one("#actions_list", ListView)
         list_view.clear()
-        # Show all categories; user can pick a no-instance action directly
+        # Show all categories; user can pick a no-instance action directly.
+        # Insertamos un CategoryHeaderItem entre grupos para dar separacion
+        # visual y orientacion al usuario.
+        from tui.widgets.items import CategoryHeaderItem
+        total = 0
         for cat in CATEGORY_ORDER:
-            for action in ACTIONS:
-                if action.category != cat:
-                    continue
+            # Solo agregar header si hay al menos una accion en esta categoria
+            cat_actions = [a for a in ACTIONS if a.category == cat]
+            if not cat_actions:
+                continue
+            list_view.append(CategoryHeaderItem(cat))
+            for action in cat_actions:
                 if ARG_INSTANCE in action.needs:
                     list_view.append(ActionItem(action))
                 else:
                     list_view.append(NoInstanceActionItem(action))
-        list_view.index = 0
+                total += 1
+        list_view.index = 1  # skip first category header
+        # Update subtitle with count
+        subtitle = self.query_one("#actions_subtitle", Static)
+        subtitle.update(f"Acciones  [dim]({total} disponibles)[/dim]")
 
     # ---------- toggle persistence ----------
 

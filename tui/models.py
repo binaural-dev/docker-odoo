@@ -138,12 +138,12 @@ LOG_LEVEL_SHORT = {
 
 
 CATEGORY_BADGE = {
-    "Lifecycle": "[Lifecycle]",
-    "Acceso": "[Acceso]",
-    "Mantenimiento": "[Mant.]",
-    "Módulos / DB": "[Módulos]",
-    "Sync": "[Sync]",
-    "Scripts": "[Scripts]",
+    "Lifecycle": "Lifecycle",
+    "Acceso": "Acceso",
+    "Mantenimiento": "Mant.",
+    "Módulos / DB": "Módulos",
+    "Sync": "Sync",
+    "Scripts": "Scripts",
 }
 
 
