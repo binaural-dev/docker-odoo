@@ -397,10 +397,64 @@ def reset_password(config, instance, dbname, login, password):
         )
         sys.exit(1)
 
+    # Validar el login antes de tocar nada: SELECT case-insensitive para
+    # detectar typos de mayúsculas (login en Odoo es case-sensitive). Si
+    # hay match exacto, ok. Si solo hay case-insensitive, sugerimos el
+    # case correcto. Si no hay match, listamos los logins disponibles.
+    print(f"\n→ Verificando que el usuario '{login}' exista...")
+    safe_login_lit = "'{}'".format(login.replace("'", "''"))
+    check_sql = (
+        f"SELECT id, login, active FROM res_users "
+        f"WHERE login = {safe_login_lit};"
+    )
+    check_proc = subprocess.run(
+        ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port),
+         "-U", db_user, "-d", dbname, "-tAF", "|", "-c", check_sql],
+        env={**os.environ, "PGPASSWORD": db_password},
+        capture_output=True,
+        text=True,
+    )
+    if check_proc.returncode != 0:
+        print(f"\n\033[1;31m✗ Error verificando usuario (código {check_proc.returncode}).\033[0m\n")
+        sys.exit(check_proc.returncode)
+    if not check_proc.stdout.strip():
+        # Login no existe exacto. Buscar case-insensitive para sugerir el
+        # case correcto. No listamos TODOS los logins porque eso expone
+        # usuarios reales del cliente (emails, etc.) que el script no
+        # deberia mencionar.
+        suggest_sql = (
+            f"SELECT login FROM res_users "
+            f"WHERE LOWER(login) = LOWER({safe_login_lit}) LIMIT 1;"
+        )
+        suggest_proc = subprocess.run(
+            ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port),
+             "-U", db_user, "-d", dbname, "-tAF", "", "-c", suggest_sql],
+            env={**os.environ, "PGPASSWORD": db_password},
+            capture_output=True,
+            text=True,
+        )
+        exact_ci = (suggest_proc.stdout or "").strip()
+        print(
+            f"\n\033[1;31m✗ El usuario '{login}' no existe en esta base de datos.\033[0m"
+        )
+        if exact_ci and exact_ci != login:
+            print(
+                f"  \033[1;33m→ ¿Quisiste decir '{exact_ci}'? (el login es case-sensitive)\033[0m"
+            )
+        else:
+            print(
+                f"  \033[2mVerificá los logins con: docker exec {container} psql -U {db_user} -d {dbname} "
+                f"-c \"SELECT login FROM res_users;\"\033[0m"
+            )
+        print(
+            f"\n  Volvé a correr el comando con el login correcto. "
+            f"Ej: ./odoo pw {instance} -d {dbname} -l <login> -p <password>\n"
+        )
+        sys.exit(1)
+
     safe_pw = "'{}'".format(password.replace("'", "''"))
-    safe_login = "'{}'".format(login.replace("'", "''"))
     print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
-    sql = f"update res_users set password = {safe_pw} where login = {safe_login};"
+    sql = f"update res_users set password = {safe_pw} where login = {safe_login_lit};"
     proc = subprocess.run(
         ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname, "-c", sql],
         env={**os.environ, "PGPASSWORD": db_password},
@@ -410,13 +464,13 @@ def reset_password(config, instance, dbname, login, password):
     if proc.returncode != 0:
         print(f"\n\033[1;31m✗ Error ejecutando psql (código {proc.returncode}). Contraseña NO actualizada.\033[0m\n")
         sys.exit(proc.returncode)
-    # psql retorna 0 cuando el SQL es válido aunque UPDATE afecte 0 filas.
-    # Necesitamos chequear el output para detectar "UPDATE 0" (login no existe).
     if "UPDATE 0" in (proc.stdout or ""):
+        # Caso raro: el login existia al validar pero desapareció entre el
+        # SELECT y el UPDATE (probable carrera con otro proceso). Reportar
+        # para no mentir.
         print(
-            f"\n\033[1;31m✗ No se encontró el usuario '{login}' en la base de datos '{dbname}'.\033[0m"
-            f"\n  Contraseña NO actualizada. Verificá que el login exista con:"
-            f"\n  docker exec {container} psql -U {db_user} -d {dbname} -c \"SELECT id, login FROM res_users ORDER BY id;\"\n"
+            f"\n\033[1;31m✗ El UPDATE no afectó filas (carrera con otro proceso?).\033[0m"
+            f"\n  Contraseña NO actualizada.\n"
         )
         sys.exit(1)
     print("✅ Contraseña actualizada.\n")
@@ -440,7 +494,7 @@ def init_addons(config, instance=None):
 
         print(f"\n=== Init para instancia: {inst_name} (Odoo {odoo_version}) ===")
         for addon_path in addons:
-            # addon_path is like "src/enterprise" or "src/custom/bananera"
+            # addon_path is like "src/enterprise" or "src/custom/<instance-name>"
             local_path = os.path.join(BASE_PATH, addon_path)
             if os.path.isdir(local_path):
                 print(f"  ✓ {addon_path} ya existe")
