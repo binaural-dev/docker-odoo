@@ -195,7 +195,12 @@ class DockerOdooApp(App):
     # ---------- toggle persistence ----------
 
     def action_toggle_instance(self) -> None:
-        """Toggle the ``enabled`` flag of the highlighted instance and persist."""
+        """Toggle the ``enabled`` flag of the highlighted instance and persist.
+
+        Optimizado: NO relee instances.json ni repinta la lista entera.
+        Solo actualiza in-place el item afectado y la vista filtrada
+        (self.config). El save a disco corre en background.
+        """
         list_view = self.query_one("#instances_list", ListView)
         item = list_view.highlighted_child
         if item is None or not isinstance(item, InstanceItem):
@@ -206,18 +211,59 @@ class DockerOdooApp(App):
             return
         new_value = not is_instance_enabled(self._raw_config["instances"][name])
         self._raw_config["instances"][name]["enabled"] = new_value
-        if not self._save_instances_json(self._raw_config):
-            # Revert in-memory change so UI and disk stay in sync.
-            self._raw_config["instances"][name]["enabled"] = not new_value
-            return
+
+        # Update vista filtrada in-place (sin re-parsear el JSON)
+        if new_value:
+            inst = self._raw_config["instances"][name]
+            self.config["instances"][name] = inst
+        else:
+            self.config["instances"].pop(name, None)
+
+        # Update visual del item in-place (sin repintar lista)
+        item.update_enabled(new_value)
+
+        # Update count en "Todas las instancias"
+        all_item = list_view.children[0] if list_view.children else None
+        if isinstance(all_item, AllInstancesItem):
+            all_item.disabled = new_value  # placeholder; we'll refresh label
+            # Re-render el label: solo cambia el "habilitada" si count pasa a 0
+            enabled_count = len(self.config["instances"])
+            try:
+                all_label = all_item.query_one(Label)
+                all_label.update(
+                    " Todas las instancias" if enabled_count > 0
+                    else " [dim]Todas las instancias (ninguna habilitada)[/dim]"
+                )
+            except Exception:
+                pass
+
         self._log(
             f"[green]Instancia[/green] [b]{name}[/b] "
             f"{'habilitada' if new_value else 'deshabilitada'}."
         )
-        # Repaint the list, preserving the current selection index.
-        current_index = list_view.index
-        self.refresh_instances()
-        list_view.index = min(current_index, len(list_view.children) - 1)
+
+        # Persistir en background (no bloquear UI)
+        snapshot = dict(self._raw_config)
+        self.run_worker(
+            self._save_instances_json_async(snapshot),
+            exclusive=False,
+        )
+
+    async def _save_instances_json_async(self, raw_config: dict) -> None:
+        """Variante async de _save_instances_json. Corre en worker."""
+        loop = asyncio.get_event_loop()
+        success = await loop.run_in_executor(
+            None, self._save_instances_json, raw_config
+        )
+        if not success:
+            # _save_instances_json ya logueo el error; revertimos in-memory
+            # para que UI y disco no se desincronicen.
+            self._raw_config = load_full_config(BASE_PATH)
+            self.config["instances"] = {
+                name: inst
+                for name, inst in self._raw_config.get("instances", {}).items()
+                if is_instance_enabled(inst)
+            }
 
     def _save_instances_json(self, raw_config: dict) -> bool:
         """Persist the full (unfiltered) instances.json. Returns True on success."""
@@ -298,47 +344,16 @@ class DockerOdooApp(App):
         # addons paths are available on disk. The text modal remains
         # the fallback for "all instances" or for instances whose
         # addons paths did not produce any modules.
+        # El scan de modulos puede hacer 1-3s de syscalls; lo corremos
+        # en un worker async para no bloquear la UI.
         if action.action_id == "update" and self.selected_instance is not None:
             inst = self.config["instances"].get(self.selected_instance)
             if inst is not None:
-                available = self._scan_instance_modules(
-                    self.selected_instance, inst
+                self.run_worker(
+                    self._update_picker_async(action, inst),
+                    exclusive=True,
                 )
-                if available:
-                    fields = [
-                        self._arg_to_field(ARG_DB),
-                        self._arg_to_field(ARG_LANG),
-                    ]
-                    defaults = self._arg_defaults(action)
-                    modal = InputModal(
-                        title=f"{action.label} — base de datos",
-                        fields=fields,
-                        defaults=defaults,
-                    )
-
-                    def _on_db_modal_result(db_result: Optional[dict]) -> None:
-                        if db_result is None:
-                            self._log("[yellow]Cancelado.[/yellow]")
-                            return
-                        selected_db = db_result.get(ARG_DB, "")
-                        selected_lang = db_result.get(ARG_LANG, "")
-                        self.push_screen(
-                            ModulePicker(
-                                instance_name=self.selected_instance,
-                                available_modules=available,
-                            ),
-                            lambda picker_result: self._on_picker_result_with_db(
-                                action, picker_result, selected_db, selected_lang
-                            ),
-                        )
-
-                    self.push_screen(modal, _on_db_modal_result)
-                    return
-                self._log(
-                    "[yellow]No se detectaron addons locales; "
-                    "usando input de texto.[/yellow]"
-                )
-
+                return
         # Build the fields list and launch the input modal.
         # ARG_INSTANCE is pre-selected from the instance list and is NOT
         # asked again as a modal input.
@@ -378,6 +393,73 @@ class DockerOdooApp(App):
         if not fields:
             self.run_worker(self._execute(action, {}), exclusive=False)
             return
+        defaults = self._arg_defaults(action)
+        modal = InputModal(
+            title=f"{action.label} — completar datos",
+            fields=fields,
+            defaults=defaults,
+        )
+        self.push_screen(modal, lambda result: self._on_modal_result(action, result))
+
+    async def _update_picker_async(self, action: Action, inst: dict) -> None:
+        """Versión async del dispatch para update con picker.
+
+        Hace el scan de módulos en un thread pool (1-3s de syscalls) y
+        luego muestra el modal. Sin esto, la UI quedaba congelada
+        durante el scan.
+        """
+        inst_name = self.selected_instance
+        if inst_name is None:
+            return
+        available = await asyncio.to_thread(
+            self._scan_instance_modules, inst_name, inst
+        )
+        if not available:
+            self._log(
+                "[yellow]No se detectaron addons locales; "
+                "usando input de texto.[/yellow]"
+            )
+            # Re-dispatch recursivo pero ya con scan vacio -> cae al modal de texto
+            self._dispatch_fallback_to_text_modal(action)
+            return
+        fields = [
+            self._arg_to_field(ARG_DB),
+            self._arg_to_field(ARG_LANG),
+        ]
+        defaults = self._arg_defaults(action)
+        modal = InputModal(
+            title=f"{action.label} — base de datos",
+            fields=fields,
+            defaults=defaults,
+        )
+
+        def _on_db_modal_result(db_result: Optional[dict]) -> None:
+            if db_result is None:
+                self._log("[yellow]Cancelado.[/yellow]")
+                return
+            selected_db = db_result.get(ARG_DB, "")
+            selected_lang = db_result.get(ARG_LANG, "")
+            self.push_screen(
+                ModulePicker(
+                    instance_name=inst_name,
+                    available_modules=available,
+                ),
+                lambda picker_result: self._on_picker_result_with_db(
+                    action, picker_result, selected_db, selected_lang
+                ),
+            )
+
+        self.push_screen(modal, _on_db_modal_result)
+
+    def _dispatch_fallback_to_text_modal(self, action: Action) -> None:
+        """Fallback cuando el scan no encontró addons: muestra el modal de texto."""
+        fields = []
+        for arg in action.needs:
+            if arg == ARG_INSTANCE:
+                continue
+            fields.append(self._arg_to_field(arg))
+        if action.action_id == "update":
+            fields.append(self._arg_to_field(ARG_LANG))
         defaults = self._arg_defaults(action)
         modal = InputModal(
             title=f"{action.label} — completar datos",
@@ -633,18 +715,52 @@ class DockerOdooApp(App):
             # Guardar referencia para cancelacion con Esc
             self._update_proc = proc
             assert proc.stdout is not None
+
+            # Throttling: acumulamos lineas en un buffer y las enviamos al
+            # main thread en batch cada FLUSH_INTERVAL_MS o cuando el buffer
+            # llega a FLUSH_BATCH_SIZE. Esto evita que el event loop se
+            # sature con miles de call_from_thread por update.
+            import time
+            FLUSH_INTERVAL_MS = 50
+            FLUSH_BATCH_SIZE = 200
+            buf_lines: list[tuple[str, str]] = []  # (level, line)
+            buf_plain: list[str] = []              # lineas para el RichLog
+            last_flush = time.monotonic()
+            last_progress: tuple[int, int] = (0, 0)
+
+            def _flush() -> None:
+                nonlocal buf_lines, buf_plain, last_flush
+                if up is not None and buf_lines:
+                    self.call_from_thread(up.add_lines_bulk, list(buf_lines))
+                if buf_plain:
+                    # _log_bulk recibe una sola string multilinea para que
+                    # RichLog.write se llame una sola vez.
+                    self.call_from_thread(self._log_bulk, "\n".join(buf_plain))
+                buf_lines = []
+                buf_plain = []
+                last_flush = time.monotonic()
+
             for line in proc.stdout:
                 line = line.rstrip()
                 if up is not None:
                     parsed = parse_progress(line)
                     if parsed is not None:
-                        self.call_from_thread(up.set_progress, parsed[0], parsed[1])
+                        cur, tot = parsed
+                        if (cur, tot) != last_progress:
+                            last_progress = (cur, tot)
+                            self.call_from_thread(up.set_progress, cur, tot)
                     level = classify_level(line)
-                    self.call_from_thread(up.add_line, level, line)
+                    buf_lines.append((level, line))
                     if level in up.filter_levels:
-                        self.call_from_thread(self._log, line)
+                        buf_plain.append(line)
                 else:
-                    self.call_from_thread(self._log, line)
+                    buf_plain.append(line)
+
+                now = time.monotonic()
+                if (now - last_flush) * 1000 >= FLUSH_INTERVAL_MS or len(buf_plain) >= FLUSH_BATCH_SIZE:
+                    _flush()
+
+            _flush()
             rc = proc.wait()
             self._update_proc = None
             return rc
@@ -671,11 +787,33 @@ class DockerOdooApp(App):
             self._log("[dim]No hay actualización en curso.[/dim]")
 
     def _rebuild_richlog_from_up(self, up: "UpdateProgress") -> None:
-        """Reconstruye el RichLog con las líneas que pasan el filtro actual."""
+        """Reconstruye el RichLog con las líneas que pasan el filtro actual.
+
+        Antes era clear + 2000 writes sync en main thread -> freeze
+        perceptible al togglear filtros. Ahora lo hace en chunks via
+        run_worker con yields entre chunks, asi la UI no se congela.
+        """
+        self.run_worker(
+            self._rebuild_richlog_async(up),
+            exclusive=False,
+        )
+
+    async def _rebuild_richlog_async(self, up: "UpdateProgress") -> None:
+        lines = up.get_filtered_lines()
         rl = self.query_one("#output", RichLog)
         rl.clear()
-        for line in up.get_filtered_lines():
-            rl.write(line)
+        # Escribir en chunks con await entremedio para que la UI pueda
+        # procesar otros eventos. 200 lineas por chunk es un buen balance
+        # entre throughput y responsividad.
+        CHUNK = 200
+        for i in range(0, len(lines), CHUNK):
+            chunk = lines[i:i+CHUNK]
+            # Un solo write() por chunk (las lineas ya estan separadas por
+            # '\n' en add_line; al hacer str.join escribimos un solo string
+            # multi-linea al RichLog).
+            rl.write("\n".join(chunk))
+            if i + CHUNK < len(lines):
+                await asyncio.sleep(0)
 
     def _toggle_log_level(self, level: str) -> None:
         """Alterna un nivel de log en el UpdateProgress y reconstruye el RichLog."""
@@ -729,3 +867,14 @@ class DockerOdooApp(App):
             self.query_one("#output", RichLog).write(message)
         except Exception as exc:
             print(f"[TUI _log fallback] {message} (error: {exc})", file=sys.stderr)
+
+    def _log_bulk(self, message: str) -> None:
+        """Escribe un string multi-linea al RichLog con UN solo write().
+
+        Usado por _run_streamed para evitar 1 write() por linea cuando
+        el worker acumula un batch.
+        """
+        try:
+            self.query_one("#output", RichLog).write(message)
+        except Exception as exc:
+            print(f"[TUI _log_bulk fallback] {message[:200]}... (error: {exc})", file=sys.stderr)

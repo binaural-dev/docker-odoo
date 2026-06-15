@@ -7,12 +7,28 @@ from tui.models import Action, CATEGORY_BADGE
 
 class InstanceItem(ListItem):
     def __init__(self, name: str, version: str, port: int, database: str, enabled: bool = True):
-        row = f" {name:<14}  {version:<5}  :{port:<5}  db: {database}"
-        if not enabled:
-            row = f"[dim]{row}  [off][/dim]"
-        super().__init__(Label(row))
+        self._name = name
+        self._version = version
+        self._port = port
+        self._database = database
+        super().__init__(Label(self._render_row(enabled)))
         self.instance_name = name
         self.instance_enabled = enabled
+
+    def _render_row(self, enabled: bool) -> str:
+        row = f" {self._name:<14}  {self._version:<5}  :{self._port:<5}  db: {self._database}"
+        if not enabled:
+            row = f"[dim]{row}  [off][/dim]"
+        return row
+
+    def update_enabled(self, enabled: bool) -> None:
+        """Update the visible label in-place (sin repintar la lista entera)."""
+        self.instance_enabled = enabled
+        try:
+            label = self.query_one(Label)
+            label.update(self._render_row(enabled))
+        except Exception:
+            pass
 
 
 class AllInstancesItem(ListItem):

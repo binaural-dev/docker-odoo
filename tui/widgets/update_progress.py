@@ -117,6 +117,20 @@ class UpdateProgress(Vertical):
         if len(self._all_lines) > 2000:
             self._all_lines.pop(0)
 
+    def add_lines_bulk(self, items: list[tuple[str, str]]) -> None:
+        """Bulk append (level, line) tuples, trimming to max 2000.
+
+        O(n) en lugar de O(n^2) que seria llamar add_line() en un loop
+        con list.pop(0). Ademas las llamadas desde el worker vienen
+        batched cada ~50ms.
+        """
+        if not items:
+            return
+        self._all_lines.extend(items)
+        if len(self._all_lines) > 2000:
+            # Mantener solo las ultimas 2000 (asumimos que el mas nuevo esta al final)
+            del self._all_lines[: len(self._all_lines) - 2000]
+
     def get_filtered_lines(self) -> list[str]:
         """Retorna las líneas que pasan el filtro actual."""
         return [
