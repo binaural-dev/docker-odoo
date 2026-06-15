@@ -727,11 +727,15 @@ class TuiProgressIntegrationTest(unittest.TestCase):
         result = asyncio.run(go())
         self.assertEqual(result, "ok")
 
-    def test_integration_no_modules_no_widget(self):
-        """Sim 10: update sin modulos (all) no muestra el widget."""
+    def test_integration_no_modules_shows_widget(self):
+        """Sim 10: update sin modulos especificos (all) TAMBIEN muestra
+        el widget porque Odoo emite (N/M) en cualquier caso. Antes
+        retornaba False, lo que hacia invisible la barra para el caso
+        mas comun (corregido: el usuario se quejaba de que la barra
+        no funcionaba)."""
         update_action = get_action("update")
         app = DockerOdooApp()
-        self.assertFalse(
+        self.assertTrue(
             app._is_update_with_modules(update_action, {"modules": "all"})
         )
 

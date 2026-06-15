@@ -648,14 +648,14 @@ class DockerOdooApp(App):
     def _is_update_with_modules(self, action: Action, args: dict) -> bool:
         """Determina si podemos mostrar el widget de progreso.
 
-        Solo para action ``update`` con módulos conocidos (no 'all').
+        Para cualquier action ``update``: Odoo siempre emite el formato
+        ``(N/M)`` cuando actualiza modulos (sean especificos o 'all'),
+        asi que la barra aplica a todos los updates. Antes se ocultaba
+        para modules='all'/vacio, pero eso era un bug: el usuario que
+        corre 'update' sin elegir modulos especificos no veia ninguna
+        barra, aunque Odoo claramente estaba emitiendo progreso.
         """
-        if action.action_id != "update":
-            return False
-        modules = (args or {}).get("modules", "")
-        if not modules or modules == "all":
-            return False
-        return True
+        return action.action_id == "update"
 
     async def _execute_one(self, action: Action, instance: Optional[str], args: dict, *, echo_cmd: bool = True) -> int:
         # The consolidated ``update`` action routes through scripts/odoo-update
