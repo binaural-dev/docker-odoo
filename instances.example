@@ -54,12 +54,16 @@
     }
   },
   "databases": {
+    # Cada DB tiene dos ejes independientes:
+    #   - postgres_version: version del motor (compatibilidad con Odoo)
+    #   - config: perfil de tuning segun carga esperada (small | medium | large | xlarge)
+    # Ver seccion "Perfiles de PostgreSQL" en readme.md para elegir perfil segun cantidad de instancias.
     "local_pg16": {
       "postgres_version": 16,                  # Version de PostgreSQL a usar (16, 15, 14, etc.)
       "port": 5432,                            # Puerto expuesto en el host para conectarse a PostgreSQL
       "user": "odoo",                          # Usuario de PostgreSQL (tambien usado por Odoo)
       "password": "odoo",                      # Password de PostgreSQL (tambien usado por Odoo)
-      "config": "postgresql.conf",             # Archivo de configuracion de PostgreSQL en .resources/dbconfigs/
+      "config": "postgresql.small.conf",     # Perfil de PostgreSQL en .resources/dbconfigs/ (small | medium | large | xlarge)
       "create_container": true                 # true: Docker crea y gestiona el contenedor de PostgreSQL
     },
     "external_pg16": {

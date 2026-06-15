@@ -59,15 +59,20 @@ Define configuraciones nombradas que luego se referencian desde las instancias. 
 
 Define las conexiones a PostgreSQL. `create_container` (default: `true`) controla si se crea un contenedor Docker o si se conecta a una DB externa.
 
+Cada DB tiene **dos ejes de configuración independientes**:
+
+- **`postgres_version`**: versión del motor PostgreSQL (15/16/17/18). Determina compatibilidad con Odoo. Ver [Compatibilidad PostgreSQL](#compatibilidad-postgresql).
+- **`config`**: perfil de tuning según la carga esperada. Ver [Perfiles de PostgreSQL](#perfiles-de-postgresql) abajo.
+
 ```json
 {
   "databases": {
-    "pg16": {
+    "v17": {
       "postgres_version": 16,
       "port": 5432,
       "user": "odoo",
       "password": "odoo",
-      "config": "postgresql.conf"
+      "config": "postgresql.xlarge.conf"
     },
     "external_pg16": {
       "create_container": false,
@@ -398,9 +403,95 @@ scripts/precommit binaural-19.0 -m integra-addons/modulo_c,enterprise/modulo_c
 3. Todas las instancias montan `./src` y cada una filtra sus addons via la variable `INSTANCE_ADDONS`.
 4. Instancias con la misma `odoo_version` comparten la misma imagen Docker.
 
+## Perfiles de PostgreSQL
+
+El campo `config` de cada `database` apunta a uno de los **perfiles de tuning** en `.resources/dbconfigs/postgresql.*.conf`. Los perfiles son agnósticos a la versión de Odoo: capturan la **carga esperada** (cantidad de instancias que comparten la DB), no la versión del motor.
+
+### Los 4 perfiles
+
+| Perfil | Archivo | `shared_buffers` | `max_connections` | `max_worker_processes` | Target |
+|--------|---------|------------------|-------------------|------------------------|--------|
+| **small** | `postgresql.small.conf` | 1GB | 60 | 2 | 1-3 instancias Odoo |
+| **medium** | `postgresql.medium.conf` | 2GB | 100 | 4 | 4-10 instancias Odoo |
+| **large** | `postgresql.large.conf` | 4GB | 200 | 8 | 11-20 instancias Odoo |
+| **xlarge** | `postgresql.xlarge.conf` | 8GB | 300 | 16 | 20+ instancias Odoo |
+
+Hardware sugerido por perfil:
+
+| Perfil | RAM física | CPU | Storage |
+|--------|-----------|-----|---------|
+| small | 4GB | 2 | SSD |
+| medium | 8GB | 4 | SSD |
+| large | 16GB | 8 | SSD |
+| xlarge | 32GB+ | 16+ | NVMe SSD |
+
+### ¿Cómo elijo perfil?
+
+El factor decisivo es **cuántas instancias Odoo comparten la misma DB** apuntando a esa `database`. No cuántas instancias tenés en total.
+
+```
+¿Cuántas instancias apuntan a esta database?
+│
+├── 1-3   → small
+├── 4-10  → medium
+├── 11-20 → large
+└── 20+   → xlarge
+```
+
+**Ejemplo:** tenés 31 instancias totales pero agrupadas así:
+- `v17` con 23 instancias → xlarge (es una sola DB compartida)
+- `v18` con 3 instancias → small
+- `v19` con 3 instancias → small
+- `v16` con 2 instancias → small
+
+### Escalar un perfil
+
+Cuando una `database` crece (ej: le sumás 3 instancias más a `v18` y pasa de 3 a 6 instancias), **solo cambiás el campo `config` en `instances.json`** — no tocás archivos de tuning:
+
+```diff
+   "databases": {
+     "v18": {
+       "postgres_version": 17,
+       "port": 5432,
+       "user": "odoo",
+       "password": "odoo",
+-      "config": "postgresql.small.conf"
++      "config": "postgresql.medium.conf"
+     }
+   }
+```
+
+Después corré `./odoo build` para regenerar el compose con el nuevo `command` que monta el perfil.
+
+### ¿Por qué perfiles y no por versión de Odoo?
+
+La versión de Odoo determina `postgres_version` (compatibilidad del motor). El perfil determina tuning de RAM/CPU/concurrencia. Son **ejes ortogonales**:
+
+- Odoo 17 y Odoo 19 con la misma carga → mismo perfil
+- Odoo 17 con 5 instancias y Odoo 17 con 20 instancias → perfiles distintos
+
+Si los perfiles fueran por versión, cambiar de `small` a `medium` implicaría renombrar archivos o duplicar configs por versión. Con perfiles, un cambio se hace en un solo campo.
+
+### Tuning fino
+
+Los perfiles son valores por defecto razonables. Si necesitás ajustar (ej: subir `work_mem` para reports pesados), **editá el archivo del perfil correspondiente** en `.resources/dbconfigs/`. Los cambios aplican a todas las DBs que usen ese perfil.
+
+> ⚠️ No dupliques archivos de perfil para "tunear una sola DB". Si una DB tiene necesidades únicas, considerá:
+> - Crear un perfil nuevo (ej: `postgresql.xlarge_igtf.conf` para la DB que corre IGTF pesado)
+> - O migrar esa DB a su propio contenedor con un perfil dedicado
+
 ## Compatibilidad PostgreSQL
 
 Para restaurar backups, la versión del contenedor debe ser igual o superior a la versión con que se generó el dump. Ajusta `postgres_version` en la sección `databases` según necesites.
+
+### Versiones soportadas por Odoo
+
+| Odoo | PostgreSQL mínimo | Recomendado |
+|------|-------------------|-------------|
+| 16.0 | 14 | 15 |
+| 17.0 | 15 | 16 |
+| 18.0 | 16 | 17 |
+| 19.0 | 17 | 18 |
 
 ## FAQ
 
@@ -415,3 +506,6 @@ Sí. Cada una tendrá su propio contenedor, volúmenes y addons independientes.
 
 **¿Puedo compartir la misma base de datos entre instancias?**
 Sí. Varias instancias pueden referenciar la misma `database`. El contenedor de DB se crea una sola vez.
+
+**¿Qué perfil de PostgreSQL uso para mi DB?**
+Depende de cuántas instancias apuntan a esa `database`, no de la versión de Odoo. Ver [Perfiles de PostgreSQL](#perfiles-de-postgresql). Regla rápida: 1-3 → `small`, 4-10 → `medium`, 11-20 → `large`, 20+ → `xlarge`.
