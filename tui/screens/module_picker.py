@@ -51,8 +51,13 @@ class ModulePicker(ModalScreen[Optional[list]]):
             yield Label(
                 f"Update módulos — {self.instance_name}", id="modal_title"
             )
+            yield Label(
+                f"Seleccioná los módulos a actualizar. "
+                f"[dim](vacío = todos)[/dim]",
+                id="modal_subtitle",
+            )
             yield Label("Filtro:", classes="field_label")
-            yield Input(placeholder="escribí para filtrar", id="filter_input")
+            yield Input(placeholder="escribí para filtrar por nombre", id="filter_input")
             with Horizontal(id="picker_panes"):
                 with Vertical(id="picker_left"):
                     yield Label("Disponibles", classes="field_label")
@@ -62,14 +67,14 @@ class ModulePicker(ModalScreen[Optional[list]]):
                     yield OptionList(id="selected_list")
             with Horizontal(id="picker_hints_row"):
                 yield Static(
-                    "[Tab] cambiar   [Enter] +/-   [L] limpiar   "
-                    "[E] ejecutar   [Esc] cancelar     "
-                    "[dim](vacío = todos los módulos)[/dim]",
+                    "[Tab] cambiar panel   "
+                    "[Enter] +/-   "
+                    "[L] limpiar   [E] ejecutar   [Esc] cancelar",
                     id="picker_hints",
                 )
             with Horizontal(id="modal_buttons"):
-                yield Button("Cancelar", id="cancel", variant="error")
-                yield Button("Ejecutar", id="ok", variant="success")
+                yield Button("✕ Cancelar  [dim](Esc)[/dim]", id="cancel", variant="error")
+                yield Button("✓ Ejecutar", id="ok", variant="success")
 
     def on_mount(self) -> None:
         self._render_available()

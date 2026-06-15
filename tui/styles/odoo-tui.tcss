@@ -94,8 +94,10 @@ RichLog {
 #modal_box {
     background: $panel;
     border: thick $accent;
-    padding: 1 3;
-    width: 60;
+    padding: 1 4;
+    width: 70;
+    min-width: 50;
+    max-width: 100;
     height: auto;
     align: center middle;
 }
@@ -107,8 +109,21 @@ RichLog {
     text-style: bold;
     color: $accent;
     padding-bottom: 1;
+    height: 1;
+}
+#modal_subtitle {
+    color: $text-muted;
+    text-style: italic;
+    padding-bottom: 1;
+    height: auto;
 }
 #modal_message {
+    padding: 1 0;
+    color: $text;
+    text-align: center;
+}
+#modal_fields {
+    height: auto;
     padding: 1 0;
 }
 #modal_fields Input {
@@ -116,6 +131,20 @@ RichLog {
 }
 .field_label {
     color: $secondary;
+    text-style: bold;
+    padding: 0 1;
+    height: 1;
+}
+.field_hint {
+    color: $text-muted;
+    text-style: italic;
+    padding: 0 1;
+    margin-bottom: 1;
+    height: 1;
+}
+.field_required {
+    color: $error;
+    text-style: bold;
 }
 #modal_buttons {
     align-horizontal: center;
@@ -123,26 +152,33 @@ RichLog {
     padding-top: 1;
 }
 #modal_buttons Button {
-    margin: 0 1;
+    margin: 0 2;
+    min-width: 14;
 }
 
 /* ----- Picker modal (fzf-style) ----- */
 #picker_panes {
     height: 1fr;
-    margin-top: 1;
+    margin: 1 0;
 }
 #picker_left, #picker_right {
     width: 1fr;
     border: round $primary;
-    padding: 1 2;
+    padding: 0 1;
     margin: 0 1;
 }
 #picker_left OptionList, #picker_right OptionList {
     height: 1fr;
+    border: none;
 }
 #picker_hints {
     color: $secondary;
     padding: 0 1;
+}
+#picker_hints_row {
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
 }
 
 /* ============================================================
