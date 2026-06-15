@@ -149,6 +149,23 @@ El script `odoo pw` tenía dos bugs:
   que el admin investigue.
 - Output del comando NO menciona nombres de clientes explícitamente.
 
+## TUI: fix de performance "se queda colgado entre interacciones"
+
+Commit: `8303178` — "perf(tui): fix H1+H2+H3+H7"
+
+El usuario reportó que la TUI se quedaba colgada entre interacciones.
+El agent investigó con el subagent `explore` y produjo 11 hallazgos
+priorizados. Apliqué los 4 de alto impacto:
+
+| Fix | Cambio | Impacto |
+|-----|--------|---------|
+| H1 | Throttle de logs en `_run_streamed`: el worker acumula líneas y las manda en batch cada 50ms o 200 líneas, en vez de 1 `call_from_thread` por línea | Mata el cuello de botella principal durante updates |
+| H2 | `_scan_instance_modules` a `asyncio.to_thread` (1-3s de syscalls que bloqueaban la UI al disparar Update) | Modal aparece sin freeze |
+| H3 | `action_toggle_instance` sin re-parsear JSON: update in-memory + `update_enabled()` en `InstanceItem` + save en worker | Space ya no repinta 31 items |
+| H7 | `_rebuild_richlog_from_up` en chunks async: 200 líneas + `asyncio.sleep(0)` entre chunks | Toggle de filtros (1/2/3/4/0/9) sin freeze |
+
+Tests: `scripts/tui_smoke_test.py` pasa (43 tests OK).
+
 
 ## Archivos modificados
 
@@ -168,6 +185,8 @@ openspec/                                     (nuevo: este documento)
 ## Commits de la sesión
 
 ```
+8303178 perf(tui): fix H1+H2+H3+H7 - el tui se queda colgado entre interacciones
+740a739 docs(openspec): documentar debug login y audit de clientes en pw
 4274afe fix(pw): validar login antes del UPDATE, sugerir case-corrected
 34a2fd5 fix(pw): detectar usuario inexistente en reset_password
 63637bd docs(openspec): bitácora de sesión 2026-06-15 + pendiente multi-ambiente
