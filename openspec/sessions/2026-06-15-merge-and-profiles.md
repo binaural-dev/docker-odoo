@@ -114,6 +114,42 @@ En el mismo commit `a668c17`:
   mejor criterio arquitectónico que el mío inicial.
 - **Password admin:** se mantiene `"admin"` por ahora (decidido en sesión).
 
+## Debug post-sesión: login de Odoo
+
+El usuario reportó que `admin`/`admin` no funcionaba para loguearse
+en `http://localhost:8096`. Investigación:
+
+1. La DB `conti` tenía un usuario con `login = "ADMIN"` (mayúscula).
+2. Odoo es **case-sensitive** en el login → `admin` (minúscula) fallaba.
+3. Solución: renombré el login a `admin` (UPDATE 1 en `res_users`).
+4. Verifiqué con `curl /web/login` + CSRF token que el login funciona
+   (HTTP 303 → sesión con `uid: 2, is_admin: true`).
+
+## Mejoras al script `pw` (commits 34a2fd5, 4274afe)
+
+El script `odoo pw` tenía dos bugs:
+
+1. **Mentía cuando el UPDATE no afectaba filas:** psql retorna 0 cuando
+   el SQL es válido aunque UPDATE afecte 0 filas. El script decía
+   "✅ Contraseña actualizada" sin haber hecho nada. Fix: detectar
+   `UPDATE 0` en stdout y reportar error.
+
+2. **No validaba el login antes:** si pasabas `-l admin` y el login
+   real era `ADMIN`, fallaba silenciosamente. Fix: correr un SELECT
+   primero, buscar case-insensitive match, y sugerir el correcto
+   (ej: `¿Quisiste decir 'ADMIN'?`).
+
+### Audit: el script NO debe decir cosas sobre clientes
+
+- Encontré 1 leak hardcodeado: comment en `init_addons` que decía
+  `"src/custom/bananera"` como ejemplo. Limpiado a `"src/custom/<instance-name>"`.
+- En el output del script, NO listamos todos los logins disponibles
+  cuando hay error (eso expondría emails reales del cliente). Solo
+  sugerimos el case-corrected si hay, o damos el comando psql para
+  que el admin investigue.
+- Output del comando NO menciona nombres de clientes explícitamente.
+
+
 ## Archivos modificados
 
 ```
@@ -132,6 +168,9 @@ openspec/                                     (nuevo: este documento)
 ## Commits de la sesión
 
 ```
+4274afe fix(pw): validar login antes del UPDATE, sugerir case-corrected
+34a2fd5 fix(pw): detectar usuario inexistente en reset_password
+63637bd docs(openspec): bitácora de sesión 2026-06-15 + pendiente multi-ambiente
 a668c17 feat(db): postgres tuning profiles (small/medium/large/xlarge)
 0a837d1 Merge branch 'origin/master-multi' into master-multi_bin-daldana
 b5fd75c chore(infra): coveragerc para mds-telecom + odoo-update no bindea 8069
