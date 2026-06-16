@@ -25,7 +25,9 @@ cp instances.example.jsonc instances.json
 
 ## Configuración: `instances.json`
 
-El archivo tiene 3 secciones principales:
+El template con valores por defecto y comentarios inline vive en
+`instances.example.jsonc` — copialo a `instances.json` y editá según
+tus necesidades. El archivo tiene 3 secciones principales:
 
 ### `odoo_configs` — Configuraciones reutilizables de Odoo
 
@@ -158,7 +160,22 @@ Los addons de cada instancia se especifican en el campo `addons` de su configura
 
 ## Comandos disponibles: `./odoo`
 
-Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si no se especifica nombre.
+Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si no se especifica nombre. El subcomando `tui` (ver [TUI interactiva](#tui-interactiva-odoo-tui--odoo-tui)) es un entry point alternativo a `./odoo-tui`.
+
+El script `./odoo` es un shim liviano (276 LOC) que delega a `odoo_cli/core/`, el package que implementa la lógica. Las acciones viven en `odoo_cli/core/actions/` y se invocan vía `odoo_cli/core/dispatch.py`, que mapea `argparse` a acción. El contrato de I/O con el usuario está abstraído en `odoo_cli.core.runner.Runner` (un `typing.Protocol` con `info`/`warn`/`confirm`/`run_streamed`), lo que permite testear las acciones con un `FakeRunner` y deja la puerta abierta a un futuro `TextualRunner` que reutilice las mismas acciones desde la TUI.
+
+| Ruta | Responsabilidad |
+|------|-----------------|
+| `odoo_cli/core/runner.py` | `Runner` Protocol — superficie de I/O de las acciones |
+| `odoo_cli/core/cli_runner.py` | `CliRunner` — implementación real con `print`/`input`/`subprocess` |
+| `odoo_cli/core/dispatch.py` | Mapea `argparse` a funciones de `actions/`; maneja el caso especial `tui` |
+| `odoo_cli/core/instance.py` | Helpers: `get_instance_services`, `get_db_services`, `get_users`, `get_databases`, `get_custom_repos`, `get_custom_modules` |
+| `odoo_cli/core/prompts.py` | Prompts interactivos (`prompt_selection`, `prompt_for_instance`, etc.) |
+| `odoo_cli/core/actions/validate.py` | `validate_instances` |
+| `odoo_cli/core/actions/lifecycle.py` | `build_odoo`, `start_odoo`, `stop_odoo`, `restart_odoo`, `remove_odoo` |
+| `odoo_cli/core/actions/access.py` | `run_bash`, `show_logs`, `list_containers`, `psql_connect`, `fix_filestore` |
+| `odoo_cli/core/actions/modules.py` | `update`, `reset_password`, `bash_update_modules` |
+| `odoo_cli/core/actions/maintenance.py` | `init_addons`, `sync` |
 
 | Comando | Descripción |
 |---------|-------------|
@@ -175,6 +192,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
+| `tui` | Lanza la TUI interactiva (equivalente a `./odoo-tui`). |
 
 ### Ejemplos
 
@@ -210,7 +228,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 ./odoo restart
 ```
 
-## TUI interactiva: `./odoo-tui`
+## TUI interactiva: `./odoo-tui` / `./odoo tui`
 
 Una interfaz de terminal (Textual) que envuelve `./odoo` y los scripts de
 `scripts/`. **No reemplaza el CLI**: `./odoo <comando>` sigue funcionando
@@ -221,8 +239,10 @@ comandos por vos y muestra el output en pantalla.
 # Dependencia: textual (>= 0.50). Instalar con:
 pip install --user textual
 
-# Lanzar la TUI (modo normal)
+# Lanzar la TUI (modo normal) — dos entry points equivalentes:
 ./odoo-tui
+# o bien, via el CLI unificado:
+./odoo tui
 
 # Lanzar la TUI con herramientas de desarrollo (hot-reload de CSS, consola)
 ./odoo-tui --dev
@@ -328,11 +348,40 @@ python3 scripts/tui_smoke_test.py -v
 python3 scripts/tui_check_css.py
 ```
 
-El package `tui/` está estructurado por capas:
+### Performance y cancelación
+
+La TUI está diseñada para no colgarse durante operaciones largas
+(instalación de muchos módulos, logs con mucho output, etc.):
+
+- **Streaming asíncrono**: `tui/runner.py` usa `asyncio.create_subprocess_exec`
+  + `readline()` en lugar de `subprocess.Popen(bufsize=1, PIPE)` con
+  iteración bloqueante. `Popen` con PIPE cae en block-buffering de
+  Python (4-8 KB) y Odoo no flushea seguido, lo que se manifestaba
+  como TUI congelado durante operaciones largas.
+- **Cancel con timeout**: durante un `update` podés presionar `Esc`;
+  el runner manda `SIGTERM` y, si el proceso no termina en 5s, escala
+  a `SIGKILL`.
+- **Widgets cacheados**: las queries a `self.query_one(...)` sobre
+  widgets accedidos cada línea se cachean para evitar el overhead de
+  atravesar el DOM de Textual en cada iteración.
+- **Thread safety**: `_save_instances_json` (persistencia del toggle
+  `enabled` con `Space`) está protegido, y los workers ya no tocan el
+  DOM directamente — todo va por `call_from_thread` o eventos del loop.
+
+Hay un test de regresión específico para el bug de streaming en
+`scripts/tui_smoke_test.py:TuiStreamingRegressionTest.test_streaming_with_slow_output_does_not_hang`.
+
+### Arquitectura del TUI
+
+El `app.py` original (906 LOC) se partió en cuatro módulos para que
+cada uno sea legible y testeable en isolation:
 
 | Ruta | Contenido |
 |------|-----------|
-| `tui/app.py` | `DockerOdooApp` — lógica principal, bindings, dispatch |
+| `tui/app.py` | `DockerOdooApp` — composición, ciclo de vida, eventos de la app (455 LOC) |
+| `tui/dispatch.py` | `DispatchMixin` — mapea acciones a comandos y orquesta modales (502 LOC) |
+| `tui/runner.py` | Runner async (`stream_command`) — streamea stdout sin bloquear el event loop (218 LOC) |
+| `tui/keybindings.py` | Handlers de atajos (`r`, `Space`, `Esc`, `Tab`, `1`-`4`, etc.) (288 LOC) |
 | `tui/models.py` | `Action`, constantes, tipos |
 | `tui/actions.py` | Constructores de comandos (`_odoo_cli_args`, `_script_args`) |
 | `tui/parser.py` | Parseo de progreso `(N/M)` y clasificación de niveles de log |
@@ -509,3 +558,9 @@ Sí. Varias instancias pueden referenciar la misma `database`. El contenedor de 
 
 **¿Qué perfil de PostgreSQL uso para mi DB?**
 Depende de cuántas instancias apuntan a esa `database`, no de la versión de Odoo. Ver [Perfiles de PostgreSQL](#perfiles-de-postgresql). Regla rápida: 1-3 → `small`, 4-10 → `medium`, 11-20 → `large`, 20+ → `xlarge`.
+
+## Tooling relacionado
+
+- El **MCP server** (antes en `mcp-server/` de este repo) vive ahora en
+  `ai-tools/skills-ai/mcp-server/` y se auto-descubre cuando se corre
+  desde un clone de docker-odoo. Ver su README.
