@@ -1,4 +1,4 @@
-"""Runner protocol and concrete runner implementations.
+"""Runner protocol, concrete runners, and shared instance/db helpers.
 
 A :class:`Runner` is the user-I/O surface that every action in
 :mod:`odoo_cli.core.actions` consumes. The intent is to keep the
@@ -19,6 +19,25 @@ implemented in BOTH runners; do not let actions reach for ``print`` or
 """
 
 from odoo_cli.core.cli_runner import CliRunner
+from odoo_cli.core.instance import (
+    find_instances_with_db,
+    get_custom_modules,
+    get_custom_repos,
+    get_databases,
+    get_db_services,
+    get_instance_services,
+    get_users,
+)
 from odoo_cli.core.runner import Runner
 
-__all__ = ["CliRunner", "Runner"]
+__all__ = [
+    "CliRunner",
+    "Runner",
+    "find_instances_with_db",
+    "get_custom_modules",
+    "get_custom_repos",
+    "get_databases",
+    "get_db_services",
+    "get_instance_services",
+    "get_users",
+]

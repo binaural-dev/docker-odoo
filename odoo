@@ -29,6 +29,15 @@ from generators.nginx_generator import generate_nginx_config
 from generators.pw_helpers import _check_db_exists
 
 from odoo_cli.core.cli_runner import CliRunner
+from odoo_cli.core.instance import (
+    find_instances_with_db,
+    get_custom_modules,
+    get_custom_repos,
+    get_databases,
+    get_db_services,
+    get_instance_services,
+    get_users,
+)
 
 COMPOSE_FILE = "docker-compose.generated.yml"
 
@@ -38,36 +47,6 @@ def _docker_compose(runner, *args):
     cmd = ["docker", "compose", "-f", COMPOSE_FILE, *args]
     runner.info(" ".join(cmd))
     subprocess.run(cmd)
-
-
-def _get_instance_services(runner, config, instance=None):
-    """Get the list of docker compose service names for an instance (or all)."""
-    if instance:
-        if instance not in config["instances"]:
-            runner.error(f"Error: Instancia '{instance}' no existe en instances.json")
-            runner.error(f"Instancias disponibles: {', '.join(config['instances'].keys())}")
-            sys.exit(1)
-        return [f"odoo-{instance}"]
-    return [f"odoo-{name}" for name in config["instances"]]
-
-
-def _get_db_services(config, instance=None):
-    """Get managed DB services needed for an instance (or all enabled)."""
-    if instance:
-        inst_conf = config["instances"][instance]
-        db_name = inst_conf["database"]
-        db_conf = config["databases"][db_name]
-        if db_conf.get("create_container", True):
-            return [f"db-{db_name}"]
-        return []
-    # Only start DBs used by enabled instances
-    needed = set()
-    for name, inst in config["instances"].items():
-        needed.add(inst["database"])
-    return [
-        f"db-{name}" for name in needed
-        if config["databases"].get(name, {}).get("create_container", True)
-    ]
 
 
 # ============================================================
@@ -154,8 +133,8 @@ def start_odoo(runner, config, instance=None):
     else:
         runner.info("\n=== ▶️  INICIANDO TODAS LAS INSTANCIAS ===\n")
 
-    db_services = _get_db_services(config, instance)
-    odoo_services = _get_instance_services(runner, config, instance)
+    db_services = get_db_services(config, instance)
+    odoo_services = get_instance_services(config, instance)
 
     # Start managed DBs
     if db_services:
@@ -195,7 +174,7 @@ def stop_odoo(runner, config, instance=None):
     """Stop Odoo instance(s) and optionally their databases."""
     if instance:
         runner.warn(f"\n=== ⏹️  DETENIENDO INSTANCIA: {instance.upper()} ===\n")
-        odoo_services = _get_instance_services(runner, config, instance)
+        odoo_services = get_instance_services(config, instance)
         _docker_compose(runner, "stop", *odoo_services)
         # Check if the DB is still used by other running instances
         db_name = config["instances"][instance]["database"]
@@ -240,7 +219,7 @@ def remove_odoo(runner, config, instance=None):
         return
 
     if instance:
-        odoo_services = _get_instance_services(runner, config, instance)
+        odoo_services = get_instance_services(config, instance)
         for svc in odoo_services:
             subprocess.run(["docker", "compose", "-f", COMPOSE_FILE, "rm", "-s", "-v", "-f", svc])
     else:
@@ -284,8 +263,8 @@ def show_logs(runner, config, instance=None):
     """Show logs for instance(s)."""
     if instance:
         runner.info(f"\n=== 📋 MOSTRANDO LOGS DE: {instance.upper()} ===\n")
-        services = _get_instance_services(runner, config, instance)
-        db_services = _get_db_services(config, instance)
+        services = get_instance_services(config, instance)
+        db_services = get_db_services(config, instance)
         all_services = db_services + services
         _docker_compose(runner, "logs", "--tail=10", "-f", *all_services)
     else:
@@ -306,7 +285,7 @@ def fix_filestore(runner, config, instance=None):
     else:
         runner.warn("\n=== 🔧 CORRIGIENDO PERMISOS EN TODAS LAS INSTANCIAS ===\n")
 
-    services = _get_instance_services(runner, config, instance)
+    services = get_instance_services(config, instance)
     for svc in services:
         runner.info(f"→ Corrigiendo permisos en {svc}...")
         try:
@@ -544,90 +523,6 @@ def sync(runner, repo_names, branch, show=False):
 # ============================================================
 
 
-def get_databases(config, instance):
-    """Fetch database names from the postgres container of an instance."""
-    try:
-        inst_conf = config["instances"][instance]
-        db_conf = resolve_db_config(inst_conf, config)
-        db_host = get_db_host(inst_conf["database"], db_conf)
-        db_user = db_conf["user"]
-        db_password = db_conf["password"]
-        db_port = db_conf["port"]
-        container = f"odoo-{instance}"
-
-        # Try to get databases from postgres
-        cmd = (
-            f"docker exec -e PGPASSWORD={db_password} {container} "
-            f"psql --host {db_host} --port {db_port} -U {db_user} -d postgres -At -c "
-            f"\"SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres', 'template1');\" 2>/dev/null"
-        )
-        output = subprocess.check_output(cmd, shell=True).decode().strip()
-        if output:
-            return sorted(output.split("\n"))
-    except Exception:
-        pass
-    return []
-
-
-def get_users(config, instance, dbname):
-    """Fetch active users from a specific database."""
-    try:
-        inst_conf = config["instances"][instance]
-        db_conf = resolve_db_config(inst_conf, config)
-        db_host = get_db_host(inst_conf["database"], db_conf)
-        db_user = db_conf["user"]
-        db_password = db_conf["password"]
-        db_port = db_conf["port"]
-        container = f"odoo-{instance}"
-
-        cmd = (
-            f"docker exec -e PGPASSWORD={db_password} {container} "
-            f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname} -At -c "
-            f"\"SELECT login FROM res_users WHERE active = true ORDER BY login;\" 2>/dev/null"
-        )
-        output = subprocess.check_output(cmd, shell=True).decode().strip()
-        if output:
-            return sorted(output.split("\n"))
-    except Exception:
-        pass
-    return []
-
-
-def get_custom_repos():
-    """List directories in src/custom/."""
-    custom_path = os.path.join(BASE_PATH, "src", "custom")
-    if not os.path.isdir(custom_path):
-        return []
-    return sorted([
-        d for d in os.listdir(custom_path)
-        if os.path.isdir(os.path.join(custom_path, d))
-    ])
-
-
-def get_custom_modules(config, instance):
-    """List custom modules found in the addons paths of an instance."""
-    try:
-        inst_conf = config["instances"][instance]
-        odoo_conf = resolve_instance_config(inst_conf, config)
-        addons_paths = odoo_conf.get("addons", [])
-
-        modules = []
-        for path in addons_paths:
-            full_path = os.path.join(BASE_PATH, path)
-            if not os.path.isdir(full_path):
-                continue
-            for item in os.listdir(full_path):
-                item_path = os.path.join(full_path, item)
-                if os.path.isdir(item_path):
-                    if os.path.exists(os.path.join(item_path, "__manifest__.py")) or \
-                       os.path.exists(os.path.join(item_path, "__openerp__.py")):
-                        modules.append(item)
-        return sorted(list(set(modules)))
-    except Exception:
-        pass
-    return []
-
-
 def prompt_selection(options, title, multi=False):
     """
     Generic interactive selection menu.
@@ -842,37 +737,6 @@ def prompt_for_instance(config, action):
     return prompt_selection(options, "Selecciona una instancia (Usa las flechas, números y Enter para confirmar)")
 
 
-def _instance_has_db(instance, dbname, config):
-    """Devuelve True si ``dbname`` existe en el contenedor de la instancia."""
-    from generators.config_loader import resolve_db_config, get_db_host
-    inst_conf = config["instances"][instance]
-    db_conf = resolve_db_config(inst_conf, config)
-    db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
-    db_port = db_conf["port"]
-    container = f"odoo-{instance}"
-    env = {"PGPASSWORD": db_password, "PATH": os.environ.get("PATH", "")}
-    proc = subprocess.run(
-        [
-            "docker", "exec", container,
-            "psql",
-            "--host", db_host,
-            "--port", str(db_port),
-            "-U", db_user,
-            "-d", "postgres",
-            "-tAc",
-            f"SELECT 1 FROM pg_database WHERE datname='{dbname}'",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        return False
-    return "1" in (proc.stdout or "").strip().splitlines()
-
-
 def _resolve_instance_for_action(runner, config, args):
     """Decide que instancia usar para ``args.action``.
 
@@ -889,10 +753,7 @@ def _resolve_instance_for_action(runner, config, args):
 
     if args.action == "pw" and getattr(args, "d", None):
         dbname = args.d
-        candidatas = [
-            inst for inst in config["instances"]
-            if _instance_has_db(inst, dbname, config)
-        ]
+        candidatas = find_instances_with_db(config, dbname)
         if len(candidatas) == 1:
             runner.info(
                 f"\nℹ La base de datos '{dbname}' solo existe en "
