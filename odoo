@@ -38,6 +38,7 @@ from odoo_cli.core.instance import (
     get_instance_services,
     get_users,
 )
+from odoo_cli.core.actions.validate import validate_instances
 
 COMPOSE_FILE = "docker-compose.generated.yml"
 
@@ -52,48 +53,6 @@ def _docker_compose(runner, *args):
 # ============================================================
 # Validation
 # ============================================================
-
-
-def validate_instances(runner, config):
-    """Validate instances.json for duplicate ports and valid configuration."""
-    ports_seen = {}
-    errors = []
-
-    # Check pgadmin port
-    if config.get("pgadmin", {}).get("enabled"):
-        port = config["pgadmin"].get("port")
-        if port:
-            ports_seen[port] = "pgadmin"
-
-    # Check instances
-    for name, inst in config.get("instances", {}).items():
-        # Check external_port
-        ext_port = inst.get("external_port")
-        if ext_port:
-            if ext_port in ports_seen:
-                errors.append(f"Puerto duplicado: {ext_port} usado por '{name}' y '{ports_seen[ext_port]}'")
-            else:
-                ports_seen[ext_port] = f"instancia {name} (external_port)"
-
-        # Check longpolling_port
-        lp_port = inst.get("longpolling_port")
-        if lp_port:
-            if lp_port in ports_seen:
-                errors.append(f"Puerto duplicado: {lp_port} usado por '{name}' y '{ports_seen[lp_port]}'")
-            else:
-                ports_seen[lp_port] = f"instancia {name} (longpolling_port)"
-
-        # Check db existence
-        db_name = inst.get("database")
-        if db_name and db_name not in config.get("databases", {}):
-            errors.append(f"La instancia '{name}' usa la base de datos '{db_name}' que no está definida en 'databases'.")
-
-    if errors:
-        runner.error("\n=== ❌ ERROR DE VALIDACIÓN EN instances.json ===\n")
-        for err in errors:
-            runner.error(f"  - {err}")
-        runner.error("")
-        sys.exit(1)
 
 
 # ============================================================
