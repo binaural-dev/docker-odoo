@@ -13,7 +13,7 @@ git clone git@github.com:binaural-dev/docker-odoo.git
 cd docker-odoo
 
 # 2. Crear el archivo de configuración
-cp instances.example.json instances.json
+cp instances.example.jsonc instances.json
 # Editar instances.json según tus necesidades
 
 # 3. Construir las imágenes
