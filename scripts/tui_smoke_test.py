@@ -801,6 +801,63 @@ class TuiProgressIntegrationTest(unittest.TestCase):
             f"cancel tomó demasiado: {result['elapsed']:.2f}s (esperado <4s)",
         )
 
+    def test_save_json_from_thread_does_not_crash(self):
+        """Sim 12: el path async de _save_instances_json_async no debe
+        tocar el DOM desde un thread. Llamamos el helper puro
+        repetidamente desde asyncio.to_thread (el patron que usa el
+        worker) y verificamos que no hay excepcion.
+        """
+        from tui.app import _write_instances_json
+
+        sample = {
+            "odoo_configs": {},
+            "databases": {},
+            "instances": {
+                "test_thread": {
+                    "odoo_version": "17.0",
+                    "external_port": 8170,
+                    "database": "test_thread",
+                    "enabled": True,
+                },
+            },
+        }
+        # Backup del archivo real para no pisarlo
+        real_path = REPO_ROOT / "instances.json"
+        backup = real_path.read_bytes() if real_path.exists() else None
+
+        try:
+            async def go():
+                results = []
+                # Disparamos 5 saves en paralelo via to_thread, que es
+                # lo que pasaria si el user apreta Space rapido 5 veces
+                # y cada toggle lanza un worker.
+                tasks = [
+                    asyncio.to_thread(_write_instances_json, str(REPO_ROOT), sample)
+                    for _ in range(5)
+                ]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                return results
+
+            results = asyncio.run(go())
+            # Ninguna debe haber levantado (los retornos son tuplas)
+            for i, r in enumerate(results):
+                self.assertIsInstance(
+                    r, tuple,
+                    f"save #{i} levanto una excepcion: {r!r}",
+                )
+                self.assertTrue(r[0], f"save #{i} fallo: {r}")
+            # El archivo final debe parsear como JSON valido
+            import json as _json
+            parsed = _json.loads(real_path.read_text())
+            self.assertIn("instances", parsed)
+            self.assertIn("test_thread", parsed["instances"])
+        finally:
+            # Restauramos el archivo real
+            if backup is not None:
+                real_path.write_bytes(backup)
+            elif real_path.exists():
+                real_path.unlink()
+
 
 if __name__ == "__main__":
     # Permitir -v para verbosity

@@ -58,6 +58,54 @@ from tui.widgets.items import InstanceItem, AllInstancesItem, ActionItem, NoInst
 from tui.widgets.update_progress import UpdateProgress
 
 
+def _scan_instance_modules_pure(inst_name: str, inst_conf: dict, full_config: dict) -> list:
+    """Pure sync module scan (runs in a thread via to_thread).
+
+    Walks the instance's addons paths and returns a sorted list of
+    directory names that contain a ``__manifest__.py``. No DOM access,
+    no instance state mutation — the caller is responsible for caching
+    the result. Keeping this function pure means it can be invoked
+    from a thread pool without violating Textual's single-threaded
+    DOM contract.
+    """
+    try:
+        from generators.config_loader import resolve_instance_config
+    except ImportError:
+        return []
+    addons = resolve_instance_config(inst_conf, full_config).get("addons", [])
+    modules: set[str] = set()
+    for path in addons:
+        abs_path = os.path.join(BASE_PATH, path)
+        if not os.path.isdir(abs_path):
+            continue
+        for entry in os.listdir(abs_path):
+            full = os.path.join(abs_path, entry)
+            if (
+                os.path.isdir(full)
+                and os.path.isfile(os.path.join(full, "__manifest__.py"))
+            ):
+                modules.add(entry)
+    return sorted(modules)
+
+
+def _write_instances_json(base_path: str, raw_config: dict) -> tuple[bool, str]:
+    """Pure sync helper: write ``raw_config`` to ``base_path/instances.json``.
+
+    Returns ``(True, "")`` on success, ``(False, error_message)`` on
+    failure. No DOM access, no logging — those belong to the caller on
+    the main thread. This is the function we run in the thread pool
+    via ``asyncio.to_thread``.
+    """
+    path = os.path.join(base_path, "instances.json")
+    try:
+        with open(path, "w") as f:
+            json.dump(raw_config, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        return True, ""
+    except (OSError, PermissionError) as exc:
+        return False, str(exc)
+
+
 class DockerOdooApp(App):
     CSS_PATH = TCSS_PATH
 
@@ -211,29 +259,19 @@ class DockerOdooApp(App):
         happens lazily on first request for an instance, never on
         ``on_mount`` (which would scan every configured instance
         regardless of whether the user will ever use the picker).
+
+        This is a thin wrapper that does the cache check on the main
+        thread and delegates the actual filesystem walk to the pure
+        helper \`_scan_instance_modules_pure\` (which can be called
+        from a thread via \`asyncio.to_thread\`). Keeping the cache
+        write on the main thread is required to satisfy Textual's
+        single-threaded DOM contract.
         """
         if inst_name in self.module_cache:
             return self.module_cache[inst_name]
-        try:
-            from generators.config_loader import resolve_instance_config
-        except ImportError:
-            self.module_cache[inst_name] = []
-            return []
-        addons = resolve_instance_config(inst_conf, self.config).get("addons", [])
-        modules: set[str] = set()
-        for path in addons:
-            abs_path = os.path.join(BASE_PATH, path)
-            if not os.path.isdir(abs_path):
-                continue
-            for entry in os.listdir(abs_path):
-                full = os.path.join(abs_path, entry)
-                if (
-                    os.path.isdir(full)
-                    and os.path.isfile(os.path.join(full, "__manifest__.py"))
-                ):
-                    modules.add(entry)
-        self.module_cache[inst_name] = sorted(modules)
-        return self.module_cache[inst_name]
+        modules = _scan_instance_modules_pure(inst_name, inst_conf, self.config)
+        self.module_cache[inst_name] = modules
+        return modules
 
     def refresh_actions(self) -> None:
         list_view = self._actions_list or self.query_one("#actions_list", ListView)
@@ -320,14 +358,25 @@ class DockerOdooApp(App):
         )
 
     async def _save_instances_json_async(self, raw_config: dict) -> None:
-        """Variante async de _save_instances_json. Corre en worker."""
-        loop = asyncio.get_event_loop()
-        success = await loop.run_in_executor(
-            None, self._save_instances_json, raw_config
+        """Variante async de _save_instances_json. Corre en worker.
+
+        El I/O a disco se hace en un thread pool (puede tardar en
+        filesystems lentos). La decision sobre que hacer con el
+        resultado se toma en el main thread del worker async, asi no
+        tocamos el DOM de Textual desde un thread de fondo.
+        """
+        success, error_message = await asyncio.to_thread(
+            _write_instances_json, BASE_PATH, raw_config
         )
         if not success:
-            # _save_instances_json ya logueo el error; revertimos in-memory
-            # para que UI y disco no se desincronicen.
+            # Logging y revert van en el main thread del worker async,
+            # no en el thread del executor. Cualquier \`self._log\` o
+            # \`self.query_one\` desde el executor sería un bug
+            # thread-safety.
+            self._log(
+                f"[red]No se pudo guardar instances.json:[/red] {error_message}"
+            )
+            # Revertimos in-memory para que UI y disco no se desincronicen.
             self._raw_config = load_full_config(BASE_PATH)
             self.config["instances"] = {
                 name: inst
@@ -336,18 +385,16 @@ class DockerOdooApp(App):
             }
 
     def _save_instances_json(self, raw_config: dict) -> bool:
-        """Persist the full (unfiltered) instances.json. Returns True on success."""
-        path = os.path.join(BASE_PATH, "instances.json")
-        try:
-            with open(path, "w") as f:
-                json.dump(raw_config, f, indent=2, ensure_ascii=False)
-                f.write("\n")
-            return True
-        except (OSError, PermissionError) as exc:
+        """DEPRECATED: usa _save_instances_json_async. Se mantiene como
+        shim de sync para tests/uso externo (no desde threads).
+        """
+        success, error_message = _write_instances_json(BASE_PATH, raw_config)
+        if not success:
             self._log(
-                f"[red]No se pudo guardar instances.json:[/red] {exc}"
+                f"[red]No se pudo guardar instances.json:[/red] {error_message}"
             )
             return False
+        return True
 
     # ---------- event wiring ----------
 
@@ -483,9 +530,17 @@ class DockerOdooApp(App):
         inst_name = self.selected_instance
         if inst_name is None:
             return
-        available = await asyncio.to_thread(
-            self._scan_instance_modules, inst_name, inst
-        )
+        # Cache lookup happens on the main thread; the actual scan
+        # (which can take 1-3s of syscalls) runs in the thread pool.
+        # We write the cache result back on the main thread too, to
+        # keep DOM-touching state mutations on a single thread.
+        if inst_name in self.module_cache:
+            available = self.module_cache[inst_name]
+        else:
+            available = await asyncio.to_thread(
+                _scan_instance_modules_pure, inst_name, inst, self.config
+            )
+            self.module_cache[inst_name] = available
         if not available:
             self._log(
                 "[yellow]No se detectaron addons locales; "
