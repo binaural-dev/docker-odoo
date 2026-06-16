@@ -50,6 +50,14 @@ class InstanceItem(ListItem):
 
 
 class AllInstancesItem(ListItem):
+    """Item especial de la lista de instancias: "Todas las instancias".
+
+    Se renderiza como un ListItem cyan con la cuenta de instancias
+    habilitadas; si ninguna esta habilitada, se muestra dim y queda
+    disabled para que el usuario no ejecute un comando sobre un set
+    vacio por accidente.
+    """
+
     def __init__(self, enabled_count: int = 0):
         # Icono + label para distinguir de las instancias individuales
         if enabled_count > 0:
