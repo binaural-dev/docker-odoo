@@ -801,11 +801,141 @@ class TuiProgressIntegrationTest(unittest.TestCase):
             f"cancel tomó demasiado: {result['elapsed']:.2f}s (esperado <4s)",
         )
 
+
+# ============================================================
+# TUI v6 — Streaming regression tests
+# ============================================================
+
+
+class TuiStreamingRegressionTest(unittest.TestCase):
+    """Tests de regresión para el bug original del TUI colgado.
+
+    Cubren las tres aristas que arreglamos en este batch:
+
+      1. Streaming con output lento NO debe colgarse (la causa raiz:
+         block-buffering de Popen + readline de thread).
+      2. Cancel escalado a SIGKILL termina dentro del timeout
+         (commit 2: terminate+wait+kill).
+      3. Save de instances.json desde thread no toca el DOM
+         (commit 4: helpers puros + to_thread).
+    """
+
+    def test_streaming_with_slow_output_does_not_hang(self):
+        """Sim R1: el runner no se cuelga con output lento.
+
+        Reproduce el bug original: el viejo \`subprocess.Popen\` con
+        \`bufsize=1, text=True, stdout=PIPE\` hacia block-buffering y
+        \`for line in proc.stdout\` se quedaba esperando 4-8 KB de
+        buffer. Aqui emitimos 1 linea cada 200ms (10 lineas en 2s).
+        Si el bug estuviera presente, este test colgaria o reportaria
+        menos de 10 lineas.
+        """
+        from tui.runner import stream_command
+
+        async def go():
+            # python -c con sleep 0.2 entre prints -> 10 lineas en 2s
+            argv = [
+                "python3", "-c",
+                "import time\n"
+                "for i in range(10):\n"
+                "    print(f'INFO ({i}/{i+1}) line {i}')\n"
+                "    time.sleep(0.2)\n",
+            ]
+            lines: list[str] = []
+            progress_events: list[tuple[int, int]] = []
+
+            def on_line(line: str) -> None:
+                lines.append(line)
+
+            def on_progress(cur: int, tot: int) -> None:
+                progress_events.append((cur, tot))
+
+            t0 = time.monotonic()
+            rc = await stream_command(
+                argv, str(REPO_ROOT),
+                on_line=on_line, on_progress=on_progress,
+            )
+            elapsed = time.monotonic() - t0
+            return {"rc": rc, "lines": lines, "elapsed": elapsed,
+                    "progress_events": progress_events}
+
+        result = asyncio.run(go())
+        self.assertEqual(result["rc"], 0, f"rc != 0: {result}")
+        # 10 lineas de output, todas deben llegar.
+        self.assertEqual(
+            len(result["lines"]), 10,
+            f"se perdieron lineas: {result['lines']}",
+        )
+        # El script dura ~2s (10 * 0.2). Si el runner se cuelga,
+        # el elapsed seria mucho mayor. Damos margen para CI lento.
+        self.assertLess(
+            result["elapsed"], 8.0,
+            f"el test tardo demasiado (probable hang): "
+            f"{result['elapsed']:.2f}s",
+        )
+        # Tambien verificamos que el progress callback se invoco
+        # para los matches (N/M) en las lineas.
+        self.assertGreater(
+            len(result["progress_events"]), 0,
+            f"progress no se detecto: {result}",
+        )
+
+    def test_streaming_cancelled_returns_partial(self):
+        """Sim R2: cancel de un comando largo -> CancelledError rapido.
+
+        Lanza un sleep 60, cancela a los 500ms, verifica que
+        CancelledError se propague en menos de 7s (terminate 1s +
+        kill 1s + slack).
+        """
+        from tui.runner import stream_command
+
+        async def go():
+            argv = ["sh", "-c", "trap '' TERM; sleep 60"]
+
+            async def runner_task():
+                return await stream_command(
+                    argv,
+                    str(REPO_ROOT),
+                    on_line=lambda _l: None,
+                    terminate_grace=1.0,
+                    kill_grace=1.0,
+                )
+
+            t0 = time.monotonic()
+            task = asyncio.create_task(runner_task())
+            await asyncio.sleep(0.5)
+            task.cancel()
+            try:
+                await task
+                raised = False
+                rc = None
+            except asyncio.CancelledError:
+                raised = True
+                rc = None
+            elapsed = time.monotonic() - t0
+            return {"raised": raised, "elapsed": elapsed, "rc": rc}
+
+        result = asyncio.run(go())
+        self.assertTrue(
+            result["raised"],
+            f"CancelledError no se propago: {result}",
+        )
+        # 0.5s sleep + 1s SIGTERM grace + 1s SIGKILL grace = ~2.5s.
+        # Damos margen a 7s para CI lento.
+        self.assertLess(
+            result["elapsed"], 7.0,
+            f"cancel tardo demasiado: {result['elapsed']:.2f}s",
+        )
+
     def test_save_json_from_thread_does_not_crash(self):
-        """Sim 12: el path async de _save_instances_json_async no debe
-        tocar el DOM desde un thread. Llamamos el helper puro
-        repetidamente desde asyncio.to_thread (el patron que usa el
-        worker) y verificamos que no hay excepcion.
+        """Sim R3: 5 saves en paralelo via to_thread no rompen nada.
+
+        Simula el caso real: el user apreta Space rapido 5 veces y
+        cada toggle dispara un worker que llama
+        \`_save_instances_json_async\` (que internamente hace
+        \`asyncio.to_thread(_write_instances_json, ...)\`). Verificamos
+        que ninguno levante y que el archivo final siga siendo JSON
+        valido.
         """
         from tui.app import _write_instances_json
 
@@ -813,46 +943,50 @@ class TuiProgressIntegrationTest(unittest.TestCase):
             "odoo_configs": {},
             "databases": {},
             "instances": {
-                "test_thread": {
+                "regression_r3": {
                     "odoo_version": "17.0",
-                    "external_port": 8170,
-                    "database": "test_thread",
+                    "external_port": 8171,
+                    "database": "regression_r3",
                     "enabled": True,
                 },
             },
         }
-        # Backup del archivo real para no pisarlo
         real_path = REPO_ROOT / "instances.json"
         backup = real_path.read_bytes() if real_path.exists() else None
 
         try:
             async def go():
-                results = []
-                # Disparamos 5 saves en paralelo via to_thread, que es
-                # lo que pasaria si el user apreta Space rapido 5 veces
-                # y cada toggle lanza un worker.
+                # 5 saves en paralelo, igual que un user con Space
+                # compulsivo. Cada uno corre en su propio thread del
+                # pool. El helper es puro (no toca DOM), asi que esto
+                # es seguro.
                 tasks = [
-                    asyncio.to_thread(_write_instances_json, str(REPO_ROOT), sample)
+                    asyncio.to_thread(
+                        _write_instances_json, str(REPO_ROOT), sample
+                    )
                     for _ in range(5)
                 ]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                return results
+                return await asyncio.gather(*tasks, return_exceptions=True)
 
             results = asyncio.run(go())
-            # Ninguna debe haber levantado (los retornos son tuplas)
             for i, r in enumerate(results):
                 self.assertIsInstance(
                     r, tuple,
                     f"save #{i} levanto una excepcion: {r!r}",
                 )
                 self.assertTrue(r[0], f"save #{i} fallo: {r}")
-            # El archivo final debe parsear como JSON valido
+            # El archivo final debe ser JSON valido y tener la
+            # instancia regression_r3.
             import json as _json
             parsed = _json.loads(real_path.read_text())
             self.assertIn("instances", parsed)
-            self.assertIn("test_thread", parsed["instances"])
+            self.assertIn("regression_r3", parsed["instances"])
+            # Y no debe haber quedado corrupto de un save parcial.
+            self.assertEqual(
+                parsed["instances"]["regression_r3"]["odoo_version"],
+                "17.0",
+            )
         finally:
-            # Restauramos el archivo real
             if backup is not None:
                 real_path.write_bytes(backup)
             elif real_path.exists():
