@@ -22,30 +22,30 @@ from generators.config_loader import (
     resolve_db_config,
     get_db_host,
     get_unique_odoo_versions,
-    get_managed_databases,
 )
 from generators.dockerfile_generator import generate_dockerfiles
 from generators.compose_generator import generate_compose
 from generators.nginx_generator import generate_nginx_config
-from generators.prompt_utils import prompt_selection
 from generators.pw_helpers import _check_db_exists
+
+from odoo_cli.core.cli_runner import CliRunner
 
 COMPOSE_FILE = "docker-compose.generated.yml"
 
 
-def _docker_compose(*args):
+def _docker_compose(runner, *args):
     """Run docker compose with the generated file."""
     cmd = ["docker", "compose", "-f", COMPOSE_FILE, *args]
-    print(" ".join(cmd))
+    runner.info(" ".join(cmd))
     subprocess.run(cmd)
 
 
-def _get_instance_services(config, instance=None):
+def _get_instance_services(runner, config, instance=None):
     """Get the list of docker compose service names for an instance (or all)."""
     if instance:
         if instance not in config["instances"]:
-            print(f"Error: Instancia '{instance}' no existe en instances.json")
-            print(f"Instancias disponibles: {', '.join(config['instances'].keys())}")
+            runner.error(f"Error: Instancia '{instance}' no existe en instances.json")
+            runner.error(f"Instancias disponibles: {', '.join(config['instances'].keys())}")
             sys.exit(1)
         return [f"odoo-{instance}"]
     return [f"odoo-{name}" for name in config["instances"]]
@@ -75,7 +75,7 @@ def _get_db_services(config, instance=None):
 # ============================================================
 
 
-def validate_instances(config):
+def validate_instances(runner, config):
     """Validate instances.json for duplicate ports and valid configuration."""
     ports_seen = {}
     errors = []
@@ -110,10 +110,10 @@ def validate_instances(config):
             errors.append(f"La instancia '{name}' usa la base de datos '{db_name}' que no está definida en 'databases'.")
 
     if errors:
-        print("\n\033[1;31m=== ❌ ERROR DE VALIDACIÓN EN instances.json ===\033[0m\n")
+        runner.error("\n=== ❌ ERROR DE VALIDACIÓN EN instances.json ===\n")
         for err in errors:
-            print(f"  - {err}")
-        print()
+            runner.error(f"  - {err}")
+        runner.error("")
         sys.exit(1)
 
 
@@ -122,13 +122,13 @@ def validate_instances(config):
 # ============================================================
 
 
-def build_odoo(config, no_cache):
+def build_odoo(runner, config, no_cache):
     """Generate all config files and build Docker images."""
-    print("\n\033[1;94m=== 🛠️  GENERANDO CONFIGURACIONES Y CONSTRUYENDO IMÁGENES ===\033[0m\n")
+    runner.info("\n=== 🛠️  GENERANDO CONFIGURACIONES Y CONSTRUYENDO IMÁGENES ===\n")
 
     # 1. Generate Dockerfiles for each unique Odoo version
     unique_versions = get_unique_odoo_versions(config)
-    print(f"Versiones de Odoo detectadas: {', '.join(sorted(unique_versions))}")
+    runner.info(f"Versiones de Odoo detectadas: {', '.join(sorted(unique_versions))}")
     dockerfile_map = generate_dockerfiles(BASE_PATH, unique_versions)
 
     # 2. Generate docker-compose.generated.yml
@@ -138,33 +138,33 @@ def build_odoo(config, no_cache):
     generate_nginx_config(BASE_PATH, config)
 
     # 4. Build images
-    print("\n=== Construyendo imágenes Docker ===\n")
+    runner.info("\n=== Construyendo imágenes Docker ===\n")
     if no_cache:
-        _docker_compose("build", "--no-cache")
+        _docker_compose(runner, "build", "--no-cache")
     else:
-        _docker_compose("build")
+        _docker_compose(runner, "build")
 
-    print("\n✅ Build completado.\n")
+    runner.info("\n✅ Build completado.\n")
 
 
-def start_odoo(config, instance=None):
+def start_odoo(runner, config, instance=None):
     """Start database(s), Odoo instance(s), and nginx."""
     if instance:
-        print(f"\n\033[1;32m=== ▶️  INICIANDO INSTANCIA: {instance.upper()} ===\033[0m\n")
+        runner.info(f"\n=== ▶️  INICIANDO INSTANCIA: {instance.upper()} ===\n")
     else:
-        print("\n\033[1;32m=== ▶️  INICIANDO TODAS LAS INSTANCIAS ===\033[0m\n")
+        runner.info("\n=== ▶️  INICIANDO TODAS LAS INSTANCIAS ===\n")
 
     db_services = _get_db_services(config, instance)
-    odoo_services = _get_instance_services(config, instance)
+    odoo_services = _get_instance_services(runner, config, instance)
 
     # Start managed DBs
     if db_services:
-        print("→ Iniciando base(s) de datos...")
-        _docker_compose("up", "-d", *db_services)
+        runner.info("→ Iniciando base(s) de datos...")
+        _docker_compose(runner, "up", "-d", *db_services)
 
     # Start Odoo instances
-    print("\n→ Iniciando instancia(s) Odoo...")
-    _docker_compose("up", "-d", *odoo_services)
+    runner.info("\n→ Iniciando instancia(s) Odoo...")
+    _docker_compose(runner, "up", "-d", *odoo_services)
 
     # Fix filestore permissions
     for svc in odoo_services:
@@ -177,26 +177,26 @@ def start_odoo(config, instance=None):
             pass
 
     # Start nginx
-    print("\n→ Iniciando Nginx...")
+    runner.info("\n→ Iniciando Nginx...")
     subprocess.run(["docker", "rm", "-f", "odoo-nginx"], stderr=subprocess.DEVNULL)
-    _docker_compose("up", "-d", "nginx")
+    _docker_compose(runner, "up", "-d", "nginx")
 
     # Show URLs
-    print("\n✅ Instancias en ejecución:\n")
+    runner.info("\n✅ Instancias en ejecución:\n")
     instances_to_show = [instance] if instance else config["instances"].keys()
     for name in instances_to_show:
         port = config["instances"][name]["external_port"]
-        print(f"  • {name}: http://localhost:{port}")
+        runner.info(f"  • {name}: http://localhost:{port}")
 
-    print()
+    runner.info("")
 
 
-def stop_odoo(config, instance=None):
+def stop_odoo(runner, config, instance=None):
     """Stop Odoo instance(s) and optionally their databases."""
     if instance:
-        print(f"\n\033[1;33m=== ⏹️  DETENIENDO INSTANCIA: {instance.upper()} ===\033[0m\n")
-        odoo_services = _get_instance_services(config, instance)
-        _docker_compose("stop", *odoo_services)
+        runner.warn(f"\n=== ⏹️  DETENIENDO INSTANCIA: {instance.upper()} ===\n")
+        odoo_services = _get_instance_services(runner, config, instance)
+        _docker_compose(runner, "stop", *odoo_services)
         # Check if the DB is still used by other running instances
         db_name = config["instances"][instance]["database"]
         db_conf = config["databases"][db_name]
@@ -206,55 +206,53 @@ def stop_odoo(config, instance=None):
                 if conf["database"] == db_name and name != instance
             ]
             if not other_users:
-                print(f"\n→ Deteniendo base de datos {db_name} (sin otras instancias que la usen)...")
-                _docker_compose("stop", f"db-{db_name}")
+                runner.info(f"\n→ Deteniendo base de datos {db_name} (sin otras instancias que la usen)...")
+                _docker_compose(runner, "stop", f"db-{db_name}")
             else:
-                print(f"\n→ Base de datos {db_name} no se detiene (usada por: {', '.join(other_users)})")
+                runner.info(f"\n→ Base de datos {db_name} no se detiene (usada por: {', '.join(other_users)})")
     else:
-        print("\n\033[1;33m=== ⏹️  DETENIENDO TODAS LAS INSTANCIAS ===\033[0m\n")
-        _docker_compose("down")
+        runner.warn("\n=== ⏹️  DETENIENDO TODAS LAS INSTANCIAS ===\n")
+        _docker_compose(runner, "down")
 
-    print("\n🛑 Detenido.\n")
+    runner.info("\n🛑 Detenido.\n")
 
 
-def restart_odoo(config, instance=None):
+def restart_odoo(runner, config, instance=None):
     """Restart Odoo instance(s)."""
     if instance:
-        print(f"\n\033[1;36m=== 🔄 REINICIANDO INSTANCIA: {instance.upper()} ===\033[0m\n")
+        runner.info(f"\n=== 🔄 REINICIANDO INSTANCIA: {instance.upper()} ===\n")
     else:
-        print("\n\033[1;36m=== 🔄 REINICIANDO TODAS LAS INSTANCIAS ===\033[0m\n")
-    stop_odoo(config, instance)
-    start_odoo(config, instance)
+        runner.info("\n=== 🔄 REINICIANDO TODAS LAS INSTANCIAS ===\n")
+    stop_odoo(runner, config, instance)
+    start_odoo(runner, config, instance)
 
 
-def remove_odoo(config, instance=None):
+def remove_odoo(runner, config, instance=None):
     """Remove containers and volumes."""
     if instance:
         target = f"instancia '\033[91m{instance}\033[0m'"
     else:
         target = "\033[91mTODAS\033[0m las instancias y bases de datos"
 
-    print(f"\n⚠️  \033[1mPELIGRO\033[0m: Esto eliminará {target} y sus volúmenes de datos.")
-    do_continue = input("¿Estás seguro de que deseas continuar? (s/N): ")
-    if do_continue.lower() != "s":
-        print("\nOperación cancelada.")
+    runner.warn(f"\n⚠️  \033[1mPELIGRO\033[0m: Esto eliminará {target} y sus volúmenes de datos.")
+    if not runner.confirm("¿Estás seguro de que deseas continuar?", default=False):
+        runner.info("\nOperación cancelada.")
         return
 
     if instance:
-        odoo_services = _get_instance_services(config, instance)
+        odoo_services = _get_instance_services(runner, config, instance)
         for svc in odoo_services:
             subprocess.run(["docker", "compose", "-f", COMPOSE_FILE, "rm", "-s", "-v", "-f", svc])
     else:
-        _docker_compose("down", "-v", "--remove-orphans")
+        _docker_compose(runner, "down", "-v", "--remove-orphans")
 
-    print("\n🛑 Eliminado.\n")
+    runner.info("\n🛑 Eliminado.\n")
 
-    do_restart = input("¿Deseas levantar el entorno nuevamente en blanco? (S/n): ")
-    if do_restart.lower() != "n":
-        start_odoo(config, instance)
+    if runner.confirm("¿Deseas levantar el entorno nuevamente en blanco?", default=True):
+        start_odoo(runner, config, instance)
 
 
-def run_bash(config, instance):
+def run_bash(runner, config, instance):
     """Open bash in an Odoo instance container."""
     container = f"odoo-{instance}"
     # Check if container is running
@@ -265,52 +263,52 @@ def run_bash(config, instance):
     is_running = result.stdout.strip()
 
     if is_running != "true":
-        print(f"\n❌ El contenedor '{container}' no está en ejecución.")
-        print(f"Prueba iniciando la instancia con: ./odoo start {instance}")
+        runner.error(f"\n❌ El contenedor '{container}' no está en ejecución.")
+        runner.error(f"Prueba iniciando la instancia con: ./odoo start {instance}")
         return
 
-    print(f"\n\033[1;34m=== 🐚 ABRIENDO BASH EN: {instance.upper()} ===\033[0m\n")
+    runner.info(f"\n=== 🐚 ABRIENDO BASH EN: {instance.upper()} ===\n")
     subprocess.run(["docker", "exec", "-u", "root", "-it", container, "bash"])
 
 
-def bash_update_modules(config, instance, dbname, modules="all"):
+def bash_update_modules(runner, config, instance, dbname, modules="all"):
     """Update Odoo modules in an instance."""
-    print(f"\n\033[1;35m=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
+    runner.info(f"\n=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\n")
     container = f"odoo-{instance}"
     cmd = ["docker", "exec", container, "odoo", "--stop-after-init", "--http-port", "9999", "--workers=0", "-u", modules, "-d", dbname]
-    print(" ".join(cmd))
+    runner.info(" ".join(cmd))
     return subprocess.run(cmd).returncode
 
 
-def show_logs(config, instance=None):
+def show_logs(runner, config, instance=None):
     """Show logs for instance(s)."""
     if instance:
-        print(f"\n\033[1;36m=== 📋 MOSTRANDO LOGS DE: {instance.upper()} ===\033[0m\n")
-        services = _get_instance_services(config, instance)
+        runner.info(f"\n=== 📋 MOSTRANDO LOGS DE: {instance.upper()} ===\n")
+        services = _get_instance_services(runner, config, instance)
         db_services = _get_db_services(config, instance)
         all_services = db_services + services
-        _docker_compose("logs", "--tail=10", "-f", *all_services)
+        _docker_compose(runner, "logs", "--tail=10", "-f", *all_services)
     else:
-        print("\n\033[1;36m=== 📋 MOSTRANDO TODOS LOS LOGS ===\033[0m\n")
-        _docker_compose("logs", "--tail=10", "-f")
+        runner.info("\n=== 📋 MOSTRANDO TODOS LOS LOGS ===\n")
+        _docker_compose(runner, "logs", "--tail=10", "-f")
 
 
-def list_containers(config):
+def list_containers(runner, config):
     """List running containers."""
-    print("\n\033[1;32m=== 🐳 CONTENEDORES EN EJECUCIÓN ===\033[0m\n")
-    _docker_compose("ps")
+    runner.info("\n=== 🐳 CONTENEDORES EN EJECUCIÓN ===\n")
+    _docker_compose(runner, "ps")
 
 
-def fix_filestore(config, instance=None):
+def fix_filestore(runner, config, instance=None):
     """Fix filestore ownership."""
     if instance:
-        print(f"\n\033[1;33m=== 🔧 CORRIGIENDO PERMISOS: {instance.upper()} ===\033[0m\n")
+        runner.warn(f"\n=== 🔧 CORRIGIENDO PERMISOS: {instance.upper()} ===\n")
     else:
-        print("\n\033[1;33m=== 🔧 CORRIGIENDO PERMISOS EN TODAS LAS INSTANCIAS ===\033[0m\n")
+        runner.warn("\n=== 🔧 CORRIGIENDO PERMISOS EN TODAS LAS INSTANCIAS ===\n")
 
-    services = _get_instance_services(config, instance)
+    services = _get_instance_services(runner, config, instance)
     for svc in services:
-        print(f"→ Corrigiendo permisos en {svc}...")
+        runner.info(f"→ Corrigiendo permisos en {svc}...")
         try:
             subprocess.run(
                 ["docker", "exec", "-u", "root", svc, "chown", "-R", "odoo:odoo", "/home/odoo/data"],
@@ -318,10 +316,10 @@ def fix_filestore(config, instance=None):
             )
         except Exception:
             pass
-    print("\n✅ Permisos corregidos.\n")
+    runner.info("\n✅ Permisos corregidos.\n")
 
 
-def psql_connect(config, instance, dbname):
+def psql_connect(runner, config, instance, dbname):
     """Connect to psql in an instance."""
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
@@ -331,7 +329,7 @@ def psql_connect(config, instance, dbname):
     db_port = db_conf["port"]
     container = f"odoo-{instance}"
 
-    print(f"\n\033[1;34m=== 🐘 CONECTANDO PSQL A: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
+    runner.info(f"\n=== 🐘 CONECTANDO PSQL A: {instance.upper()} (DB: {dbname}) ===\n")
     subprocess.run(
         ["docker", "exec", "-it", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname],
         env={**os.environ, "PGPASSWORD": db_password},
@@ -370,9 +368,9 @@ def prompt_for_branch(repo_name=None):
     return branch
 
 
-def reset_password(config, instance, dbname, login, password):
+def reset_password(runner, config, instance, dbname, login, password):
     """Reset user password in database."""
-    print(f"\n\033[1;35m=== 🔑 RESTABLECIENDO CONTRASEÑA EN: {instance.upper()} (Usuario: {login}) ===\033[0m\n")
+    runner.info(f"\n=== 🔑 RESTABLECIENDO CONTRASEÑA EN: {instance.upper()} (Usuario: {login}) ===\n")
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
@@ -390,8 +388,8 @@ def reset_password(config, instance, dbname, login, password):
     )
     if not existe:
         bases_str = ", ".join(disponibles) if disponibles else "(no se pudo listar)"
-        print(
-            f"\n\033[1;31m✗ La base de datos '{dbname}' no existe en la instancia '{instance}'.\033[0m"
+        runner.error(
+            f"\n✗ La base de datos '{dbname}' no existe en la instancia '{instance}'."
             f"\nBases disponibles en '{instance}': {bases_str}\n"
         )
         sys.exit(1)
@@ -400,7 +398,7 @@ def reset_password(config, instance, dbname, login, password):
     # detectar typos de mayúsculas (login en Odoo es case-sensitive). Si
     # hay match exacto, ok. Si solo hay case-insensitive, sugerimos el
     # case correcto. Si no hay match, listamos los logins disponibles.
-    print(f"\n→ Verificando que el usuario '{login}' exista...")
+    runner.info(f"\n→ Verificando que el usuario '{login}' exista...")
     safe_login_lit = "'{}'".format(login.replace("'", "''"))
     check_sql = (
         f"SELECT id, login, active FROM res_users "
@@ -414,7 +412,7 @@ def reset_password(config, instance, dbname, login, password):
         text=True,
     )
     if check_proc.returncode != 0:
-        print(f"\n\033[1;31m✗ Error verificando usuario (código {check_proc.returncode}).\033[0m\n")
+        runner.error(f"\n✗ Error verificando usuario (código {check_proc.returncode}).\n")
         sys.exit(check_proc.returncode)
     if not check_proc.stdout.strip():
         # Login no existe exacto. Buscar case-insensitive para sugerir el
@@ -433,26 +431,26 @@ def reset_password(config, instance, dbname, login, password):
             text=True,
         )
         exact_ci = (suggest_proc.stdout or "").strip()
-        print(
-            f"\n\033[1;31m✗ El usuario '{login}' no existe en esta base de datos.\033[0m"
+        runner.error(
+            f"\n✗ El usuario '{login}' no existe en esta base de datos."
         )
         if exact_ci and exact_ci != login:
-            print(
-                f"  \033[1;33m→ ¿Quisiste decir '{exact_ci}'? (el login es case-sensitive)\033[0m"
+            runner.warn(
+                f"  → ¿Quisiste decir '{exact_ci}'? (el login es case-sensitive)"
             )
         else:
-            print(
-                f"  \033[2mVerificá los logins con: docker exec {container} psql -U {db_user} -d {dbname} "
-                f"-c \"SELECT login FROM res_users;\"\033[0m"
+            runner.info(
+                f"  Verificá los logins con: docker exec {container} psql -U {db_user} -d {dbname} "
+                f"-c \"SELECT login FROM res_users;\""
             )
-        print(
+        runner.error(
             f"\n  Volvé a correr el comando con el login correcto. "
             f"Ej: ./odoo pw {instance} -d {dbname} -l <login> -p <password>\n"
         )
         sys.exit(1)
 
     safe_pw = "'{}'".format(password.replace("'", "''"))
-    print(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
+    runner.info(f"\n→ Restableciendo contraseña para el usuario '{login}' en la base de datos '{dbname}'...")
     sql = f"update res_users set password = {safe_pw} where login = {safe_login_lit};"
     proc = subprocess.run(
         ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port), "-U", db_user, "-d", dbname, "-c", sql],
@@ -461,26 +459,26 @@ def reset_password(config, instance, dbname, login, password):
         text=True,
     )
     if proc.returncode != 0:
-        print(f"\n\033[1;31m✗ Error ejecutando psql (código {proc.returncode}). Contraseña NO actualizada.\033[0m\n")
+        runner.error(f"\n✗ Error ejecutando psql (código {proc.returncode}). Contraseña NO actualizada.\n")
         sys.exit(proc.returncode)
     if "UPDATE 0" in (proc.stdout or ""):
         # Caso raro: el login existia al validar pero desapareció entre el
         # SELECT y el UPDATE (probable carrera con otro proceso). Reportar
         # para no mentir.
-        print(
-            f"\n\033[1;31m✗ El UPDATE no afectó filas (carrera con otro proceso?).\033[0m"
+        runner.error(
+            f"\n✗ El UPDATE no afectó filas (carrera con otro proceso?)."
             f"\n  Contraseña NO actualizada.\n"
         )
         sys.exit(1)
-    print("✅ Contraseña actualizada.\n")
+    runner.info("✅ Contraseña actualizada.\n")
 
 
-def init_addons(config, instance=None):
+def init_addons(runner, config, instance=None):
     """Clone required repositories for instance(s)."""
     if instance:
-        print(f"\n\033[1;35m=== 📦 INICIALIZANDO ADDONS EN: {instance.upper()} ===\033[0m\n")
+        runner.info(f"\n=== 📦 INICIALIZANDO ADDONS EN: {instance.upper()} ===\n")
     else:
-        print("\n\033[1;35m=== 📦 INICIALIZANDO ADDONS EN TODAS LAS INSTANCIAS ===\033[0m\n")
+        runner.info("\n=== 📦 INICIALIZANDO ADDONS EN TODAS LAS INSTANCIAS ===\n")
 
     instances_to_init = [instance] if instance else list(config["instances"].keys())
     sources_path = os.path.join(BASE_PATH, "src")
@@ -491,52 +489,52 @@ def init_addons(config, instance=None):
         addons = odoo_conf.get("addons", [])
         odoo_version = inst_conf["odoo_version"]
 
-        print(f"\n=== Init para instancia: {inst_name} (Odoo {odoo_version}) ===")
+        runner.info(f"\n=== Init para instancia: {inst_name} (Odoo {odoo_version}) ===")
         for addon_path in addons:
             # addon_path is like "src/enterprise" or "src/custom/<instance-name>"
             local_path = os.path.join(BASE_PATH, addon_path)
             if os.path.isdir(local_path):
-                print(f"  ✓ {addon_path} ya existe")
+                runner.info(f"  ✓ {addon_path} ya existe")
             else:
-                print(f"  → {addon_path} no encontrado. Créalo manualmente o clona el repositorio correspondiente en {local_path}")
+                runner.info(f"  → {addon_path} no encontrado. Créalo manualmente o clona el repositorio correspondiente en {local_path}")
 
-    print()
+    runner.info("")
 
 
-def sync(repo_names, branch, show=False):
+def sync(runner, repo_names, branch, show=False):
     """Sync repositories and their submodules."""
-    print(f"\n\033[1;36m=== 🔄 SINCRONIZANDO REPOSITORIOS (Rama: {branch}) ===\033[0m\n")
+    runner.info(f"\n=== 🔄 SINCRONIZANDO REPOSITORIOS (Rama: {branch}) ===\n")
     if isinstance(repo_names, str):
         repo_names = [repo_names]
 
     for repo_name in repo_names:
         repo_path = os.path.join(BASE_PATH, "src", "custom", repo_name)
         if not os.path.isdir(repo_path):
-            print(f"Error: Repositorio '{repo_name}' no encontrado en src/custom/")
+            runner.error(f"Error: Repositorio '{repo_name}' no encontrado en src/custom/")
             continue
 
-        print(f"\n=== Sincronizando {repo_name} (Rama: {branch}) ===")
+        runner.info(f"\n=== Sincronizando {repo_name} (Rama: {branch}) ===")
         os.chdir(repo_path)
 
         stdout = subprocess.DEVNULL if not show else None
 
         try:
-            print(f"→ Guardando cambios locales (stash)...")
+            runner.info(f"→ Guardando cambios locales (stash)...")
             subprocess.run(["git", "stash"], stdout=stdout)
 
-            print(f"→ Cambiando a rama {branch}...")
+            runner.info(f"→ Cambiando a rama {branch}...")
             subprocess.run(["git", "checkout", branch], stdout=stdout)
 
-            print(f"→ Trayendo últimos cambios (pull)...")
+            runner.info(f"→ Trayendo últimos cambios (pull)...")
             subprocess.run(["git", "pull", "origin", branch], stdout=stdout)
 
-            print(f"→ Actualizando submódulos (init --recursive)...")
+            runner.info(f"→ Actualizando submódulos (init --recursive)...")
             # Using --init --recursive to ensure all levels are updated
             subprocess.run(["git", "submodule", "update", "--init", "--recursive"], stdout=stdout)
 
-            print(f"✅ {repo_name} sincronizado.")
+            runner.info(f"✅ {repo_name} sincronizado.")
         except Exception as e:
-            print(f"❌ Error sincronizando {repo_name}: {e}")
+            runner.error(f"❌ Error sincronizando {repo_name}: {e}")
         finally:
             os.chdir(BASE_PATH)
 
@@ -875,7 +873,7 @@ def _instance_has_db(instance, dbname, config):
     return "1" in (proc.stdout or "").strip().splitlines()
 
 
-def _resolve_instance_for_action(config, args):
+def _resolve_instance_for_action(runner, config, args):
     """Decide que instancia usar para ``args.action``.
 
     - Si el usuario ya paso la instancia posicionalmente, devolverla.
@@ -896,14 +894,14 @@ def _resolve_instance_for_action(config, args):
             if _instance_has_db(inst, dbname, config)
         ]
         if len(candidatas) == 1:
-            print(
-                f"\n\033[1;36mℹ La base de datos '{dbname}' solo existe en "
-                f"la instancia '{candidatas[0]}'. Usando esa.\033[0m\n"
+            runner.info(
+                f"\nℹ La base de datos '{dbname}' solo existe en "
+                f"la instancia '{candidatas[0]}'. Usando esa.\n"
             )
             return candidatas[0]
         if len(candidatas) > 1:
             options = [(name, name) for name in candidatas]
-            print(
+            runner.info(
                 f"\nLa base de datos '{dbname}' existe en varias "
                 f"instancias. Selecciona una:"
             )
@@ -951,6 +949,7 @@ def main():
         description="Multi-instance Odoo Docker management CLI."
     )
     subparsers = parser.add_subparsers(dest="action", help="Comandos disponibles")
+    runner = CliRunner()
 
     # build
     build_p = subparsers.add_parser("build", help="Genera configs y construye imágenes Docker")
@@ -1035,7 +1034,7 @@ def main():
     config = load_config(BASE_PATH)
 
     # Validate instances.json
-    validate_instances(config)
+    validate_instances(runner, config)
 
     actions_with_instance = {
         "start", "stop", "restart", "logs", "remove",
@@ -1043,37 +1042,37 @@ def main():
     }
 
     if args.action in actions_with_instance and getattr(args, "instance", None) is None:
-        args.instance = _resolve_instance_for_action(config, args)
+        args.instance = _resolve_instance_for_action(runner, config, args)
 
     # Dispatch
     if args.action == "build":
-        build_odoo(config, args.no_cache)
+        build_odoo(runner, config, args.no_cache)
     elif args.action == "start":
-        start_odoo(config, args.instance)
+        start_odoo(runner, config, args.instance)
     elif args.action == "stop":
-        stop_odoo(config, args.instance)
+        stop_odoo(runner, config, args.instance)
     elif args.action == "restart":
-        restart_odoo(config, args.instance)
+        restart_odoo(runner, config, args.instance)
     elif args.action == "bash":
-        run_bash(config, args.instance)
+        run_bash(runner, config, args.instance)
     elif args.action == "logs":
-        show_logs(config, args.instance)
+        show_logs(runner, config, args.instance)
     elif args.action == "list":
-        list_containers(config)
+        list_containers(runner, config)
     elif args.action == "remove":
-        remove_odoo(config, args.instance)
+        remove_odoo(runner, config, args.instance)
     elif args.action == "fix-files":
-        fix_filestore(config, args.instance)
+        fix_filestore(runner, config, args.instance)
     elif args.action == "psql":
         if args.d is None:
             args.d = prompt_for_database(config, args.instance)
-        psql_connect(config, args.instance, args.d)
+        psql_connect(runner, config, args.instance, args.d)
     elif args.action == "pw":
         if args.d is None:
             args.d = prompt_for_database(config, args.instance)
         if args.l is None:
             args.l = prompt_for_user(config, args.instance, args.d)
-        reset_password(config, args.instance, args.d, args.l, args.password)
+        reset_password(runner, config, args.instance, args.d, args.l, args.password)
     elif args.action == "update":
         if args.instance is None:
             args.instance = prompt_for_instance(config, "update")
@@ -1084,32 +1083,32 @@ def main():
         if args.d.strip().lower() == "all":
             databases = get_databases(config, args.instance)
             if not databases:
-                print("No se encontraron bases de datos para actualizar.")
+                runner.error("No se encontraron bases de datos para actualizar.")
                 sys.exit(1)
 
             failures = []
             for db_name in databases:
-                result = bash_update_modules(config, args.instance, db_name, args.m)
+                result = bash_update_modules(runner, config, args.instance, db_name, args.m)
                 if result != 0:
                     failures.append((db_name, result))
 
             if failures:
-                print("\n❌ Algunas bases fallaron durante la actualización:")
+                runner.error("\n❌ Algunas bases fallaron durante la actualización:")
                 for db_name, code in failures:
-                    print(f"  - {db_name} (exit code: {code})")
+                    runner.error(f"  - {db_name} (exit code: {code})")
                 sys.exit(1)
         else:
-            bash_update_modules(config, args.instance, args.d, args.m)
+            bash_update_modules(runner, config, args.instance, args.d, args.m)
     elif args.action == "init":
-        init_addons(config, args.instance)
+        init_addons(runner, config, args.instance)
     elif args.action == "sync":
         if args.r is None:
             args.r = prompt_for_repos()
         if args.b is None:
             args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
-        sync(args.r, args.b, show=args.v)
+        sync(runner, args.r, args.b, show=args.v)
     elif args.action == "validate-instances":
-        print("\n\033[1;32m✅ El archivo instances.json es válido.\033[0m\n")
+        runner.info("\n✅ El archivo instances.json es válido.\n")
 
     elif args.action == "new":
         cmd = [sys.executable, os.path.join(BASE_PATH, "scripts", "create_instance.py")]
