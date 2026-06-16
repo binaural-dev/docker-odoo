@@ -52,6 +52,9 @@ async def stream_command(
     *,
     on_line: Optional[OnLine] = None,
     on_progress: Optional[OnProgress] = None,
+    terminate_grace: float = _TERMINATE_GRACE,
+    kill_grace: float = _KILL_GRACE,
+    proc_wait_timeout: float = _PROC_WAIT_TIMEOUT,
 ) -> int:
     """Run ``argv`` in ``cwd`` and stream stdout line by line.
 
@@ -64,6 +67,11 @@ async def stream_command(
         on_progress: Sync callback called for every line that contains a
             ``(N/M)`` progress marker. Skipped silently if ``on_line``
             already saw the line (the runner only parses once per line).
+        terminate_grace: Seconds to wait for a SIGTERM'd process to exit
+            before escalating to SIGKILL.
+        kill_grace: Seconds to wait for a SIGKILL'd process to exit.
+        proc_wait_timeout: Seconds to wait for the subprocess to finish
+            on its own; if it exceeds this, we SIGKILL.
 
     Returns:
         Process return code.
@@ -92,7 +100,7 @@ async def stream_command(
 
     if proc.stdout is None:
         # Should not happen with PIPE, but be defensive.
-        return await _wait_with_timeout(proc)
+        return await _wait_with_timeout(proc, proc_wait_timeout, kill_grace)
 
     try:
         # Per-line loop. ``readline()`` returns ``b""`` at EOF, which is
@@ -128,22 +136,26 @@ async def stream_command(
                             file=sys.stderr,
                         )
     except asyncio.CancelledError:
-        await _terminate_and_reap(proc)
+        await _terminate_and_reap(proc, terminate_grace, kill_grace)
         raise
 
     # Drain a final wait under a timeout in case the process hangs after
     # closing its stdout. If it really hangs, SIGKILL.
     try:
-        return await _wait_with_timeout(proc)
+        return await _wait_with_timeout(proc, proc_wait_timeout, kill_grace)
     except asyncio.CancelledError:
-        await _terminate_and_reap(proc)
+        await _terminate_and_reap(proc, terminate_grace, kill_grace)
         raise
 
 
-async def _wait_with_timeout(proc: "asyncio.subprocess.Process") -> int:
-    """``await proc.wait()`` bounded by ``_PROC_WAIT_TIMEOUT``."""
+async def _wait_with_timeout(
+    proc: "asyncio.subprocess.Process",
+    proc_wait_timeout: float = _PROC_WAIT_TIMEOUT,
+    kill_grace: float = _KILL_GRACE,
+) -> int:
+    """``await proc.wait()`` bounded by ``proc_wait_timeout``."""
     try:
-        return await asyncio.wait_for(proc.wait(), timeout=_PROC_WAIT_TIMEOUT)
+        return await asyncio.wait_for(proc.wait(), timeout=proc_wait_timeout)
     except asyncio.TimeoutError:
         # Process is wedged. SIGKILL and wait briefly.
         try:
@@ -151,14 +163,18 @@ async def _wait_with_timeout(proc: "asyncio.subprocess.Process") -> int:
         except ProcessLookupError:
             pass
         try:
-            return await asyncio.wait_for(proc.wait(), timeout=_KILL_GRACE)
+            return await asyncio.wait_for(proc.wait(), timeout=kill_grace)
         except asyncio.TimeoutError:
             # If it still won't die, return a sentinel that signals
             # "killed by us" so the caller can log it.
             return -9
 
 
-async def _terminate_and_reap(proc: "asyncio.subprocess.Process") -> None:
+async def _terminate_and_reap(
+    proc: "asyncio.subprocess.Process",
+    terminate_grace: float = _TERMINATE_GRACE,
+    kill_grace: float = _KILL_GRACE,
+) -> None:
     """SIGTERM the proc, wait grace period, escalate to SIGKILL on timeout."""
     if proc.returncode is not None:
         return  # already done
@@ -167,7 +183,7 @@ async def _terminate_and_reap(proc: "asyncio.subprocess.Process") -> None:
     except ProcessLookupError:
         return
     try:
-        await asyncio.wait_for(proc.wait(), timeout=_TERMINATE_GRACE)
+        await asyncio.wait_for(proc.wait(), timeout=terminate_grace)
         return
     except asyncio.TimeoutError:
         pass
@@ -176,14 +192,20 @@ async def _terminate_and_reap(proc: "asyncio.subprocess.Process") -> None:
     except ProcessLookupError:
         return
     try:
-        await asyncio.wait_for(proc.wait(), timeout=_KILL_GRACE)
+        await asyncio.wait_for(proc.wait(), timeout=kill_grace)
     except asyncio.TimeoutError:
         # Give up; the process is a zombie at this point. Don't block
         # the cancel propagation forever.
         pass
 
 
-async def run_interactive(argv: list, cwd: str) -> int:
+async def run_interactive(
+    argv: list,
+    cwd: str,
+    *,
+    proc_wait_timeout: float = _PROC_WAIT_TIMEOUT,
+    kill_grace: float = _KILL_GRACE,
+) -> int:
     """Run ``argv`` in ``cwd`` and return its exit code (no streaming).
 
     Used by the TUI's "interactive" actions (bash, logs, psql) that
@@ -193,4 +215,4 @@ async def run_interactive(argv: list, cwd: str) -> int:
     from the worker pool.
     """
     proc = await asyncio.create_subprocess_exec(*argv, cwd=cwd)
-    return await _wait_with_timeout(proc)
+    return await _wait_with_timeout(proc, proc_wait_timeout, kill_grace)

@@ -28,6 +28,7 @@ import io
 import os
 import subprocess
 import sys
+import time
 import unittest
 from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
@@ -753,6 +754,51 @@ class TuiProgressIntegrationTest(unittest.TestCase):
         app = DockerOdooApp()
         self.assertFalse(
             app._is_update_with_modules(start_action, {})
+        )
+
+    def test_cancel_kills_zombie(self):
+        """Sim 11: un proceso que ignora SIGTERM debe morir por SIGKILL
+        dentro del grace + kill grace. Usamos timeouts cortos (1s+1s)
+        para que el test corra rapido.
+        """
+        from tui.runner import stream_command
+
+        async def go():
+            # trap '' TERM ignora SIGTERM; sleep 60 bloquea
+            argv = ["sh", "-c", "trap '' TERM; sleep 60"]
+
+            async def runner_task():
+                return await stream_command(
+                    argv,
+                    str(REPO_ROOT),
+                    on_line=lambda _line: None,
+                    terminate_grace=1.0,
+                    kill_grace=1.0,
+                )
+
+            t0 = time.monotonic()
+            task = asyncio.create_task(runner_task())
+            # Dejamos que arranque
+            await asyncio.sleep(0.3)
+            task.cancel()
+            try:
+                await task
+                cancelled = False
+            except asyncio.CancelledError:
+                cancelled = True
+            elapsed = time.monotonic() - t0
+            return {"cancelled": cancelled, "elapsed": elapsed}
+
+        result = asyncio.run(go())
+        self.assertTrue(
+            result["cancelled"],
+            f"el runner no propagó CancelledError: {result}",
+        )
+        # Total: 0.3s arranque + 1.0s SIGTERM grace + 1.0s SIGKILL grace
+        # = ~2.3s. Permitimos hasta 4s para CI lento.
+        self.assertLess(
+            result["elapsed"], 4.0,
+            f"cancel tomó demasiado: {result['elapsed']:.2f}s (esperado <4s)",
         )
 
 
