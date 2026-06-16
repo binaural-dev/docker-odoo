@@ -28,6 +28,15 @@ from odoo_cli.core.instance import (
     get_instance_services,
     get_users,
 )
+from odoo_cli.core.prompts import (
+    prompt_for_branch,
+    prompt_for_database,
+    prompt_for_instance,
+    prompt_for_modules,
+    prompt_for_repos,
+    prompt_for_user,
+    prompt_selection,
+)
 from odoo_cli.core.runner import Runner
 
 __all__ = [
@@ -40,4 +49,11 @@ __all__ = [
     "get_db_services",
     "get_instance_services",
     "get_users",
+    "prompt_for_branch",
+    "prompt_for_database",
+    "prompt_for_instance",
+    "prompt_for_modules",
+    "prompt_for_repos",
+    "prompt_for_user",
+    "prompt_selection",
 ]

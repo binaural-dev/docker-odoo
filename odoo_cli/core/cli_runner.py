@@ -72,7 +72,7 @@ class CliRunner:
         try:
             from odoo_cli.core.prompts import prompt_selection
 
-            return prompt_selection(options, title, multi=False)
+            return prompt_selection(self, options, title, multi=False)
         except ImportError:
             # prompts module not yet extracted (commits 1-5); use a
             # dumb numbered fallback that is enough to drive tests.
@@ -104,7 +104,7 @@ class CliRunner:
         try:
             from odoo_cli.core.prompts import prompt_selection
 
-            return prompt_selection(options, title, multi=True)
+            return prompt_selection(self, options, title, multi=True)
         except ImportError:
             if not options:
                 return []
