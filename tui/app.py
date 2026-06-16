@@ -99,6 +99,14 @@ class DockerOdooApp(App):
         # timeout).
         self._current_task: Optional[asyncio.Task] = None
         self._progress_label: str = ""
+        # Cache of frequently-queried widgets. ``query_one`` does a
+        # CSS selector walk every call; during a streaming run we
+        # hit it once per line. Populated in ``on_mount`` once the
+        # widgets exist on the DOM.
+        self._output_widget: Optional[RichLog] = None
+        self._update_widget: Optional[UpdateProgress] = None
+        self._instances_list: Optional[ListView] = None
+        self._actions_list: Optional[ListView] = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -116,6 +124,26 @@ class DockerOdooApp(App):
     def on_mount(self) -> None:
         self.title = "docker-odoo TUI"
         self.sub_title = "Launcher interactivo"
+        # Cache hot-path widgets. query_one does a CSS selector walk
+        # every call; during a streaming run we'd hit it once per line.
+        # We try/except so headless tests that don't mount these
+        # widgets don't crash.
+        try:
+            self._output_widget = self.query_one("#output", RichLog)
+        except Exception:
+            self._output_widget = None
+        try:
+            self._update_widget = self.query_one("#update_progress", UpdateProgress)
+        except Exception:
+            self._update_widget = None
+        try:
+            self._instances_list = self.query_one("#instances_list", ListView)
+        except Exception:
+            self._instances_list = None
+        try:
+            self._actions_list = self.query_one("#actions_list", ListView)
+        except Exception:
+            self._actions_list = None
         if self.dev:
             self._log(f"[yellow]Dev mode activo:[/yellow] dev={self.dev!r}")
         self.refresh_instances()
@@ -145,7 +173,8 @@ class DockerOdooApp(App):
             },
         }
 
-        list_view = self.query_one("#instances_list", ListView)
+        list_view = self._instances_list or self.query_one("#instances_list", ListView)
+        self._instances_list = list_view
         list_view.clear()
         enabled_count = len(self.config["instances"])
         total_count = len(self._raw_config.get("instances", {}))
@@ -207,7 +236,8 @@ class DockerOdooApp(App):
         return self.module_cache[inst_name]
 
     def refresh_actions(self) -> None:
-        list_view = self.query_one("#actions_list", ListView)
+        list_view = self._actions_list or self.query_one("#actions_list", ListView)
+        self._actions_list = list_view
         list_view.clear()
         # Show all categories; user can pick a no-instance action directly.
         # Insertamos un CategoryHeaderItem entre grupos para dar separacion
@@ -240,7 +270,8 @@ class DockerOdooApp(App):
         Solo actualiza in-place el item afectado y la vista filtrada
         (self.config). El save a disco corre en background.
         """
-        list_view = self.query_one("#instances_list", ListView)
+        list_view = self._instances_list or self.query_one("#instances_list", ListView)
+        self._instances_list = list_view
         item = list_view.highlighted_child
         if item is None or not isinstance(item, InstanceItem):
             self._log("[yellow]Space no aplica a 'Todas las instancias'.[/yellow]")
@@ -337,7 +368,9 @@ class DockerOdooApp(App):
             else:
                 self.selected_instance = None
                 self._log("Selección: [b]Todas las instancias[/b]")
-            self.query_one("#actions_list", ListView).focus()
+            al = self._actions_list or self.query_one("#actions_list", ListView)
+            self._actions_list = al
+            al.focus()
         elif event.list_view.id == "actions_list":
             item = event.item
             action = getattr(item, "action", None)
@@ -736,10 +769,14 @@ class DockerOdooApp(App):
         # Mostrar widget de progreso si corresponde
         up: Optional[UpdateProgress] = None
         if use_progress_widget:
-            up = self.query_one("#update_progress", UpdateProgress)
-            up.display = True
-            up.clear()
-            up.filter_levels = set(LOG_LEVELS)
+            try:
+                up = self._update_widget or self.query_one("#update_progress", UpdateProgress)
+            except Exception:
+                up = None
+            if up is not None:
+                up.display = True
+                up.clear()
+                up.filter_levels = set(LOG_LEVELS)
 
         # Throttling constants (kept identical to the pre-refactor values
         # so behaviour matches what the smoke test and ops expect).
@@ -898,7 +935,10 @@ class DockerOdooApp(App):
 
     async def _rebuild_richlog_async(self, up: "UpdateProgress") -> None:
         lines = up.get_filtered_lines()
-        rl = self.query_one("#output", RichLog)
+        try:
+            rl = self._output_widget or self.query_one("#output", RichLog)
+        except Exception:
+            return
         rl.clear()
         # Escribir en chunks con await entremedio para que la UI pueda
         # procesar otros eventos. 200 lineas por chunk es un buen balance
@@ -916,7 +956,7 @@ class DockerOdooApp(App):
     def _toggle_log_level(self, level: str) -> None:
         """Alterna un nivel de log en el UpdateProgress y reconstruye el RichLog."""
         try:
-            up = self.query_one("#update_progress", UpdateProgress)
+            up = self._update_widget or self.query_one("#update_progress", UpdateProgress)
         except Exception:
             return
         if not up.display:
@@ -939,7 +979,7 @@ class DockerOdooApp(App):
     def action_filter_all_levels(self) -> None:
         """Activa todos los niveles [0]."""
         try:
-            up = self.query_one("#update_progress", UpdateProgress)
+            up = self._update_widget or self.query_one("#update_progress", UpdateProgress)
         except Exception:
             return
         if not up.display:
@@ -951,7 +991,7 @@ class DockerOdooApp(App):
     def action_filter_errors_only(self) -> None:
         """Activa solo ERROR y CRITICAL [9]."""
         try:
-            up = self.query_one("#update_progress", UpdateProgress)
+            up = self._update_widget or self.query_one("#update_progress", UpdateProgress)
         except Exception:
             return
         if not up.display:
@@ -962,7 +1002,8 @@ class DockerOdooApp(App):
 
     def _log(self, message: str) -> None:
         try:
-            self.query_one("#output", RichLog).write(message)
+            w = self._output_widget or self.query_one("#output", RichLog)
+            w.write(message)
         except Exception as exc:
             print(f"[TUI _log fallback] {message} (error: {exc})", file=sys.stderr)
 
@@ -973,6 +1014,7 @@ class DockerOdooApp(App):
         el worker acumula un batch.
         """
         try:
-            self.query_one("#output", RichLog).write(message)
+            w = self._output_widget or self.query_one("#output", RichLog)
+            w.write(message)
         except Exception as exc:
             print(f"[TUI _log_bulk fallback] {message[:200]}... (error: {exc})", file=sys.stderr)
