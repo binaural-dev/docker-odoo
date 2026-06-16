@@ -2,269 +2,275 @@
 
 """
 Multi-instance Odoo Docker management CLI.
-Reads instances.json and generates/manages Docker containers for multiple Odoo instances.
+
+Thin dispatcher: parses argparse, builds a :class:`CliRunner`, then
+hands control to :func:`odoo_cli.core.dispatch.dispatch` which calls
+the appropriate action module under :mod:`odoo_cli.core.actions`.
+
+The actual business logic lives in :mod:`odoo_cli.core`. This file
+exists only to:
+
+  1. Build the argparse subparser tree (one per CLI subcommand).
+  2. Bootstrap the runner and the ``BASE_PATH`` / ``sys.path`` so
+     the ``.resources/generators`` modules can be imported.
+  3. Add the ``tui`` subcommand, which delegates to
+     :mod:`tui.__main__`.
+
+Future Textual integration
+--------------------------
+The Textual TUI (in :mod:`tui`) is independent for now: it spawns
+``./odoo <action> ...`` via :mod:`tui.actions`, which means each
+action runs in its own subprocess and prints to the TUI's
+log widget. A future refactor could:
+
+  1. Add a :class:`odoo_cli.core.runner.TextualRunner` that
+     implements the same :class:`Runner` protocol but routes
+     I/O through Textual widgets.
+  2. Have the TUI import :mod:`odoo_cli.core.dispatch` directly
+     and call ``dispatch(textual_runner, args, config, base_path)``
+     from a worker thread.
+
+That would eliminate the per-action subprocess and let the TUI
+control every print/log line in real time. Out of scope for this
+batch.
 """
 
 import argparse
-import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
-# Add .resources to path for generators
+# Add .resources to path so ``from generators.config_loader import ...``
+# works inside the action modules. The same hack is used by the TUI
+# (see ``tui/config.py``).
 BASE_PATH = str(Path(__file__).resolve().parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 
-from generators.config_loader import (
-    load_config,
-)
+from generators.config_loader import load_config
+
 from odoo_cli.core.cli_runner import CliRunner
-from odoo_cli.core.instance import (
-    find_instances_with_db,
-    get_databases,
-)
-from odoo_cli.core.prompts import (
-    prompt_for_branch,
-    prompt_for_database,
-    prompt_for_instance,
-    prompt_for_modules,
-    prompt_for_repos,
-    prompt_for_user,
-    prompt_selection,
-)
 from odoo_cli.core.actions.validate import validate_instances
-from odoo_cli.core.actions.lifecycle import (
-    build_odoo,
-    fix_filestore,
-    remove_odoo,
-    restart_odoo,
-    start_odoo,
-    stop_odoo,
-)
-from odoo_cli.core.actions.access import (
-    list_containers,
-    psql_connect,
-    run_bash,
-    show_logs,
-)
-from odoo_cli.core.actions.maintenance import init_addons, sync
-from odoo_cli.core.actions.modules import reset_password, update
-
-# ============================================================
-# Validation
-# ============================================================
+from odoo_cli.core.dispatch import dispatch
 
 
 # ============================================================
-# Commands
+# Argparse subparser tree
 # ============================================================
 
 
-# ============================================================
-# Main CLI
-# ============================================================
+def _build_parser() -> argparse.ArgumentParser:
+    """Return the full argparse parser with every subcommand wired in.
 
-
-def _resolve_instance_for_action(runner, config, args):
-    """Decide que instancia usar para ``args.action``.
-
-    - Si el usuario ya paso la instancia posicionalmente, devolverla.
-    - Si la accion es 'pw' y paso '-d <dbname>', buscar en todas
-      las instancias cual tiene esa DB. Si hay 0 matches, pedir
-      instancia (comportamiento legacy). Si hay 1 match, devolverla
-      sin prompt. Si hay >1 match, prompt con la lista de candidatas.
-    - Para el resto de acciones, mantener el comportamiento legacy
-      (siempre pedir instancia con prompt_for_instance).
+    Keeping this in its own function (rather than inline in ``main``)
+    makes the parser easy to introspect from tests and from the
+    Textual TUI if it ever wants to introspect the CLI.
     """
-    if getattr(args, "instance", None) is not None:
-        return args.instance
-
-    if args.action == "pw" and getattr(args, "d", None):
-        dbname = args.d
-        candidatas = find_instances_with_db(config, dbname)
-        if len(candidatas) == 1:
-            runner.info(
-                f"\nℹ La base de datos '{dbname}' solo existe en "
-                f"la instancia '{candidatas[0]}'. Usando esa.\n"
-            )
-            return candidatas[0]
-        if len(candidatas) > 1:
-            options = [(name, name) for name in candidatas]
-            runner.info(
-                f"\nLa base de datos '{dbname}' existe en varias "
-                f"instancias. Selecciona una:"
-            )
-            return prompt_selection(
-                runner,
-                options,
-                f"Selecciona instancia que contiene '{dbname}'",
-            )
-
-    return prompt_for_instance(runner, config, args.action)
-
-
-def main():
-    os.chdir(BASE_PATH)
-
     parser = argparse.ArgumentParser(
         description="Multi-instance Odoo Docker management CLI."
     )
-    subparsers = parser.add_subparsers(dest="action", help="Comandos disponibles")
-    runner = CliRunner()
+    subparsers = parser.add_subparsers(
+        dest="action", help="Comandos disponibles"
+    )
 
     # build
-    build_p = subparsers.add_parser("build", help="Genera configs y construye imágenes Docker")
-    build_p.add_argument("--no-cache", action="store_true", help="Construir sin caché")
+    p = subparsers.add_parser(
+        "build", help="Genera configs y construye imágenes Docker"
+    )
+    p.add_argument(
+        "--no-cache", action="store_true", help="Construir sin caché"
+    )
 
     # start
-    start_p = subparsers.add_parser("start", help="Inicia instancia(s) de Odoo")
-    start_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional, sin argumento inicia todas)")
+    p = subparsers.add_parser(
+        "start", help="Inicia instancia(s) de Odoo"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional, sin argumento inicia todas)",
+    )
 
     # stop
-    stop_p = subparsers.add_parser("stop", help="Detiene instancia(s) de Odoo")
-    stop_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    p = subparsers.add_parser(
+        "stop", help="Detiene instancia(s) de Odoo"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
 
     # restart
-    restart_p = subparsers.add_parser("restart", help="Reinicia instancia(s) de Odoo")
-    restart_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    p = subparsers.add_parser(
+        "restart", help="Reinicia instancia(s) de Odoo"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
 
     # bash
-    bash_p = subparsers.add_parser("bash", help="Abre bash en un contenedor Odoo")
-    bash_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    p = subparsers.add_parser(
+        "bash", help="Abre bash en un contenedor Odoo"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
 
     # logs
-    logs_p = subparsers.add_parser("logs", help="Muestra logs en tiempo real")
-    logs_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    p = subparsers.add_parser(
+        "logs", help="Muestra logs en tiempo real"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
 
     # list
-    subparsers.add_parser("list", help="Lista contenedores en ejecución")
+    subparsers.add_parser(
+        "list", help="Lista contenedores en ejecución"
+    )
 
     # remove
-    remove_p = subparsers.add_parser("remove", help="Elimina contenedores y volúmenes")
-    remove_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    p = subparsers.add_parser(
+        "remove", help="Elimina contenedores y volúmenes"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
 
     # fix-files
-    fix_p = subparsers.add_parser("fix-files", help="Corrige permisos del filestore")
-    fix_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    p = subparsers.add_parser(
+        "fix-files", help="Corrige permisos del filestore"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
 
     # psql
-    psql_p = subparsers.add_parser("psql", help="Conectar a PostgreSQL")
-    psql_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
-    psql_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
+    p = subparsers.add_parser(
+        "psql", help="Conectar a PostgreSQL"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
+    p.add_argument(
+        "-d", required=False,
+        help="Nombre de la base de datos (opcional)",
+    )
 
     # pw
-    pw_p = subparsers.add_parser("pw", help="Restablecer contraseña de un usuario")
-    pw_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
-    pw_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
-    pw_p.add_argument("-l", help="Login a restablecer (opcional)")
-    pw_p.add_argument("-p", "--password", default="admin", help="Nueva contraseña (por defecto: admin)")
+    p = subparsers.add_parser(
+        "pw", help="Restablecer contraseña de un usuario"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
+    p.add_argument(
+        "-d", required=False,
+        help="Nombre de la base de datos (opcional)",
+    )
+    p.add_argument(
+        "-l", help="Login a restablecer (opcional)"
+    )
+    p.add_argument(
+        "-p", "--password", default="admin",
+        help="Nueva contraseña (por defecto: admin)",
+    )
 
     # update
-    update_p = subparsers.add_parser("update", help="Actualizar módulos de Odoo")
-    update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
-    update_p.add_argument("-d", required=False, help="Nombre de la base de datos o 'all' (opcional)")
-    update_p.add_argument("-m", default=None, help="Módulos a actualizar (opcional)")
+    p = subparsers.add_parser(
+        "update", help="Actualizar módulos de Odoo"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
+    p.add_argument(
+        "-d", required=False,
+        help="Nombre de la base de datos o 'all' (opcional)",
+    )
+    p.add_argument(
+        "-m", default=None, help="Módulos a actualizar (opcional)"
+    )
 
     # init
-    init_p = subparsers.add_parser("init", help="Inicializar addons/repositorios")
-    init_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    p = subparsers.add_parser(
+        "init", help="Inicializar addons/repositorios"
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional)",
+    )
 
     # sync
-    sync_p = subparsers.add_parser("sync", help="Sincroniza submódulos de un repositorio")
-    sync_p.add_argument("r", nargs="?", default=None, help="Repositorio (opcional)")
-    sync_p.add_argument("b", nargs="?", default=None, help="Branch (opcional)")
-    sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
+    p = subparsers.add_parser(
+        "sync", help="Sincroniza submódulos de un repositorio"
+    )
+    p.add_argument(
+        "r", nargs="?", default=None, help="Repositorio (opcional)"
+    )
+    p.add_argument(
+        "b", nargs="?", default=None, help="Branch (opcional)"
+    )
+    p.add_argument(
+        "--v", action="store_true", default=False,
+        help="Mostrar salida de git",
+    )
 
     # validate-instances
-    subparsers.add_parser("validate-instances", help="Valida el archivo instances.json")
+    subparsers.add_parser(
+        "validate-instances", help="Valida el archivo instances.json"
+    )
 
     # new
-    new_inst_p = subparsers.add_parser("new", help="Crea una nueva instancia (interactivo o por argumentos)")
-    new_inst_p.add_argument("name", nargs="?", default=None, help="Nombre de instancia")
-    new_inst_p.add_argument("repo", nargs="?", default=None, help="URL del repositorio (SSH)")
-    new_inst_p.add_argument("branch", nargs="?", default=None, help="Rama del repositorio")
-    new_inst_p.add_argument("version", nargs="?", default=None, help="Versión de Odoo")
+    p = subparsers.add_parser(
+        "new",
+        help="Crea una nueva instancia (interactivo o por argumentos)",
+    )
+    p.add_argument("name", nargs="?", default=None, help="Nombre de instancia")
+    p.add_argument("repo", nargs="?", default=None, help="URL del repositorio (SSH)")
+    p.add_argument("branch", nargs="?", default=None, help="Rama del repositorio")
+    p.add_argument("version", nargs="?", default=None, help="Versión de Odoo")
 
+    # tui — thin entry point that hands off to the Textual app
+    subparsers.add_parser(
+        "tui", help="Abre el launcher interactivo (Textual)",
+    )
+
+    return parser
+
+
+# ============================================================
+# Main
+# ============================================================
+
+
+def main() -> int:
+    """CLI entry point. Returns the process exit code."""
+    os.chdir(BASE_PATH)
+
+    parser = _build_parser()
     args = parser.parse_args()
 
     if not args.action:
         parser.print_help()
-        return
+        return 0
 
-    # Load config for all commands
+    runner = CliRunner()
+
+    # The dispatch tree loads the config (which exits if instances.json
+    # is missing) and validates it (which exits on duplicate ports /
+    # missing databases). Both are runner-aware: errors go through
+    # ``runner.error``.
     config = load_config(BASE_PATH)
-
-    # Validate instances.json
     validate_instances(runner, config)
 
-    actions_with_instance = {
-        "start", "stop", "restart", "logs", "remove",
-        "fix-files", "init", "bash", "psql", "pw", "update"
-    }
+    return dispatch(runner, args, config, BASE_PATH)
 
-    if args.action in actions_with_instance and getattr(args, "instance", None) is None:
-        args.instance = _resolve_instance_for_action(runner, config, args)
-
-    # Dispatch
-    if args.action == "build":
-        build_odoo(runner, config, args.no_cache)
-    elif args.action == "start":
-        start_odoo(runner, config, args.instance)
-    elif args.action == "stop":
-        stop_odoo(runner, config, args.instance)
-    elif args.action == "restart":
-        restart_odoo(runner, config, args.instance)
-    elif args.action == "bash":
-        run_bash(runner, config, args.instance)
-    elif args.action == "logs":
-        show_logs(runner, config, args.instance)
-    elif args.action == "list":
-        list_containers(runner, config)
-    elif args.action == "remove":
-        remove_odoo(runner, config, args.instance)
-    elif args.action == "fix-files":
-        fix_filestore(runner, config, args.instance)
-    elif args.action == "psql":
-        if args.d is None:
-            args.d = prompt_for_database(runner, config, args.instance)
-        psql_connect(runner, config, args.instance, args.d)
-    elif args.action == "pw":
-        if args.d is None:
-            args.d = prompt_for_database(runner, config, args.instance)
-        if args.l is None:
-            args.l = prompt_for_user(runner, config, args.instance, args.d)
-        reset_password(runner, config, args.instance, args.d, args.l, args.password)
-    elif args.action == "update":
-        if args.instance is None:
-            args.instance = prompt_for_instance(runner, config, "update")
-        if args.d is None:
-            args.d = prompt_for_database(
-                runner, config, args.instance, allow_all=True
-            )
-        if args.m is None:
-            args.m = prompt_for_modules(runner, config, args.instance)
-        update(runner, config, args.instance, args.d, args.m)
-    elif args.action == "init":
-        init_addons(runner, config, args.instance)
-    elif args.action == "sync":
-        if args.r is None:
-            args.r = prompt_for_repos(runner)
-        if args.b is None:
-            args.b = prompt_for_branch(
-                runner, args.r if isinstance(args.r, str) else None
-            )
-        sync(runner, args.r, args.b, show=args.v)
-    elif args.action == "validate-instances":
-        runner.info("\n✅ El archivo instances.json es válido.\n")
-
-    elif args.action == "new":
-        cmd = [sys.executable, os.path.join(BASE_PATH, "scripts", "create_instance.py")]
-        if args.name: cmd.append(args.name)
-        if args.repo: cmd.append(args.repo)
-        if args.branch: cmd.append(args.branch)
-        if args.version: cmd.append(args.version)
-        subprocess.run(cmd)
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
