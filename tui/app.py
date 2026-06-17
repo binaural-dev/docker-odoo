@@ -137,6 +137,7 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
         self._update_widget: Optional[UpdateProgress] = None
         self._instances_list: Optional[ListView] = None
         self._actions_list: Optional[ListView] = None
+        self._output_buffer: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -244,8 +245,8 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
 
         This is a thin wrapper that does the cache check on the main
         thread and delegates the actual filesystem walk to the pure
-        helper \`_scan_instance_modules_pure\` (which can be called
-        from a thread via \`asyncio.to_thread\`). Keeping the cache
+        helper `_scan_instance_modules_pure` (which can be called
+        from a thread via `asyncio.to_thread`). Keeping the cache
         write on the main thread is required to satisfy Textual's
         single-threaded DOM contract.
         """
@@ -441,6 +442,7 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
             w.write(message)
         except Exception as exc:
             print(f"[TUI _log fallback] {message} (error: {exc})", file=sys.stderr)
+        self._output_buffer.append(message)
 
     def _log_bulk(self, message: str) -> None:
         """Escribe un string multi-linea al RichLog con UN solo write().
@@ -453,3 +455,4 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
             w.write(message)
         except Exception as exc:
             print(f"[TUI _log_bulk fallback] {message[:200]}... (error: {exc})", file=sys.stderr)
+        self._output_buffer.extend(message.split("\n"))

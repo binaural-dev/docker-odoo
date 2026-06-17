@@ -10,7 +10,7 @@ src
 docker-compose.generated.yml
 **/.vscode/
 *.code-workspace
-*antigractivy*
+*antigravity*
 venv
 __pycache__
 .atl/
@@ -18,3 +18,8 @@ __pycache__
 .ignore
 .DS_Store
 .codegraph
+
+# Stray generated files
+click
+os
+sys

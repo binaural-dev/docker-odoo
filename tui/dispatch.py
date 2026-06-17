@@ -391,7 +391,7 @@ class DispatchMixin:
             ARG_INSTALL: {"key": ARG_INSTALL, "label": "Módulos a instalar (-i)",
                           "placeholder": "account,sale"},
             ARG_LANG: {"key": ARG_LANG, "label": "Load language (opcional)",
-                       "placeholder": "es_VE"},
+                       "placeholder": "es_VE", "optional": True},
         }
         return defaults[arg]
 
@@ -474,8 +474,8 @@ class DispatchMixin:
     async def _run_interactive(self, argv: list, action: Action) -> None:
         """Suspende la TUI y corre un comando interactivo (bash, logs, psql).
 
-        Delega en \`tui.runner.run_interactive\` para que el subprocess
-        corra en asyncio (no en un thread aparte). El \`self.suspend()\`
+        Delega en `tui.runner.run_interactive` para que el subprocess
+        corre en asyncio (no en un thread aparte). El `self.suspend()`
         cede el control del terminal al comando hasta que termine.
         """
         self._log(f"[cyan]→ {' '.join(shlex.quote(a) for a in argv)}[/cyan]")

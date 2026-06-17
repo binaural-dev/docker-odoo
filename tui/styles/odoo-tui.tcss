@@ -17,8 +17,8 @@ Footer {
 
 /* ----- Main split: instances | actions ----- */
 #main {
-    height: 1fr;
-    margin: 0 1;
+    height: 55%;
+    margin: 0 1 1 1;
 }
 #left, #right {
     width: 1fr;
@@ -82,7 +82,7 @@ ListView > ListItem.category_header.--highlight {
 
 /* ----- Output log (RichLog) ----- */
 RichLog {
-    height: 30%;
+    height: 1fr;
     min-height: 5;
     border: round $primary;
     background: $surface-darken-1;

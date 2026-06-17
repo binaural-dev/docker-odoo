@@ -40,6 +40,7 @@ BINDINGS = [
     Binding("tab", "focus_next", "Siguiente panel"),
     Binding("space", "toggle_instance", "Toggle enabled"),
     Binding("escape", "cancel_update", "Cancelar"),
+    Binding("c", "copy_output", "Copiar"),
     Binding("1", "toggle_level_info", "INFO"),
     Binding("2", "toggle_level_warning", "WARNING"),
     Binding("3", "toggle_level_error", "ERROR"),
@@ -63,6 +64,8 @@ class KeybindingsMixin:
       - ``_update_proc: Optional[object]``
       - ``_log(message)``
       - ``refresh_instances()``
+      - ``_output_buffer: list`` (text lines for copy-to-clipboard)
+      - ``copy_to_clipboard(text)`` (Textual App method)
     """
 
     _raw_config: dict
@@ -73,6 +76,7 @@ class KeybindingsMixin:
     _update_widget: Optional[object]
     _current_task: Optional[asyncio.Task]
     _update_proc: Optional[object]
+    _output_buffer: list
 
     # ---- toggle persistence (bound to Space) ----
 
@@ -199,6 +203,18 @@ class KeybindingsMixin:
             self._log("[dim]No hay actualización en curso.[/dim]")
 
     # ---- refresh ----
+
+    def action_copy_output(self) -> None:
+        """Copia todo el output acumulado al portapapeles."""
+        try:
+            text = "\n".join(self._output_buffer)
+            if not text.strip():
+                self._log("[dim]No hay output para copiar.[/dim]")
+                return
+            self.copy_to_clipboard(text)
+            self._log(f"[green]✓ {len(self._output_buffer)} líneas copiadas al portapapeles.[/green]")
+        except Exception as exc:
+            self._log(f"[red]Error copiando al portapapeles:[/red] {exc}")
 
     def action_refresh(self) -> None:
         """Recarga instances.json y repinta las dos listas."""

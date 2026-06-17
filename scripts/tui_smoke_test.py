@@ -823,9 +823,9 @@ class TuiStreamingRegressionTest(unittest.TestCase):
     def test_streaming_with_slow_output_does_not_hang(self):
         """Sim R1: el runner no se cuelga con output lento.
 
-        Reproduce el bug original: el viejo \`subprocess.Popen\` con
-        \`bufsize=1, text=True, stdout=PIPE\` hacia block-buffering y
-        \`for line in proc.stdout\` se quedaba esperando 4-8 KB de
+        Reproduce el bug original: el viejo `subprocess.Popen` con
+        `bufsize=1, text=True, stdout=PIPE` hacia block-buffering y
+        `for line in proc.stdout` se quedaba esperando 4-8 KB de
         buffer. Aqui emitimos 1 linea cada 200ms (10 lineas en 2s).
         Si el bug estuviera presente, este test colgaria o reportaria
         menos de 10 lineas.
@@ -932,8 +932,8 @@ class TuiStreamingRegressionTest(unittest.TestCase):
 
         Simula el caso real: el user apreta Space rapido 5 veces y
         cada toggle dispara un worker que llama
-        \`_save_instances_json_async\` (que internamente hace
-        \`asyncio.to_thread(_write_instances_json, ...)\`). Verificamos
+        `_save_instances_json_async` (que internamente hace
+        `asyncio.to_thread(_write_instances_json, ...)`). Verificamos
         que ninguno levante y que el archivo final siga siendo JSON
         valido.
         """

@@ -26,7 +26,7 @@ def run_command(instance, d, i):
     container = f"odoo-{instance}"
     load_modules = f"base,web,views_migration_{major}"
 
-    subprocess.run(
+    result = subprocess.run(
         [
             "docker", "exec",
             container,
@@ -40,6 +40,7 @@ def run_command(instance, d, i):
             "--without-demo=1",
         ],
     )
+    sys.exit(result.returncode)
 
 if __name__ == "__main__":
     run_command()

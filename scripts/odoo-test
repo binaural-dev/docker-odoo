@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import subprocess
 import sys
 import click
 from pathlib import Path
@@ -22,12 +23,19 @@ def run_command(instance, d, test_tags, install):
         sys.exit(1)
 
     container = f"odoo-{instance}"
-    command = (
-        f"docker exec -uodoo {container} odoo --test-tags {test_tags} -d {d} -i {install} "
-        "--without-demo=True --stop-after-init -c /home/odoo/.config/odoo.conf "
-        "--http-port=19999 --workers 0"
-    )
-    os.system(command)
+    cmd = [
+        "docker", "exec", "-u", "odoo", container, "odoo",
+        "--test-tags", test_tags,
+        "-d", d,
+        "-i", install,
+        "--without-demo=True",
+        "--stop-after-init",
+        "-c", "/home/odoo/.config/odoo.conf",
+        "--http-port=19999",
+        "--workers", "0",
+    ]
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
 
 
 if __name__ == "__main__":
