@@ -130,5 +130,10 @@
     "port": 5050,                              // Puerto en el host para acceder a pgAdmin
     "email": "admin@admin.com",                // Email de inicio de sesion
     "password": "admin"                        // Password de inicio de sesion
+  },
+  "mailhog": {
+    "enabled": true,                           // Habilita o deshabilita MailHog (captura emails salientes en dev)
+    "smtp_port": 1025,                         // Puerto SMTP interno (lo que usa Odoo)
+    "http_port": 8025                          // Puerto web UI expuesto en el host (http://localhost:8025)
   }
 }

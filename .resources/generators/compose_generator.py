@@ -19,6 +19,10 @@ ODOO_GEVENT_PORT = 8071
 
 NETWORK_NAME = "odoo-multi"
 
+# MailHog defaults (used when config omits the mailhog section or specific fields)
+MAILHOG_SERVICE_NAME = "mailhog"
+MAILHOG_DEFAULT_SMTP_PORT = 1025
+
 
 def generate_compose(base_path, config, dockerfile_map):
     """
@@ -33,6 +37,7 @@ def generate_compose(base_path, config, dockerfile_map):
         lines += _db_service(db_name, db_conf)
 
     # --- Odoo instance services ---
+    mailhog_conf = config.get("mailhog", {}) if config.get("mailhog", {}).get("enabled", False) else None
     for inst_name, inst_conf in config["instances"].items():
         odoo_conf = resolve_instance_config(inst_conf, config)
         db_conf = resolve_db_config(inst_conf, config)
@@ -40,7 +45,7 @@ def generate_compose(base_path, config, dockerfile_map):
         odoo_version = inst_conf["odoo_version"]
         dockerfile = dockerfile_map[odoo_version]
         lines += _odoo_service(
-            inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile
+            inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf
         )
 
     # --- Nginx service ---
@@ -50,6 +55,11 @@ def generate_compose(base_path, config, dockerfile_map):
     pgadmin_conf = config.get("pgadmin", {})
     if pgadmin_conf.get("enabled", False):
         lines += _pgadmin_service(pgadmin_conf)
+
+    # --- MailHog service (optional) ---
+    mailhog_conf = config.get("mailhog", {})
+    if mailhog_conf.get("enabled", False):
+        lines += _mailhog_service(mailhog_conf)
 
     # --- Volumes ---
     lines += _volumes(config)
@@ -118,7 +128,7 @@ def _db_service(db_name, db_conf):
     return lines
 
 
-def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile):
+def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf):
     odoo_version = inst_conf["odoo_version"]
     odoo_minor = get_odoo_minor(odoo_version)
     container_name = f"odoo-{inst_name}"
@@ -126,6 +136,8 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     db_port = db_conf["port"]
     db_user = db_conf["user"]
     db_password = db_conf["password"]
+    smtp_server = mailhog_conf.get("service_name", MAILHOG_SERVICE_NAME) if mailhog_conf else MAILHOG_SERVICE_NAME
+    smtp_port = mailhog_conf.get("smtp_port", MAILHOG_DEFAULT_SMTP_PORT) if mailhog_conf else MAILHOG_DEFAULT_SMTP_PORT
 
     # Build addons list for INSTANCE_ADDONS env var
     addons = odoo_conf.get("addons", [])
@@ -189,8 +201,8 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
         f"      PGHOST: {db_host}",
         f"      PGPORT: {db_port}",
         f"      ADMIN_PASSWORD: {odoo_conf.get('admin_password', 'admin')}",
-        "      SMTP_SERVER: mailhog",
-        "      SMTP_PORT: 1025",
+        f"      SMTP_SERVER: {smtp_server}",
+        f"      SMTP_PORT: {smtp_port}",
         f"      DBFILTER: {odoo_conf.get('db_filter', '')}",
         f"      SERVER_WIDE_MODULES: {odoo_conf.get('server_wide_modules', '')}",
         f"      WORKERS: {odoo_conf.get('workers', 2)}",
@@ -255,6 +267,24 @@ def _nginx_service(config):
         "",
     ]
     return lines
+
+
+def _mailhog_service(mailhog_conf):
+    """Generate the MailHog service (SMTP catcher for dev environments)."""
+    smtp_port = mailhog_conf.get("smtp_port", 1025)
+    http_port = mailhog_conf.get("http_port", 8025)
+
+    return [
+        "  mailhog:",
+        "    image: mailhog/mailhog:latest",
+        "    container_name: odoo-mailhog",
+        "    restart: always",
+        "    networks:",
+        f"      - {NETWORK_NAME}",
+        "    ports:",
+        f'      - "{http_port}:8025"',
+        "",
+    ]
 
 
 def _pgadmin_service(pgadmin_conf):

@@ -33,6 +33,12 @@ def validate_instances(runner: "Runner", config: dict) -> None:
         if port:
             ports_seen[port] = "pgadmin"
 
+    # Check mailhog http_port (web UI exposed on the host)
+    if config.get("mailhog", {}).get("enabled"):
+        port = config["mailhog"].get("http_port")
+        if port:
+            ports_seen[port] = "mailhog"
+
     # Check instances
     for name, inst in config.get("instances", {}).items():
         # Check external_port
