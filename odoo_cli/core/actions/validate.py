@@ -27,17 +27,43 @@ def validate_instances(runner: "Runner", config: dict) -> None:
     ports_seen: dict[int, str] = {}
     errors: list[str] = []
 
+    # Check database ports (host-side). Multiple DBs sharing the same host port
+    # is the most common multi-instance pitfall: only one can bind it.
+    for db_name, db_conf in config.get("databases", {}).items():
+        port = db_conf.get("port")
+        if not port:
+            continue
+        if port in ports_seen:
+            errors.append(
+                f"Puerto duplicado: {port} usado por la base '{db_name}' "
+                f"y '{ports_seen[port]}'"
+            )
+        else:
+            ports_seen[port] = f"base de datos '{db_name}'"
+
     # Check pgadmin port
     if config.get("pgadmin", {}).get("enabled"):
         port = config["pgadmin"].get("port")
         if port:
-            ports_seen[port] = "pgadmin"
+            if port in ports_seen:
+                errors.append(
+                    f"Puerto duplicado: {port} usado por 'pgadmin' "
+                    f"y '{ports_seen[port]}'"
+                )
+            else:
+                ports_seen[port] = "pgadmin"
 
     # Check mailhog http_port (web UI exposed on the host)
     if config.get("mailhog", {}).get("enabled"):
         port = config["mailhog"].get("http_port")
         if port:
-            ports_seen[port] = "mailhog"
+            if port in ports_seen:
+                errors.append(
+                    f"Puerto duplicado: {port} usado por 'mailhog' "
+                    f"y '{ports_seen[port]}'"
+                )
+            else:
+                ports_seen[port] = "mailhog"
 
     # Check instances
     for name, inst in config.get("instances", {}).items():
