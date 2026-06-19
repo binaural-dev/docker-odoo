@@ -10,7 +10,12 @@ from pathlib import Path
 
 BASE_PATH = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
-from generators.config_loader import load_config, resolve_db_config, get_db_host
+from generators.config_loader import (
+    load_config,
+    resolve_db_config,
+    get_db_host,
+    get_db_internal_port,
+)
 from generators.pw_helpers import _check_db_exists
 
 
@@ -30,7 +35,7 @@ def run_command(instance, d, l, password):
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user = db_conf["user"]
     db_password = db_conf["password"]
-    db_port = db_conf["port"]
+    db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
 
     safe_pw = shlex.quote(password)

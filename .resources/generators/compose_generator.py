@@ -133,7 +133,11 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
     odoo_minor = get_odoo_minor(odoo_version)
     container_name = f"odoo-{inst_name}"
     db_host = get_db_host(db_name, db_conf)
-    db_port = db_conf["port"]
+    # NOTE: db_port is the port INSIDE the container (Postgres listens on 5432).
+    # db_conf["port"] is the HOST-side port (used in `ports: "X:5432"`), which is
+    # not reachable from sibling containers — they talk to Postgres directly via
+    # the container's internal listener.
+    db_port = 5432
     db_user = db_conf["user"]
     db_password = db_conf["password"]
     smtp_server = mailhog_conf.get("service_name", MAILHOG_SERVICE_NAME) if mailhog_conf else MAILHOG_SERVICE_NAME
@@ -255,9 +259,21 @@ def _nginx_service(config):
         "    extra_hosts:",
         '      - "host.docker.internal:host-gateway"',
         "    ports:",
+        '      - "80:80"',
     ]
     for port in all_ports:
         lines.append(f'      - "{port}:{port}"')
+
+    # Expose optional service ports (pgadmin, mailhog) so users can reach
+    # them via subdomain on port 80.
+    pgadmin_conf = config.get("pgadmin", {})
+    if pgadmin_conf.get("enabled", False):
+        pg_port = pgadmin_conf.get("port", 5050)
+        lines.append(f'      - "{pg_port}:{pg_port}"')
+    mailhog_conf = config.get("mailhog", {})
+    if mailhog_conf.get("enabled", False):
+        mh_port = mailhog_conf.get("http_port", 8025)
+        lines.append(f'      - "{mh_port}:{mh_port}"')
 
     lines += [
         f"    networks:",

@@ -17,6 +17,7 @@ from generators.config_loader import (
     load_config,
     resolve_db_config,
     get_db_host,
+    get_db_internal_port,
 )
 
 
@@ -866,7 +867,7 @@ def main():
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user = db_conf["user"]
-    db_port = db_conf["port"]
+    db_port = get_db_internal_port(db_conf)
     container_name = f"odoo-{instance}"
 
     restorer = RestoreOrchestrator(

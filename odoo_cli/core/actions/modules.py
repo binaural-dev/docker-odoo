@@ -135,7 +135,9 @@ def reset_password(
          race with another process that deletes the user between
          our SELECT and our UPDATE).
     """
-    from generators.config_loader import resolve_db_config, get_db_host
+    from generators.config_loader import (
+    resolve_db_config, get_db_host, get_db_internal_port,
+)
     from generators.pw_helpers import _check_db_exists
 
     runner.info(
@@ -147,7 +149,7 @@ def reset_password(
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user = db_conf["user"]
     db_password = db_conf["password"]
-    db_port = db_conf["port"]
+    db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
 
     # Validar que la DB exista en el contenedor antes de tocar res_users.

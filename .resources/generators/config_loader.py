@@ -152,13 +152,31 @@ def resolve_db_config(inst_conf, config):
 def get_db_host(db_name, db_conf):
     """
     Get the DB host for a given database config.
-    For managed DBs, returns the container name. For external DBs, returns the host.
+    For managed DBs, returns the container name (resolved by Docker's internal
+    DNS so the Odoo container talks to the postgres container directly — no
+    host port forwarding involved).
+    For external DBs, returns the host.
     """
     create_container = db_conf.get("create_container", True)
     if create_container:
-        # return f"db-{db_name}"
-        return "host.docker.internal"
+        return f"db-{db_name}"
     return db_conf["host"]
+
+
+def get_db_internal_port(db_conf):
+    """Return the port Postgres listens on *inside* its container.
+
+    ``db_conf['port']`` is the **host-side** port (used for
+    ``docker-compose.ports: "<port>:5432"``). Containers always talk
+    to Postgres via its internal listener, which for the
+    ``postgres:<major>`` images is 5432.
+
+    Use this from CLI helpers (``odoo pw``, ``odoo_restore``,
+    ``psql_connect``) that run ``docker exec`` inside the Odoo
+    container and need to reach Postgres through the Docker network.
+    External databases may override via ``db_conf['internal_port']``.
+    """
+    return int(db_conf.get("internal_port", 5432))
 
 
 def get_unique_odoo_versions(config):

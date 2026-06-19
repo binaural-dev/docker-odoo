@@ -93,13 +93,17 @@ def psql_connect(
     runner: "Runner", config: dict, instance: str, dbname: str
 ) -> None:
     """Connect to psql in an instance."""
-    from generators.config_loader import resolve_db_config, get_db_host
+    from generators.config_loader import (
+        resolve_db_config,
+        get_db_host,
+        get_db_internal_port,
+    )
 
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user = db_conf["user"]
-    db_port = db_conf["port"]
+    db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
 
     runner.info(

@@ -101,7 +101,9 @@ def get_databases(config: dict, instance: str) -> list[str]:
     """
     # Local import: the generators module is on .resources which is
     # only added to sys.path by the ./odoo launcher.
-    from generators.config_loader import resolve_db_config, get_db_host
+    from generators.config_loader import (
+    resolve_db_config, get_db_host, get_db_internal_port,
+)
 
     try:
         inst_conf = config["instances"][instance]
@@ -109,7 +111,7 @@ def get_databases(config: dict, instance: str) -> list[str]:
         db_host = get_db_host(inst_conf["database"], db_conf)
         db_user = db_conf["user"]
         db_password = db_conf["password"]
-        db_port = db_conf["port"]
+        db_port = get_db_internal_port(db_conf)
         container = f"odoo-{instance}"
 
         cmd = (
@@ -134,7 +136,9 @@ def get_users(config: dict, instance: str, dbname: str) -> list[str]:
     Returns ``[]`` on any error. Caller decides whether to fall back to
     manual input.
     """
-    from generators.config_loader import resolve_db_config, get_db_host
+    from generators.config_loader import (
+    resolve_db_config, get_db_host, get_db_internal_port,
+)
 
     try:
         inst_conf = config["instances"][instance]
@@ -142,7 +146,7 @@ def get_users(config: dict, instance: str, dbname: str) -> list[str]:
         db_host = get_db_host(inst_conf["database"], db_conf)
         db_user = db_conf["user"]
         db_password = db_conf["password"]
-        db_port = db_conf["port"]
+        db_port = get_db_internal_port(db_conf)
         container = f"odoo-{instance}"
 
         cmd = (
@@ -167,14 +171,16 @@ def _instance_has_db(
 
     Used by the dispatch logic to resolve the instance for ``pw -d``.
     """
-    from generators.config_loader import resolve_db_config, get_db_host
+    from generators.config_loader import (
+    resolve_db_config, get_db_host, get_db_internal_port,
+)
 
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user = db_conf["user"]
     db_password = db_conf["password"]
-    db_port = db_conf["port"]
+    db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
     env = {"PGPASSWORD": db_password, "PATH": os.environ.get("PATH", "")}
     proc = subprocess.run(
