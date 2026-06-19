@@ -36,7 +36,7 @@ from tui.config import BASE_PATH, TCSS_PATH, is_instance_enabled, load_full_conf
 from tui.dispatch import DispatchMixin
 from tui.keybindings import BINDINGS, KeybindingsMixin
 from tui.models import Action, LOG_LEVELS
-from tui.parser import classify_level, parse_progress
+from tui.parser import classify_level
 from tui.screens.confirm_modal import ConfirmModal
 from tui.screens.input_modal import InputModal
 from tui.screens.module_picker import ModulePicker
@@ -293,6 +293,22 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
         self.module_cache[inst_name] = modules
         return modules
 
+    async def _preload_modules_async(self, inst_name: str, inst: dict) -> None:
+        """Background-preload ``module_cache`` for *inst_name*.
+
+        Runs the filesystem scan in a thread so the UI stays
+        responsive while the user browses instances.  Errors are
+        silently swallowed — the cache will be populated on-demand
+        when the action fires anyway.
+        """
+        try:
+            modules = await asyncio.to_thread(
+                _scan_instance_modules_pure, inst_name, inst, self.config,
+            )
+            self.module_cache[inst_name] = modules
+        except Exception:
+            pass
+
     def refresh_actions(self) -> None:
         list_view = self._actions_list or self.query_one("#actions_list", ListView)
         self._actions_list = list_view
@@ -327,6 +343,16 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
             item = event.item
             if isinstance(item, InstanceItem):
                 self.selected_instance = item.instance_name
+                # Warm the module cache in background while the user
+                # browses, so the picker opens instantly later.
+                inst_name = item.instance_name
+                if inst_name not in self.module_cache:
+                    inst = self._raw_config.get("instances", {}).get(inst_name)
+                    if inst is not None:
+                        self.run_worker(
+                            self._preload_modules_async(inst_name, inst),
+                            exclusive=False,
+                        )
             else:
                 self.selected_instance = None
 
@@ -383,7 +409,6 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
         buf_lines: list[tuple[str, str]] = []  # (level, line) for UpdateProgress
         buf_plain: list[str] = []              # lines for the RichLog
         last_flush = time.monotonic()
-        last_progress: tuple[int, int] = (0, 0)
 
         def _flush() -> None:
             nonlocal buf_lines, buf_plain, last_flush
@@ -398,14 +423,10 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
             last_flush = time.monotonic()
 
         def on_line(line: str) -> None:
-            nonlocal last_progress
+            # Progress parsing is handled by the runner via ``on_progress``
+            # (called below).  We only classify the line and buffer it here
+            # so the regex runs exactly once per line, not twice.
             if up is not None:
-                parsed = parse_progress(line)
-                if parsed is not None:
-                    cur, tot = parsed
-                    if (cur, tot) != last_progress:
-                        last_progress = (cur, tot)
-                        up.set_progress(cur, tot)
                 level = classify_level(line)
                 buf_lines.append((level, line))
                 if level in up.filter_levels:

@@ -1,5 +1,6 @@
 """fzf-style two-pane module picker modal."""
 
+import asyncio
 from typing import Optional
 
 from textual.app import ComposeResult
@@ -45,6 +46,7 @@ class ModulePicker(ModalScreen[Optional[list]]):
         self.preselected = list(preselected or [])
         self.selected: list[str] = list(self.preselected)
         self._filter: str = ""
+        self._filter_timer: Optional[asyncio.TimerHandle] = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="modal_box"):
@@ -113,7 +115,14 @@ class ModulePicker(ModalScreen[Optional[list]]):
         if event.input.id != "filter_input":
             return
         self._filter = event.value
-        self._render_available()
+        # Debounce: cancel pending timer and schedule a single
+        # _render_available after 80ms of typing inactivity.
+        if self._filter_timer is not None:
+            self._filter_timer.cancel()
+            self._filter_timer = None
+        self._filter_timer = asyncio.get_running_loop().call_later(
+            0.08, self._render_available
+        )
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         name = getattr(event.option, "id", None)
