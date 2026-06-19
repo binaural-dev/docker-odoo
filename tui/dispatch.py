@@ -132,6 +132,13 @@ class DispatchMixin:
             self.run_worker(self._execute(action, {}), exclusive=False)
             return
 
+        # ``hosts-status`` is special: it doesn't take args and doesn't
+        # need a docker run, so we render the diff + suggested command
+        # directly in the log panel.
+        if action.action_id == "hosts-status":
+            self.run_worker(self._hosts_status_async(), exclusive=False)
+            return
+
         # The consolidated ``update`` action with an instance selected
         # can use the fzf-style module picker when addons paths are
         # available on disk. The text modal remains the fallback for
@@ -500,3 +507,30 @@ class DispatchMixin:
         barra, aunque Odoo claramente estaba emitiendo progreso.
         """
         return action.action_id == "update"
+
+    async def _hosts_status_async(self) -> None:
+        """Render the hosts status directly into the log panel.
+
+        Runs the diff in a worker thread (the /etc/hosts read is cheap,
+        but going through ``odoo_cli`` keeps us aligned with the CLI's
+        logic) and emits a clear "ready to paste" sudo command.
+        """
+        from odoo_cli.core.actions.hosts import hosts_status
+
+        def _runner_info(msg: str) -> None:
+            self._log(msg)
+
+        def _runner_warn(msg: str) -> None:
+            self._log(msg)
+
+        class _InlineRunner:
+            def info(self, msg: str) -> None:
+                _runner_info(msg)
+
+            def warn(self, msg: str) -> None:
+                _runner_warn(msg)
+
+            def error(self, msg: str) -> None:
+                self._log(f"[red]{msg}[/red]")
+
+        await asyncio.to_thread(hosts_status, _InlineRunner(), self._raw_config)

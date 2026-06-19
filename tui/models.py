@@ -71,6 +71,8 @@ ACTIONS: list[Action] = [
            needs=[ARG_INSTANCE], needs_all_option=True),
     Action("validate-instances", "Validate instances.json", "Mantenimiento",
            "Valida el archivo instances.json"),
+    Action("hosts-status", "Sync /etc/hosts", "Mantenimiento",
+           "Muestra diff entre /etc/hosts y los subdominios esperados"),
     Action("remove", "Remove", "Mantenimiento",
            "Elimina contenedores y volúmenes de la instancia",
            needs=[ARG_INSTANCE], needs_all_option=True),

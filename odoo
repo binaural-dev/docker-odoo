@@ -226,6 +226,17 @@ def _build_parser() -> argparse.ArgumentParser:
         "validate-instances", help="Valida el archivo instances.json"
     )
 
+    # hosts — sync /etc/hosts with subdomains declared in instances.json
+    p = subparsers.add_parser(
+        "hosts",
+        help="Sincroniza /etc/hosts con los subdominios de las instances",
+    )
+    p.add_argument(
+        "hosts_mode", nargs="?", default="status",
+        choices=["status", "show", "apply", "dry-run"],
+        help="status (default) | show | apply | dry-run",
+    )
+
     # new
     p = subparsers.add_parser(
         "new",

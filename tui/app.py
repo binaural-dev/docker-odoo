@@ -179,8 +179,45 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
             self._log(f"[yellow]Dev mode activo:[/yellow] dev={self.dev!r}")
         self.refresh_instances()
         self.refresh_actions()
+        self._hosts_check_and_warn()
         self._log("[green]Listo.[/green] Elegí una instancia y luego una acción. "
                   "Atajos: [b]q[/b] salir, [b]r[/b] refrescar, [b]Tab[/b] cambiar panel.")
+
+    def _hosts_check_and_warn(self) -> None:
+        """If /etc/hosts is out of sync with instances.json, surface a warning.
+
+        The check is cheap (a single file read + a regex) and non-blocking
+        from the user's perspective: it just prints a yellow line in the
+        log panel inviting them to run ``sudo ./odoo hosts apply``.
+        """
+        try:
+            from odoo_cli.core.actions.hosts import (
+                _expected_subdomains,
+                _current_hosts_block,
+                _parse_block_hosts,
+            )
+        except Exception:
+            return
+        try:
+            expected = set(_expected_subdomains(self._raw_config))
+            current = _parse_block_hosts(_current_hosts_block())
+        except Exception:
+            return
+        if expected == current:
+            return
+        missing = sorted(expected - current)
+        extra = sorted(current - expected)
+        parts = []
+        if missing:
+            parts.append(f"faltan {len(missing)} subdominio(s)")
+        if extra:
+            parts.append(f"sobran {len(extra)} subdominio(s)")
+        summary = " y ".join(parts) if parts else "desincronizado"
+        self._log(
+            f"[yellow]⚠ /etc/hosts desincronizado ({summary}). "
+            f"Corré:[/yellow] [b]sudo ./odoo hosts apply[/b] "
+            f"[dim](o usá la action 'Sync /etc/hosts' en Mantenimiento)[/dim]"
+        )
 
     # ---------- data loading ----------
 

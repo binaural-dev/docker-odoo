@@ -176,6 +176,7 @@ El script `./odoo` es un shim liviano (276 LOC) que delega a `odoo_cli/core/`, e
 | `odoo_cli/core/actions/access.py` | `run_bash`, `show_logs`, `list_containers`, `psql_connect`, `fix_filestore` |
 | `odoo_cli/core/actions/modules.py` | `update`, `reset_password`, `bash_update_modules` |
 | `odoo_cli/core/actions/maintenance.py` | `init_addons`, `sync` |
+| `odoo_cli/core/actions/hosts.py` | `hosts_status`, `hosts_apply`, `hosts_show` |
 
 | Comando | Descripción |
 |---------|-------------|
@@ -192,6 +193,7 @@ El script `./odoo` es un shim liviano (276 LOC) que delega a `odoo_cli/core/`, e
 | `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
+| `hosts [status\|show\|apply\|dry-run]` | Sincroniza `/etc/hosts` con los subdominios de las instances. Ver [Subdominios locales por instance](#subdominios-locales-por-instance). |
 | `tui` | Lanza la TUI interactiva (equivalente a `./odoo-tui`). |
 
 ### Ejemplos
@@ -227,6 +229,74 @@ El script `./odoo` es un shim liviano (276 LOC) que delega a `odoo_cli/core/`, e
 # Reiniciar todo
 ./odoo restart
 ```
+
+## Subdominios locales por instance
+
+Cada instance puede accederse por un subdominio local (`<inst_name>.local`)
+además del port externo. Esto aísla las cookies del browser por **host**
+(subdominio) en vez de por port, lo que resuelve el problema de CSRF que
+ocurre cuando varias instances se sirven desde el mismo `localhost`.
+
+### Cómo funciona
+
+En el build, `.resources/generators/nginx_generator.py` emite un server
+block por instance con dos directivas `listen` y un `server_name`
+compuesto:
+
+```nginx
+server {
+    listen 8072 default_server;
+    listen 80;
+    server_name contiflex.local localhost;
+    location / { proxy_pass http://odoo-contiflex:8069; }
+}
+```
+
+Resultado: las 3 URLs siguientes llevan a la misma instance, pero con
+orígenes distintos para el browser:
+
+- `http://contiflex.local` (subdominio, port 80)
+- `http://contiflex.local:8072` (subdominio + port legacy)
+- `http://localhost:8072` (compat con scripts antiguos)
+
+Opcionales también: `pgadmin.local` (si `pgadmin.enabled=true`) y
+`mailhog.local` (si `mailhog.enabled=true`).
+
+### Setup del `/etc/hosts`
+
+`/etc/hosts` requiere root, así que **no se automatiza en el build**.
+Tres formas de tenerlo al día:
+
+1. **TUI**: abrí la TUI y si los hosts están desincronizados, el log
+   muestra un warning amarillo con el comando. También hay una action
+   **Sync /etc/hosts** en la categoría Mantenimiento que muestra el
+   diff y el comando a correr.
+
+2. **CLI**:
+   ```bash
+   ./odoo hosts status     # muestra el diff
+   ./odoo hosts show       # lista los subdominios esperados
+   sudo ./odoo hosts apply # aplica (requiere root)
+   ```
+
+3. **Manual**:
+   ```bash
+   sudo python3 scripts/odoo_hosts
+   ```
+   El script es idempotente: usa un sentinel `# odoo-managed` para
+   reemplazar solo su propio bloque, sin tocar las demás entradas.
+
+### Notas operativas
+
+- El setup es **dinámico**: activá/desactivá instances en
+  `instances.json`, corré `./odoo build` y volvé a aplicar hosts.
+  Entradas huérfanas se eliminan en la próxima corrida.
+- Si no querés usar subdominios, no corras `sudo ./odoo hosts apply`.
+  El acceso por `localhost:PORT` sigue funcionando indefinidamente
+  (dual-stack). Solo perdés el aislamiento de cookies.
+- **Devices embedded** (scanners, balanzas, impresoras Zebra) que
+  apuntan a `http://SERVER_IP:PORT` siguen funcionando porque nginx
+  escucha en ambos: el port externo y el 80.
 
 ## TUI interactiva: `./odoo-tui` / `./odoo tui`
 

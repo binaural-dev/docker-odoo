@@ -43,6 +43,12 @@ from odoo_cli.core.actions.access import (
     run_bash,
     show_logs,
 )
+from odoo_cli.core.actions.hosts import (
+    hosts_apply,
+    hosts_dry_run,
+    hosts_show,
+    hosts_status,
+)
 from odoo_cli.core.actions.lifecycle import (
     build_odoo,
     fix_filestore,
@@ -227,6 +233,20 @@ def dispatch(
 
     elif args.action == "validate-instances":
         runner.info("\n✅ El archivo instances.json es válido.\n")
+
+    elif args.action == "hosts":
+        hosts_mode = getattr(args, "hosts_mode", "status")
+        if hosts_mode == "status":
+            hosts_status(runner, config)
+        elif hosts_mode == "show":
+            hosts_show(runner, config)
+        elif hosts_mode == "apply":
+            return hosts_apply(runner, config)
+        elif hosts_mode == "dry-run":
+            hosts_dry_run(runner, config)
+        else:
+            runner.error(f"Modo de hosts desconocido: {hosts_mode!r}")
+            return 2
 
     elif args.action == "new":
         cmd = [
