@@ -256,6 +256,22 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
         self.module_cache[inst_name] = modules
         return modules
 
+    async def _preload_modules_async(self, inst_name: str, inst: dict) -> None:
+        """Background-preload ``module_cache`` for *inst_name*.
+
+        Runs the filesystem scan in a thread so the UI stays
+        responsive while the user browses instances.  Errors are
+        silently swallowed — the cache will be populated on-demand
+        when the action fires anyway.
+        """
+        try:
+            modules = await asyncio.to_thread(
+                _scan_instance_modules_pure, inst_name, inst, self.config,
+            )
+            self.module_cache[inst_name] = modules
+        except Exception:
+            pass
+
     def refresh_actions(self) -> None:
         list_view = self._actions_list or self.query_one("#actions_list", ListView)
         self._actions_list = list_view
@@ -290,6 +306,16 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
             item = event.item
             if isinstance(item, InstanceItem):
                 self.selected_instance = item.instance_name
+                # Warm the module cache in background while the user
+                # browses, so the picker opens instantly later.
+                inst_name = item.instance_name
+                if inst_name not in self.module_cache:
+                    inst = self._raw_config.get("instances", {}).get(inst_name)
+                    if inst is not None:
+                        self.run_worker(
+                            self._preload_modules_async(inst_name, inst),
+                            exclusive=False,
+                        )
             else:
                 self.selected_instance = None
 
