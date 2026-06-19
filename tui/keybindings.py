@@ -205,14 +205,15 @@ class KeybindingsMixin:
     # ---- refresh ----
 
     def action_copy_output(self) -> None:
-        """Copia todo el output acumulado al portapapeles."""
+        """Copia las últimas 500 líneas del output acumulado al portapapeles."""
         try:
-            text = "\n".join(self._output_buffer)
+            lines_to_copy = self._output_buffer[-500:]
+            text = "\n".join(lines_to_copy)
             if not text.strip():
                 self._log("[dim]No hay output para copiar.[/dim]")
                 return
             self.copy_to_clipboard(text)
-            self._log(f"[green]✓ {len(self._output_buffer)} líneas copiadas al portapapeles.[/green]")
+            self._log(f"[green]✓ {len(lines_to_copy)} líneas copiadas al portapapeles.[/green]")
         except Exception as exc:
             self._log(f"[red]Error copiando al portapapeles:[/red] {exc}")
 
