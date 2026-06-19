@@ -30,6 +30,27 @@ class UpdateProgress(Vertical):
         self._modules = modules
         self._all_lines: list[tuple[str, str]] = []  # (level, line)
         self._idle_timer: asyncio.TimerHandle | None = None
+        # Cached widget refs — populated in on_mount, fall back to
+        # query_one in case the widget hasn't been mounted yet (e.g.
+        # headless tests).
+        self._pb: ProgressBar | None = None
+        self._progress_label: Label | None = None
+        self._remaining_label: Label | None = None
+
+    def on_mount(self) -> None:
+        """Cache widget refs once the DOM is ready."""
+        try:
+            self._pb = self.query_one("#up_progress", ProgressBar)
+        except Exception:
+            self._pb = None
+        try:
+            self._progress_label = self.query_one("#up_progress_label", Label)
+        except Exception:
+            self._progress_label = None
+        try:
+            self._remaining_label = self.query_one("#up_remaining", Label)
+        except Exception:
+            self._remaining_label = None
 
     def compose(self) -> ComposeResult:
         title = (
@@ -82,29 +103,40 @@ class UpdateProgress(Vertical):
 
     def _on_idle_timeout(self) -> None:
         """Pasaron 5s sin progreso: cambia el ProgressBar a indeterminado."""
-        pb = self.query_one("#up_progress", ProgressBar)
+        try:
+            pb = self._pb or self.query_one("#up_progress", ProgressBar)
+        except Exception:
+            return
         pb.total = None
 
     # ----- reactive watchers -----
 
     def watch_progress_current(self, value: int) -> None:
-        pb = self.query_one("#up_progress", ProgressBar)
+        try:
+            pb = self._pb or self.query_one("#up_progress", ProgressBar)
+            pl = self._progress_label or self.query_one("#up_progress_label", Label)
+            rl = self._remaining_label or self.query_one("#up_remaining", Label)
+        except Exception:
+            return
         total = self.progress_total
         if total > 0:
             pb.progress = value
             pb.total = total
             pct = int(value / total * 100)
-            self.query_one("#up_progress_label", Label).update(
+            pl.update(
                 f"Progreso: {value} / {total} ({pct}%)"
             )
             remaining = total - value
-            self.query_one("#up_remaining", Label).update(
+            rl.update(
                 f"Quedan: {remaining} módulo{'s' if remaining != 1 else ''}"
             )
 
     def watch_progress_total(self, value: int) -> None:
         if value > 0:
-            pb = self.query_one("#up_progress", ProgressBar)
+            try:
+                pb = self._pb or self.query_one("#up_progress", ProgressBar)
+            except Exception:
+                return
             pb.total = value
 
     def watch_filter_levels(self, value: set[str]) -> None:
