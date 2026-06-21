@@ -7,14 +7,16 @@ from dotenv import load_dotenv
 
 @click.command()
 @click.option("-d", required=True, help="Database name")
+@click.option("-p", required=False, help="Http Port")
 @click.argument("args", nargs=-1)
-def run_command(d, args):
+def run_command(d, p, args):
     load_dotenv()
     PROJECT_NAME = os.getenv("PROJECT_NAME")
     modules_str = ' '.join(args)
-    os.system(
-        f"docker exec -it {PROJECT_NAME} odoo -d {d} -u {modules_str} --load-language=es_VE --stop-after-init"
-    )
+    command = f"docker exec -it {PROJECT_NAME} odoo -d {d} -u {modules_str} --load-language=es_VE --stop-after-init "
+    if p:
+        command += f"--http-port={p} "
+    os.system(command)
 
 if __name__ == "__main__":
     run_command()
