@@ -86,7 +86,7 @@ RUN ARCH=$(dpkg --print-architecture) && \
 
 ARG USERNAME=odoo
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/19.0/requirements.txt /tmp/requirements.txt
-RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
 
 RUN apt-get update && apt-get install -y \
     python3-pip \
