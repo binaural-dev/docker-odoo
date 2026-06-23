@@ -1,5 +1,5 @@
 FROM ubuntu:jammy
-ENV LANG C.UTF-8
+ENV LANG=C.UTF-8
 USER root
 
 # Enable Odoo user and filestore

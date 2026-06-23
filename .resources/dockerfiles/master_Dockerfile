@@ -1,5 +1,5 @@
 FROM ubuntu:noble
-ENV LANG C.UTF-8 
+ENV LANG=C.UTF-8 
 USER root
 
 # Enable Odoo user and filestore
@@ -83,5 +83,6 @@ RUN ARCH=$(dpkg --print-architecture) && \
         && /opt/venv/bin/pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==0.4.7 pandas
     ENV PATH="/opt/venv/bin:$PATH"
 
+ARG USERNAME=odoo
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/master/requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
