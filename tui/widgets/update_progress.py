@@ -4,6 +4,7 @@ Se muestra arriba del RichLog durante una operación ``update``
 con módulos conocidos. Es puramente presentacional: recibe
 eventos via reactives y bindings, no sabe de subprocesses.
 """
+from __future__ import annotations
 
 import asyncio
 

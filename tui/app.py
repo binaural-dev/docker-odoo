@@ -11,6 +11,7 @@ that one is tightly coupled to the per-instance UI state (progress
 widget, RichLog, log throttling). Moving it out would require
 passing too many callbacks to be worth it.
 """
+from __future__ import annotations
 
 import asyncio
 import json
