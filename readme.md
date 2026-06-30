@@ -157,7 +157,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `remove [instance]` | Elimina contenedores y volúmenes. |
 | `fix-files [instance]` | Corrige permisos del filestore. |
 | `psql <instance> -d <db>` | Conecta a PostgreSQL. |
-| `update <instance> -d <db> [-m modules]` | Actualiza módulos de Odoo. |
+| `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 
@@ -188,9 +188,14 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 # Actualizar módulos
 ./odoo update bananera -d bananera_prod -m sale,purchase
 
+# Actualizar todas las bases de datos de una instancia
+./odoo update bananera -d all
+
 # Reiniciar todo
 ./odoo restart
 ```
+
+En el comando `update`, el selector de bases incluye una opción visible de `all (todas las bases de datos)`.
 
 ## Scripts auxiliares
 
@@ -211,6 +216,36 @@ scripts/odoo-update <instance> -d <dbname> module1 module2
 
 # Run tests
 scripts/odoo-test <instance> [-d dbname] [-t test_tags] [-i modules]
+
+# Pre-commit on modules
+scripts/precommit <instance> -m <modules>
+```
+
+### `scripts/precommit` — Linting sobre módulos Odoo
+
+Ejecuta `pre-commit` sobre los archivos de uno o varios módulos, resolviendo automáticamente sus rutas desde `instances.json`.
+
+**Qué hace internamente:**
+1. Instala `pre-commit` si no está disponible.
+2. Clona (o actualiza vía `git fetch` + `git reset --hard`) el repo de configuración `binaural-dev/precommit-config-files` dentro de `.ignore/`.
+3. Copia los archivos de configuración a la raíz del proyecto (sobrescribiendo los existentes).
+4. Ejecuta `pre-commit install`.
+5. Resuelve los paths de los módulos usando los `addons` de la instancia especificada.
+6. Corre `pre-commit run --files <archivos>`.
+
+**Uso básico:**
+```bash
+# Con instancia explícita
+scripts/precommit binaural-19.0 -m binaural_brand,binaural_mrp
+
+# Sin instancia → pregunta interactivamente
+scripts/precommit -m binaural_brand
+
+# Todos los módulos de la instancia
+scripts/precommit binaural-19.0 -m all
+
+# Desambiguar con path completo (si un nombre existe en más de un addon path)
+scripts/precommit binaural-19.0 -m integra-addons/modulo_c,enterprise/modulo_c
 ```
 
 ## Cómo funciona internamente
