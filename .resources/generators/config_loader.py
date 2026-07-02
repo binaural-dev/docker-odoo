@@ -8,6 +8,67 @@ import os
 import sys
 
 
+def _strip_json_comments(text: str) -> str:
+    """Remove ``//`` comments from JSON-like text, preserving them inside strings.
+
+    The team's ``instances.json`` is documented inline with ``//`` comments
+    (like JSON5/JSONC). Python's :func:`json.load` does NOT understand those,
+    so we strip them here before parsing.
+
+    The parser walks the text char-by-char and is aware of:
+
+    * single- and double-quoted strings (``"..."`` and ``'...'``)
+    * escaped quotes inside strings (``\\"``)
+    * line comments starting with ``//`` outside of strings
+
+    Anything between an opening quote and its matching closing quote is kept
+    verbatim, even if it contains ``//`` (e.g. ``"https://example.com"``).
+    """
+    out = []
+    i = 0
+    n = len(text)
+    in_string = False
+    string_char = None
+
+    while i < n:
+        ch = text[i]
+
+        # Start of a string literal.
+        if not in_string and ch in ('"', "'"):
+            in_string = True
+            string_char = ch
+            out.append(ch)
+            i += 1
+            continue
+
+        # Inside a string: handle escapes and end of string.
+        if in_string:
+            if ch == '\\' and i + 1 < n:
+                # Preserve escape sequence (e.g. \" or \\).
+                out.append(ch)
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == string_char:
+                in_string = False
+                string_char = None
+            out.append(ch)
+            i += 1
+            continue
+
+        # Outside a string: detect // line comment.
+        if ch == '/' and i + 1 < n and text[i + 1] == '/':
+            # Skip until end of line (but keep the newline).
+            while i < n and text[i] != '\n':
+                i += 1
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return ''.join(out)
+
+
 def load_config(base_path):
     """Load instances.json from the project root and filter enabled ones."""
     config_path = os.path.join(base_path, "instances.json")
@@ -17,7 +78,8 @@ def load_config(base_path):
         sys.exit(1)
 
     with open(config_path, "r") as f:
-        config = json.load(f)
+        raw = f.read()
+    config = json.loads(_strip_json_comments(raw))
 
     # Filter instances: keep only those with "enabled": true (or without the flag)
     if "instances" in config:
@@ -48,7 +110,8 @@ def load_full_config(base_path):
         sys.exit(1)
 
     with open(config_path, "r") as f:
-        config = json.load(f)
+        raw = f.read()
+    config = json.loads(_strip_json_comments(raw))
 
     _validate_config(config)
     return config
