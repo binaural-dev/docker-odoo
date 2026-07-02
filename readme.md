@@ -160,6 +160,9 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
+| `migration-homo <instance> -d <db>` | Muestra estado de migracion de modulos (binaural_* -> l10n_ve_*). |
+| `migration-homo <instance> -d <db> --install` | Instala modulos l10n_ve_* equivalentes. |
+| `migration-homo <instance> -d <db> --uninstall` | Desinstala modulos binaural_* migrados. |
 
 ### Ejemplos
 
@@ -194,6 +197,32 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 # Reiniciar todo
 ./odoo restart
 ```
+
+### Migracion a homologados (`migration-homo`)
+
+Migra modulos custom del cliente desde `binaural_*` (integra-addons) hacia `l10n_ve_*` (odoo-venezuela).
+
+**Flujo completo:**
+
+```bash
+# Ver estado de modulos a migrar
+./odoo migration-homo <instancia> -d <db>
+
+# Instalar modulos l10n_ve_* equivalentes
+./odoo migration-homo <instancia> -d <db> --install
+
+# Migrar referencias en modulos custom del cliente
+cd src/custom/<repo-del-cliente>
+opencode
+# Dentro de opencode ejecutar: @mig-customs-to-homo
+
+# Desinstalar modulos binaural_* legacy
+./odoo migration-homo <instancia> -d <db> --uninstall
+```
+
+**IMPORTANTE:** Nunca ejecutes `--uninstall` sin antes haber ejecutado el agente `@mig-customs-to-homo` o haber migrado manualmente las referencias `binaural_*` a `l10n_ve_*` en los modulos custom del cliente. Si omites este paso, los modulos custom quedaran con referencias rotas y Odoo fallara al actualizar.
+
+El comando `--uninstall` incluye una comprobacion que muestra esta advertencia y pregunta si ya migraste las referencias antes de proceder. Si respondes "No", la desinstalacion se cancela y puedes migrar los customs primero.
 
 En el comando `update`, el selector de bases incluye una opción visible de `all (todas las bases de datos)`.
 
