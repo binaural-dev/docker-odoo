@@ -196,7 +196,7 @@ def create_instance(name, repo_url, branch, odoo_version):
         except ValueError:
             print("❌ Error: Por favor ingresa un número de puerto válido.")
 
-    requested_config = f"{odoo_version}_default"
+    requested_config = f"{odoo_version}_full"
     available_configs = data.get("odoo_configs", {}).keys()
 
     if requested_config in available_configs:
@@ -212,13 +212,20 @@ def create_instance(name, repo_url, branch, odoo_version):
     addons_list = []
 
     major_version = odoo_version.split(".")[0]
-    enterprise_folder = f"src/enterprise-{major_version}"
+    database_name = f"v{major_version}"
+    enterprise_folder = f"src/enterprise_v{major_version}"
     if (BASE_PATH / enterprise_folder).exists():
         addons_list.append(enterprise_folder)
     else:
         addons_list.append("src/enterprise")
 
     addons_list.append(f"src/custom/{name}")
+
+    # Detectar automáticamente la carpeta client_addons dentro del repo
+    client_addons_path = repo_path / "client_addons"
+    if client_addons_path.exists() and client_addons_path.is_dir():
+        addons_list.append(f"src/custom/{name}/client_addons")
+        print(f"🔍 Carpeta client_addons detectada, agregada a la lista de addons.")
 
     gitmodules_path = repo_path / ".gitmodules"
     if gitmodules_path.exists():
@@ -243,9 +250,10 @@ def create_instance(name, repo_url, branch, odoo_version):
         data["instances"] = {}
 
     data["instances"][name] = {
+        "enabled": True,
         "odoo_version": odoo_version,
         "external_port": next_port,
-        "database": "pg16",
+        "database": database_name,
         "odoo_config": odoo_config,
         "overwrite_odoo_config": {"addons": addons_list},
     }
@@ -308,7 +316,12 @@ if __name__ == "__main__":
 
         odoo_version = sys.argv[4] if len(sys.argv) > 4 else ""
         while not odoo_version:
-            version_options = [(1, "17.0", "17.0"), (2, "19.0", "19.0")]
+            version_options = [
+                (1, "16.0", "16.0"),
+                (2, "17.0", "17.0"),
+                (3, "18.0", "18.0"),
+                (4, "19.0", "19.0"),
+            ]
             odoo_version = interactive_menu(
                 "⚙️  Selecciona la versión de Odoo", version_options
             )
