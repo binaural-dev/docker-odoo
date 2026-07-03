@@ -14,5 +14,9 @@ if [ "$VERSION" -ge 16 ]; then
   apt-get install -y postgresql-${VERSION}-pgvector
   rm -rf /var/lib/apt/lists/*
 
-  echo "pgvector extension installed."
+  echo "Creating pgvector extension in template1..."
+  psql -U "$POSTGRES_USER" -d template1 -c "CREATE EXTENSION IF NOT EXISTS vector;"
+  psql -U "$POSTGRES_USER" -d postgres -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+  echo "pgvector extension installed and created."
 fi

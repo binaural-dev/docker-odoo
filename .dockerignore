@@ -1,0 +1,14 @@
+src
+filestore
+.git
+.env
+instances.json
+instances.example.json
+docker-compose.generated.yml
+*.code-workspace
+**/.vscode
+**/__pycache__
+**/*.pyc
+**/venv
+*.log
+readme.md

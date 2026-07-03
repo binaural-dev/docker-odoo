@@ -181,9 +181,60 @@ def remove_odoo(config, instance=None):
         return
 
     if instance:
+        # 1. Stop Odoo container first to release most connections
         odoo_services = _get_instance_services(config, instance)
         for svc in odoo_services:
+            print(f"→ Deteniendo {svc}...")
+            _docker_compose("stop", svc)
+
+        # 2. Drop databases if requested
+        inst_conf = config["instances"][instance]
+        odoo_conf = resolve_instance_config(inst_conf, config)
+        db_filter = odoo_conf.get("db_filter", "")
+        
+        if db_filter:
+            print(f"\n→ Se detectó el filtro de base de datos: {db_filter}")
+            drop_db = input(f"¿Deseas eliminar también las bases de datos que coincidan con este filtro? (s/N): ")
+            if drop_db.lower() == "s":
+                all_dbs = get_databases(config, instance)
+                import re
+                try:
+                    # Clean filter for simple regex match if it's Odoo style ^prefix_
+                    clean_filter = db_filter.replace("^", "").replace("$", "")
+                    matching_dbs = [d for d in all_dbs if re.search(clean_filter, d)]
+                except Exception:
+                    matching_dbs = [d for d in all_dbs if d.startswith(instance)]
+
+                if matching_dbs:
+                    print(f"→ Bases de datos a eliminar: {', '.join(matching_dbs)}")
+                    for db_to_drop in matching_dbs:
+                        print(f"  • Eliminando {db_to_drop}...")
+                        # Use WITH (FORCE) to drop database even with active connections
+                        success = _run_psql_update(config, instance, "postgres", f"DROP DATABASE \"{db_to_drop}\" WITH (FORCE)")
+                        if success:
+                            print(f"    ✅ {db_to_drop} eliminada.")
+                        else:
+                            print(f"    ❌ No se pudo eliminar {db_to_drop}. Puede que no exista en el contenedor o requiera intervención manual.")
+                else:
+                    print("→ No se encontraron bases de datos que coincidan en el contenedor.")
+
+        # 3. Remove Odoo container
+        for svc in odoo_services:
+            print(f"→ Eliminando contenedor {svc}...")
             os.system(f"docker compose -f {COMPOSE_FILE} rm -s -v -f {svc}")
+        
+        # 3. Remove named volumes
+        project_name = os.path.basename(BASE_PATH).lower().replace(".", "")
+        volumes = [
+            f"{instance}-web",
+            f"{instance}-data",
+            f"{instance}-py3",
+            f"{instance}-py",
+        ]
+        for vol in volumes:
+            vol_full_name = f"{project_name}_{vol}"
+            print(f"→ Eliminando volumen {vol_full_name}...")
+            os.system(f"docker volume rm {vol_full_name} 2>/dev/null || true")
     else:
         _docker_compose("down", "-v", "--remove-orphans")
 
@@ -718,26 +769,10 @@ def sync(repo_names, branch, show=False):
 
 def get_databases(config, instance):
     """Fetch database names from the postgres container of an instance."""
-    try:
-        inst_conf = config["instances"][instance]
-        db_conf = resolve_db_config(inst_conf, config)
-        db_host = get_db_host(inst_conf["database"], db_conf)
-        db_user = db_conf["user"]
-        db_password = db_conf["password"]
-        db_port = db_conf["port"]
-        container = f"odoo-{instance}"
-
-        # Try to get databases from postgres
-        cmd = (
-            f"docker exec -e PGPASSWORD={db_password} {container} "
-            f"psql --host {db_host} --port {db_port} -U {db_user} -d postgres -At -c "
-            f"\"SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres', 'template1');\" 2>/dev/null"
-        )
-        output = subprocess.check_output(cmd, shell=True).decode().strip()
-        if output:
-            return sorted(output.split("\n"))
-    except Exception:
-        pass
+    output = _run_psql_query(config, instance, "postgres", 
+                            "SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres', 'template1');")
+    if output:
+        return sorted(output.split("\n"))
     return []
 
 
@@ -948,35 +983,56 @@ def _get_db_psql_params(config, instance, dbname):
         "user": db_conf["user"],
         "password": db_conf["password"],
         "port": db_conf["port"],
-        "container": f"odoo-{instance}",
+        "odoo_container": f"odoo-{instance}",
+        "db_container": f"db-{inst_conf['database']}",
         "dbname": dbname,
     }
 
 
 def _run_psql_query(config, instance, dbname, query):
     db = _get_db_psql_params(config, instance, dbname)
+    # Intenta vía contenedor Odoo primero
     cmd = (
-        f"docker exec -e PGPASSWORD={db['password']} {db['container']} "
+        f"docker exec -e PGPASSWORD={db['password']} {db['odoo_container']} "
         f"psql --host {db['host']} --port {db['port']} -U {db['user']} "
-        f"-d {dbname} -At -c \"{query}\" 2>/dev/null"
+        f"-d {db['dbname']} -At -c \"{query}\""
     )
     try:
-        return subprocess.check_output(cmd, shell=True).decode().strip()
+        return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
     except Exception:
-        return ""
+        # Fallback vía contenedor DB directamente
+        cmd = (
+            f"docker exec -e PGPASSWORD={db['password']} {db['db_container']} "
+            f"psql -U {db['user']} -d {db['dbname']} -At -c \"{query}\""
+        )
+        try:
+            return subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode().strip()
+        except Exception:
+            return ""
 
 
 def _run_psql_update(config, instance, dbname, query):
     db = _get_db_psql_params(config, instance, dbname)
+    # Intenta vía contenedor Odoo primero
     cmd = (
-        f"docker exec -e PGPASSWORD={db['password']} {db['container']} "
+        f"docker exec -e PGPASSWORD={db['password']} {db['odoo_container']} "
         f"psql --host {db['host']} --port {db['port']} -U {db['user']} "
-        f"-d {dbname} -c \"{query}\" 2>/dev/null"
+        f"-d {db['dbname']} -c \"{query}\""
     )
     try:
-        subprocess.check_output(cmd, shell=True)
+        subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL)
+        return True
     except Exception:
-        pass
+        # Fallback vía contenedor DB directamente
+        cmd = (
+            f"docker exec -e PGPASSWORD={db['password']} {db['db_container']} "
+            f"psql -U {db['user']} -d {db['dbname']} -c \"{query}\""
+        )
+        try:
+            subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            return False
 
 
 def _get_studio_views_inheriting_from_modules(config, instance, dbname, modules):
