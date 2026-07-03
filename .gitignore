@@ -12,3 +12,9 @@ docker-compose.generated.yml
 *antigractivy*
 venv
 __pycache__
+.atl/
+.windsurf/
+.ignore
+.DS_Store
+openspec
+.codegraph
