@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""Clean orphaned M2M relation records before Odoo module upgrades.
+
+When transient model (wizard) records are cleaned up by Odoo's garbage
+collector, their M2M relation records (stored in _rel tables) may not be
+properly deleted. This causes foreign-key violations during module upgrades
+when Odoo tries to add/modify FK constraints.
+
+This script scans ALL _rel tables in the database and removes orphaned rows
+whose parent no longer exists.  This is safe because M2M join rows are
+meaningless when one side of the relationship is missing.
+
+Usage:
+    ./scripts/cleanup-wizard-orphans <instance> -d <database>
+    ./scripts/cleanup-wizard-orphans <instance> -d <database> --dry-run
+"""
+
+import re
+import click
+import subprocess
+import sys
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, BASE_PATH + "/.resources")
+from generators.config_loader import load_config, resolve_db_config, get_db_host
+
+
+def _build_sql(dry_run):
+    """Build PL/pgSQL block that finds orphaned _id columns (without FK
+    constraints) in _rel tables and removes the orphaned rows."""
+
+    if dry_run:
+        action_sql = """EXECUTE format(
+            'SELECT count(*) FROM %I WHERE %I NOT IN (SELECT id FROM %I)',
+            r.table_name, r.column_name, parent_tbl
+        ) INTO cnt;"""
+        notice_prefix = "Registros huérfanos:"
+        summary_note = "se eliminarían"
+    else:
+        action_sql = """EXECUTE format(
+            'DELETE FROM %I WHERE %I NOT IN (SELECT id FROM %I)',
+            r.table_name, r.column_name, parent_tbl
+        );
+        GET DIAGNOSTICS cnt = ROW_COUNT;"""
+        notice_prefix = "Eliminados:"
+        summary_note = "eliminados"
+
+    return f"""
+    DO $$
+    DECLARE
+        r RECORD;
+        cnt INTEGER;
+        total INTEGER := 0;
+        parent_tbl TEXT;
+    BEGIN
+        FOR r IN
+            SELECT c.table_name, c.column_name
+            FROM information_schema.columns c
+            WHERE c.table_schema = 'public'
+              AND c.table_name LIKE '%\\_rel'
+              AND c.column_name LIKE '%\\_id'
+              AND c.column_name != 'id'
+              AND NOT EXISTS (
+                  SELECT 1 FROM information_schema.key_column_usage kcu
+                  JOIN information_schema.table_constraints tc
+                      ON kcu.constraint_name = tc.constraint_name
+                     AND kcu.table_schema = tc.table_schema
+                  WHERE tc.constraint_type = 'FOREIGN KEY'
+                    AND tc.table_schema = 'public'
+                    AND kcu.table_name = c.table_name
+                    AND kcu.column_name = c.column_name
+              )
+        LOOP
+            parent_tbl := substring(
+                r.column_name
+                FROM 1 FOR length(r.column_name) - 3
+            );
+
+            CONTINUE WHEN NOT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = parent_tbl
+            );
+
+            {action_sql}
+
+            IF cnt > 0 THEN
+                RAISE NOTICE '% % filas de %.% (huérfano % → tabla %)',
+                    '{notice_prefix}', cnt, r.table_name, r.column_name,
+                    r.column_name, parent_tbl;
+                total := total + cnt;
+            END IF;
+        END LOOP;
+
+        IF total > 0 THEN
+            RAISE NOTICE 'Total de registros huérfanos {summary_note}: %', total;
+        ELSE
+            RAISE NOTICE 'No se encontraron registros huérfanos. Base de datos limpia.';
+        END IF;
+    END;
+    $$;
+    """
+
+
+@click.command(help="Clean orphaned M2M relation records before Odoo upgrades")
+@click.argument("instance")
+@click.option("-d", required=True, help="Database name")
+@click.option("--dry-run", is_flag=True, default=False, help="Only report, don't delete")
+def run_command(instance, d, dry_run):
+    config = load_config(BASE_PATH)
+    if instance not in config["instances"]:
+        click.echo(f"Error: instancia '{instance}' no existe")
+        sys.exit(2)
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    db_port = db_conf["port"]
+    container = f"odoo-{instance}"
+
+    click.echo(f"  Instancia : {instance}")
+    click.echo(f"  Base datos: {d}")
+    click.echo(f"  Contenedor: {container}")
+    if dry_run:
+        click.echo(f"  Modo      : dry-run (solo lectura)")
+    click.echo("")
+
+    sql = _build_sql(dry_run)
+
+    cmd = [
+        "docker", "exec", "-i",
+        "-e", f"PGPASSWORD={db_password}",
+        container, "psql",
+        "--host", db_host,
+        "--port", str(db_port),
+        "-U", db_user,
+        "-d", d,
+    ]
+
+    click.echo("🔍 Escaneando registros huérfanos en tablas relacionales...")
+    click.echo("")
+
+    result = subprocess.run(
+        cmd,
+        input=sql,
+        capture_output=True,
+        text=True,
+    )
+
+    # Parse output – NOTICE lines go to stderr in psql
+    total_huerfanos = 0
+    for line in result.stderr.splitlines():
+        if "NOTICE:" in line:
+            msg = line.split("NOTICE:")[1].strip()
+            click.echo("  " + msg)
+            m = re.search(r'Total de registros huérfanos.*?(\d+)', msg)
+            if m:
+                total_huerfanos = int(m.group(1))
+    for line in result.stdout.splitlines():
+        stripped = line.strip()
+        if stripped and ("DELETE" in stripped or "ERROR" in stripped):
+            click.echo("  " + stripped)
+
+    if result.returncode != 0:
+        click.echo(f"\n❌ Falló psql (código de salida {result.returncode})")
+        if result.stderr.strip():
+            click.echo("  stderr:")
+            for line in result.stderr.splitlines():
+                click.echo("    " + line)
+        sys.exit(2)
+
+    click.echo("")
+    if dry_run:
+        click.echo("✅ Análisis completo. Ejecuta sin --dry-run para eliminar los huérfanos.")
+        sys.exit(1 if total_huerfanos > 0 else 0)
+    else:
+        click.echo("✅ Limpieza completada.")
+
+
+if __name__ == "__main__":
+    run_command()
