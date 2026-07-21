@@ -232,7 +232,6 @@ def _nginx_service(config):
     lines = [
         "  nginx:",
         "    restart: always",
-        "    container_name: odoo-nginx",
         "    image: nginx:latest",
         # "    depends_on:",
     ]
