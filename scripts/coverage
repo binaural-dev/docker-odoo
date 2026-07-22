@@ -6,7 +6,11 @@ set -euo pipefail
 #   ./scripts/coverage --odoo_container=<name> --modules=<path> --test_tags=<tags>
 #
 # Options:
-#   --odoo_container   Odoo Docker container name (required)
+#   --odoo_container   Odoo Compose service name, e.g. odoo-<instance> (required).
+#                      Resolved via `docker compose exec`, not a raw
+#                      `docker exec` — the real container name is namespaced
+#                      by the Compose project, so this must be the *service*
+#                      name from docker-compose.generated.yml.
 #   --modules          Comma-separated module paths relative to /home/odoo/src/ (required)
 #   --test_tags        Odoo --test-tags value (required)
 #   --db_name          Database name (optional, defaults to auto-generated temp DB)
@@ -50,6 +54,18 @@ if [[ -z "$ODOO_CONTAINER" || -z "$TEST_TAGS" || -z "$MODULES" ]]; then
   exit 1
 fi
 
+# ── Resolve compose file + a docker-compose-exec helper ─────────────────────
+# The container's real name is namespaced by the Compose project, so every
+# docker exec/cp below targets the *service* name (docker-compose.generated.yml)
+# through `docker compose`, never a raw `docker exec`/`docker cp` by container name.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_PATH="$(dirname "$SCRIPT_DIR")"
+COMPOSE_FILE="$BASE_PATH/docker-compose.generated.yml"
+
+docker_exec() {
+  docker compose -f "$COMPOSE_FILE" exec -T "$ODOO_CONTAINER" "$@"
+}
+
 # ── Dynamic database name ────────────────────────────────────────────────────
 if [[ -z "$DB_NAME" ]]; then
   DB_NAME="cov_$(date +%Y%m%d_%H%M%S)"
@@ -72,7 +88,8 @@ SOURCE_PATHS=${SOURCE_PATHS%,}
 MODULE_NAMES=${MODULE_NAMES%,}
 
 COVERAGERC_PATH="/home/odoo/.coveragerc"
-DB_CONTAINER=$(docker inspect "$ODOO_CONTAINER" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || echo "host.docker.internal")
+ODOO_CONTAINER_ID=$(docker compose -f "$COMPOSE_FILE" ps -q "$ODOO_CONTAINER" 2>/dev/null || true)
+DB_CONTAINER=$(docker inspect "$ODOO_CONTAINER_ID" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || echo "host.docker.internal")
 
 echo ""
 echo "  ┌─────────────────────────────────────────┐"
@@ -86,7 +103,7 @@ echo ""
 
 # ── Create temp database ─────────────────────────────────────────────────────
 echo "📦 Creando base de datos temporal '$DB_NAME'..."
-docker exec "$ODOO_CONTAINER" bash -c "
+docker_exec bash -c "
   PGPASSWORD=odoo psql -h $DB_CONTAINER -U odoo -d postgres -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER odoo;\"
 " || {
   echo "❌ No se pudo crear la base de datos '$DB_NAME'."
@@ -99,7 +116,7 @@ cleanup() {
   if [[ "$KEEP_DB" == false && -n "$DB_NAME" ]]; then
     echo ""
     echo "🧹 Eliminando base de datos temporal '$DB_NAME'..."
-    docker exec "$ODOO_CONTAINER" bash -c "
+    docker_exec bash -c "
       PGPASSWORD=odoo psql -h $DB_CONTAINER -U odoo -d postgres -c \"DROP DATABASE IF EXISTS \\\"$DB_NAME\\\";\" 2>/dev/null
     " || true
     echo "   ✅ DB '$DB_NAME' eliminada."
@@ -112,7 +129,7 @@ echo ""
 echo "🚀 Ejecutando tests con coverage..."
 echo ""
 
-docker exec "$ODOO_CONTAINER" bash -c "
+docker_exec bash -c "
   pip3 show coverage >/dev/null 2>&1 || pip3 install coverage >/dev/null 2>&1
   python3 -m coverage erase
   python3 -m coverage run --rcfile=$COVERAGERC_PATH --source=$SOURCE_PATHS /usr/bin/odoo \
@@ -128,18 +145,18 @@ docker exec "$ODOO_CONTAINER" bash -c "
   echo \$? > /tmp/coverage_exit
 "
 
-EXIT_CODE=$(docker exec "$ODOO_CONTAINER" cat /tmp/coverage_exit 2>/dev/null || echo 1)
+EXIT_CODE=$(docker_exec cat /tmp/coverage_exit 2>/dev/null || echo 1)
 
 echo ""
 echo "📊 Reporte de cobertura:"
 echo ""
-docker exec "$ODOO_CONTAINER" bash -c "python3 -m coverage report -m --fail-under=$THRESHOLD"
+docker_exec bash -c "python3 -m coverage report -m --fail-under=$THRESHOLD"
 COV_EXIT=$?
 
 echo ""
 echo "📦 Exportando .coverage desde el contenedor..."
 mkdir -p coverage_data
-docker cp "$ODOO_CONTAINER":/home/odoo/.coverage ./coverage_data/ 2>/dev/null && \
+docker compose -f "$COMPOSE_FILE" cp "$ODOO_CONTAINER":/home/odoo/.coverage ./coverage_data/ 2>/dev/null && \
   echo "   ✅ .coverage exportado a coverage_data/" || \
   echo "   ⚠️  No se pudo exportar .coverage"
 echo ""
