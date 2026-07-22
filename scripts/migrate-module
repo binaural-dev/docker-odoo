@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import subprocess
 import sys
 import click
@@ -24,11 +25,12 @@ def run_command(instance, d, i):
     odoo_version = inst_conf["odoo_version"]
     major = odoo_version.split(".")[0]
     container = f"odoo-{instance}"
+    compose_file = os.path.join(BASE_PATH, "docker-compose.generated.yml")
     load_modules = f"base,web,views_migration_{major}"
 
     result = subprocess.run(
         [
-            "docker", "exec",
+            "docker", "compose", "-f", compose_file, "exec", "-T",
             container,
             "odoo",
             "-i", i,

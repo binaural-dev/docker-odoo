@@ -37,6 +37,7 @@ def run_command(instance, d, l, password):
     db_password = db_conf["password"]
     db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
+    compose_file = os.path.join(BASE_PATH, "docker-compose.generated.yml")
 
     safe_pw = shlex.quote(password)
     safe_login = shlex.quote(l)
@@ -45,7 +46,7 @@ def run_command(instance, d, l, password):
     # Sin esto, psql falla con 'database does not exist' y termina con
     # error confuso cuando la instancia no coincide con la DB.
     existe, disponibles = _check_db_exists(
-        container, db_host, db_user, db_port, db_password, d,
+        container, db_host, db_user, db_port, db_password, d, compose_file,
     )
     if not existe:
         bases_str = ", ".join(disponibles) if disponibles else "(no se pudo listar)"
@@ -61,7 +62,7 @@ def run_command(instance, d, l, password):
     click.echo(f"\n→ Restableciendo contraseña para el usuario '{l}' en la base de datos '{d}'...")
     proc = subprocess.run(
         [
-            "docker", "exec",
+            "docker", "compose", "-f", compose_file, "exec", "-T",
             container,
             "psql",
             "--host", db_host,
