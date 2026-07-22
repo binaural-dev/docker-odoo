@@ -11,7 +11,7 @@ Validaciones que viven en ambos entry points:
 import subprocess
 
 
-def _check_db_exists(container, db_host, db_user, db_port, db_password, dbname):
+def _check_db_exists(container, db_host, db_user, db_port, db_password, dbname, compose_file):
     """Comprueba que ``dbname`` exista en el contenedor PostgreSQL.
 
     Devuelve una tupla ``(existe, disponibles)``:
@@ -26,10 +26,16 @@ def _check_db_exists(container, db_host, db_user, db_port, db_password, dbname):
     y devuelve segun el output. Si psql retorna rc != 0, ``existe``
     es False y la lista de disponibles es vacia (no podemos
     saber mas sin acceso a la DB).
+
+    ``container`` es el nombre de *servicio* de compose (``odoo-<inst>``),
+    no el container_name real de Docker — este último ya no es fijo
+    (se namespacea por proyecto), así que hay que resolverlo siempre vía
+    ``docker compose exec`` con ``compose_file`` explícito, nunca con
+    ``docker exec`` plano.
     """
     env = {"PGPASSWORD": db_password, "PATH": "/usr/bin:/bin:/usr/local/bin"}
     psql_base = [
-        "docker", "exec", container,
+        "docker", "compose", "-f", compose_file, "exec", "-T", container,
         "psql",
         "--host", db_host,
         "--port", str(db_port),

@@ -52,9 +52,11 @@ def bash_update_modules(
         f"\n=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} "
         f"(DB: {dbname}) ===\n"
     )
+    from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
+
     container = f"odoo-{instance}"
     cmd = [
-        "docker", "exec", container, "odoo",
+        "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container, "odoo",
         "--stop-after-init", "--http-port", "9999", "--workers=0",
         "-u", modules, "-d", dbname,
     ]
@@ -139,6 +141,7 @@ def reset_password(
     resolve_db_config, get_db_host, get_db_internal_port,
 )
     from generators.pw_helpers import _check_db_exists
+    from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
 
     runner.info(
         f"\n=== 🔑 RESTABLECIENDO CONTRASEÑA EN: {instance.upper()} "
@@ -157,7 +160,7 @@ def reset_password(
     # no se da cuenta si el returncode no se chequea (o el script termina
     # con error confuso).
     existe, disponibles = _check_db_exists(
-        container, db_host, db_user, db_port, db_password, dbname,
+        container, db_host, db_user, db_port, db_password, dbname, COMPOSE_FILE,
     )
     if not existe:
         bases_str = ", ".join(disponibles) if disponibles else "(no se pudo listar)"
@@ -178,7 +181,7 @@ def reset_password(
         f"WHERE login = {safe_login_lit};"
     )
     check_proc = subprocess.run(
-        ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port),
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container, "psql", "--host", db_host, "--port", str(db_port),
          "-U", db_user, "-d", dbname, "-tAF", "|", "-c", check_sql],
         env={**os.environ, "PGPASSWORD": db_password},
         capture_output=True,
@@ -197,7 +200,7 @@ def reset_password(
             f"WHERE LOWER(login) = LOWER({safe_login_lit}) LIMIT 1;"
         )
         suggest_proc = subprocess.run(
-            ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port),
+            ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container, "psql", "--host", db_host, "--port", str(db_port),
              "-U", db_user, "-d", dbname, "-tAF", "", "-c", suggest_sql],
             env={**os.environ, "PGPASSWORD": db_password},
             capture_output=True,
@@ -213,8 +216,8 @@ def reset_password(
             )
         else:
             runner.info(
-                f"  Verificá los logins con: docker exec {container} psql -U {db_user} -d {dbname} "
-                f"-c \"SELECT login FROM res_users;\""
+                f"  Verificá los logins con: docker compose -f {COMPOSE_FILE} exec {container} "
+                f"psql -U {db_user} -d {dbname} -c \"SELECT login FROM res_users;\""
             )
         runner.error(
             f"\n  Volvé a correr el comando con el login correcto. "
@@ -229,7 +232,7 @@ def reset_password(
     )
     sql = f"update res_users set password = {safe_pw} where login = {safe_login_lit};"
     proc = subprocess.run(
-        ["docker", "exec", container, "psql", "--host", db_host, "--port", str(db_port),
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container, "psql", "--host", db_host, "--port", str(db_port),
          "-U", db_user, "-d", dbname, "-c", sql],
         env={**os.environ, "PGPASSWORD": db_password},
         capture_output=True,
