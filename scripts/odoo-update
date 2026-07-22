@@ -22,11 +22,12 @@ def run_command(instance, d, load_language, modules):
         click.echo(f"Error: instancia '{instance}' no existe")
         sys.exit(1)
 
-    container = f"odoo-{instance}"
+    service = f"odoo-{instance}"
+    compose_file = os.path.join(BASE_PATH, "docker-compose.generated.yml")
     modules_str = ','.join(modules) if modules else 'all'
     cmd = [
-        "docker", "exec",
-        container,
+        "docker", "compose", "-f", compose_file, "exec", "-T",
+        service,
         "odoo",
         "-d", d,
         "-u", modules_str,
