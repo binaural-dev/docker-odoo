@@ -104,7 +104,6 @@ def _db_service(db_name, db_conf):
 
     lines += [
         "    restart: always",
-        f"    container_name: {container_name}",
         "    build:",
         "      context: .",
         "      dockerfile: ./.resources/db.Dockerfile",
@@ -156,7 +155,6 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
         f"  {container_name}:",
         "    command: odoo",
         "    restart: always",
-        f"    container_name: {container_name}",
         "    build:",
         "      context: .",
         f"      dockerfile: ./{dockerfile}",
@@ -292,7 +290,6 @@ def _mailhog_service(mailhog_conf):
     return [
         "  mailhog:",
         "    image: mailhog/mailhog:latest",
-        "    container_name: odoo-mailhog",
         "    restart: always",
         "    networks:",
         f"      - {NETWORK_NAME}",
@@ -310,7 +307,6 @@ def _pgadmin_service(pgadmin_conf):
     return [
         "  pgadmin:",
         "    image: dpage/pgadmin4:latest",
-        "    container_name: odoo-pgadmin",
         "    restart: always",
         "    environment:",
         f"      PGADMIN_DEFAULT_EMAIL: {email}",

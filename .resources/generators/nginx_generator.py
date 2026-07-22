@@ -44,7 +44,7 @@ def generate_nginx_config(base_path, config):
         pg_port = pgadmin_conf.get("port", 5050)
         blocks.append(
             _generic_service_block(
-                "pgadmin", pg_port, 80, "odoo-pgadmin", is_first
+                "pgadmin", pg_port, 80, "pgadmin", is_first
             )
         )
         is_first = False
@@ -55,7 +55,7 @@ def generate_nginx_config(base_path, config):
         # MailHog web UI listens on 8025 inside the container.
         blocks.append(
             _generic_service_block(
-                "mailhog", mh_port, 8025, "odoo-mailhog", is_first,
+                "mailhog", mh_port, 8025, "mailhog", is_first,
                 upstream_port=8025,
             )
         )
