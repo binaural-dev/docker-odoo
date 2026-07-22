@@ -18,6 +18,12 @@ from generators.config_loader import (
     get_db_internal_port,
 )
 
+# The container's real name is namespaced by the Compose project, not a
+# bare "odoo-<instance>" — everything here must go through ``docker
+# compose exec``/``docker compose cp`` (by *service* name), never plain
+# ``docker exec``/``docker cp`` against a container name.
+COMPOSE_FILE = os.path.join(BASE_PATH, "docker-compose.generated.yml")
+
 
 # ============================================================
 # 1. DumpManager: genera dump.sql dentro del contenedor
@@ -55,7 +61,11 @@ class DumpManager:
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             "-u",
             self.linux_dump_user,
             self.container,
@@ -100,7 +110,11 @@ class DumpManager:
 
         verify_cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             self.container,
             "bash",
             "-lc",
@@ -118,7 +132,11 @@ class DumpManager:
             )
             install_cmd = [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 "root",
                 self.container,
@@ -135,7 +153,7 @@ class DumpManager:
                 raise RuntimeError(
                     f"Error al ejecutar apt-get install {package_name} en {self.container}: {exc}\n"
                     f"Sugerencia: instalá manualmente con:\n"
-                    f"  docker exec -u root {self.container} apt-get install -y {package_name}"
+                    f"  docker compose -f {COMPOSE_FILE} exec -u root {self.container} apt-get install -y {package_name}"
                 ) from exc
 
             if install_result.returncode != 0:
@@ -144,7 +162,7 @@ class DumpManager:
                 raise RuntimeError(
                     f"Falló la instalación de {package_name} dentro del contenedor {self.container}.\n"
                     f"Sugerencia: instalá manualmente con:\n"
-                    f"  docker exec -u root {self.container} apt-get install -y {package_name}"
+                    f"  docker compose -f {COMPOSE_FILE} exec -u root {self.container} apt-get install -y {package_name}"
                 )
 
         detected_major = self._get_pg_dump_major_in_container(pg_dump_bin=target_bin)
@@ -182,7 +200,11 @@ class DumpManager:
         # 1. Verificar si el usuario ya existe
         check_cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             self.container,
             "bash",
             "-c",
@@ -199,7 +221,11 @@ class DumpManager:
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             "-u",
             "root",
             self.container,
@@ -220,7 +246,11 @@ class DumpManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 self.linux_dump_user,
                 self.container,
@@ -262,7 +292,11 @@ class DumpManager:
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             "-u",
             self.linux_dump_user,
             self.container,
@@ -295,6 +329,9 @@ class DumpManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "cp",
                 f"{self.container}:{self.dump_path}",
                 self.copy_to_local_path,
@@ -334,6 +371,9 @@ class FilestoreManager:
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "cp",
             f"{self.container}:{self.container_filestore_path}/.",
             self.local_filestore_path,
@@ -486,7 +526,11 @@ class CleanupManager:
             subprocess.run(
                 [
                     "docker",
+                    "compose",
+                    "-f",
+                    COMPOSE_FILE,
                     "exec",
+                    "-T",
                     "-u",
                     self.linux_dump_user,
                     self.container,
@@ -509,7 +553,11 @@ class CleanupManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 self.linux_dump_user,
                 self.container,
@@ -782,7 +830,11 @@ def list_databases(container_name, db_user, db_host, db_port, db_password):
 
     cmd = [
         "docker",
+        "compose",
+        "-f",
+        COMPOSE_FILE,
         "exec",
+        "-T",
         container_name,
         "psql",
         f"-U{db_user}",
