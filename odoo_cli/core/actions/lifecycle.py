@@ -121,7 +121,7 @@ def start_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
         try:
             subprocess.run(
                 [
-                    "docker", "exec", "-u", "root", svc,
+                    "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "-u", "root", svc,
                     "chown", "-R", "odoo:odoo", "/home/odoo/data",
                 ],
                 stderr=subprocess.DEVNULL,
@@ -129,9 +129,16 @@ def start_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
         except Exception:
             pass
 
-    # Start nginx
+    # Start nginx. Force-recreate it so the bind-mounted nginx config
+    # (which may have just changed) is actually picked up — nginx only
+    # reads its config at container start. Targets the compose *service*
+    # (not a fixed container name: nginx's real container name is
+    # namespaced by the Compose project, not a bare "odoo-nginx").
     runner.info("\n→ Iniciando Nginx...")
-    subprocess.run(["docker", "rm", "-f", "odoo-nginx"], stderr=subprocess.DEVNULL)
+    subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "rm", "-s", "-f", "nginx"],
+        stderr=subprocess.DEVNULL,
+    )
     _docker_compose(runner, "up", "-d", "nginx")
 
     # Show URLs
@@ -255,7 +262,7 @@ def fix_filestore(runner: "Runner", config: dict, instance: str | None) -> None:
         try:
             subprocess.run(
                 [
-                    "docker", "exec", "-u", "root", svc,
+                    "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "-u", "root", svc,
                     "chown", "-R", "odoo:odoo", "/home/odoo/data",
                 ],
                 stderr=subprocess.DEVNULL,
