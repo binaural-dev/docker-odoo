@@ -4,6 +4,7 @@ Creates services for managed databases, Odoo instances, nginx, and optionally pg
 """
 
 import os
+import re
 
 from .config_loader import (
     resolve_instance_config,
@@ -24,17 +25,35 @@ MAILHOG_SERVICE_NAME = "mailhog"
 MAILHOG_DEFAULT_SMTP_PORT = 1025
 
 
+def _project_slug(base_path):
+    """
+    Derive a stable per-checkout token from the containing directory name.
+
+    Docker image names/tags are a *global* namespace on the host — unlike
+    container names, networks, and volumes, they are never scoped by Docker
+    Compose's project name. Two separate docker-odoo checkouts that reuse the
+    same `database` key or instance name (e.g. both use "v17") would otherwise
+    build and overwrite the exact same local image tag on `./odoo build`.
+    Prefixing with this slug keeps images distinct per checkout, mirroring how
+    Compose already scopes everything else by directory name.
+    """
+    name = os.path.basename(os.path.abspath(base_path))
+    name = re.sub(r"[^a-z0-9_.-]+", "-", name.lower()).strip("-")
+    return name or "docker-odoo"
+
+
 def generate_compose(base_path, config, dockerfile_map):
     """
     Generate docker-compose.generated.yml.
     Returns the output file path.
     """
     lines = _header()
+    project = _project_slug(base_path)
 
     # --- Database services ---
     managed_dbs = get_managed_databases(config)
     for db_name, db_conf in managed_dbs.items():
-        lines += _db_service(db_name, db_conf)
+        lines += _db_service(db_name, db_conf, project)
 
     # --- Odoo instance services ---
     mailhog_conf = config.get("mailhog", {}) if config.get("mailhog", {}).get("enabled", False) else None
@@ -45,7 +64,7 @@ def generate_compose(base_path, config, dockerfile_map):
         odoo_version = inst_conf["odoo_version"]
         dockerfile = dockerfile_map[odoo_version]
         lines += _odoo_service(
-            inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf
+            inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf, project
         )
 
     # --- Nginx service ---
@@ -85,7 +104,7 @@ def _header():
     ]
 
 
-def _db_service(db_name, db_conf):
+def _db_service(db_name, db_conf, project):
     pg_version = db_conf["postgres_version"]
     port = db_conf["port"]
     user = db_conf["user"]
@@ -109,7 +128,7 @@ def _db_service(db_name, db_conf):
         "      dockerfile: ./.resources/db.Dockerfile",
         "      args:",
         f"        POSTGRES_IMG_VERSION: {pg_version}",
-        f"    image: local_odoo_db_{db_name}:{pg_version}",
+        f"    image: local_odoo_db_{project}_{db_name}:{pg_version}",
         "    ports:",
         f'      - "{port}:5432"',
         f"    networks:",
@@ -127,7 +146,7 @@ def _db_service(db_name, db_conf):
     return lines
 
 
-def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf):
+def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf, project):
     odoo_version = inst_conf["odoo_version"]
     odoo_minor = get_odoo_minor(odoo_version)
     container_name = f"odoo-{inst_name}"
@@ -158,7 +177,7 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
         "    build:",
         "      context: .",
         f"      dockerfile: ./{dockerfile}",
-        f"    image: local_odoo_{inst_name}:{odoo_minor}",
+        f"    image: local_odoo_{project}_{inst_name}:{odoo_minor}",
         "    extra_hosts:",
         '      - "host.docker.internal:host-gateway"',
         "    dns:",
