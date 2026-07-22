@@ -104,6 +104,10 @@ def start_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
     else:
         runner.info("\n=== ▶️  INICIANDO TODAS LAS INSTANCIAS ===\n")
 
+    from odoo_cli.core.actions.validate import check_host_port_collisions
+
+    check_host_port_collisions(runner, config, compose_file=COMPOSE_FILE)
+
     db_services = get_db_services(config, instance)
     odoo_services = get_instance_services(config, instance)
 

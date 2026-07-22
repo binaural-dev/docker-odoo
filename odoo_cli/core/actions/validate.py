@@ -10,6 +10,8 @@ them.
 
 from __future__ import annotations
 
+import re
+import subprocess
 import sys
 from typing import TYPE_CHECKING
 
@@ -103,3 +105,102 @@ def validate_instances(runner: "Runner", config: dict) -> None:
             runner.error(f"  - {err}")
         runner.error("")
         sys.exit(1)
+
+
+def _collect_config_ports(config: dict) -> set[int]:
+    """Every host-side port this ``instances.json`` wants to bind."""
+    ports: set[int] = set()
+
+    for db_conf in config.get("databases", {}).values():
+        if db_conf.get("port"):
+            ports.add(db_conf["port"])
+
+    if config.get("pgadmin", {}).get("enabled"):
+        if config["pgadmin"].get("port"):
+            ports.add(config["pgadmin"]["port"])
+
+    if config.get("mailhog", {}).get("enabled"):
+        if config["mailhog"].get("http_port"):
+            ports.add(config["mailhog"]["http_port"])
+
+    for inst in config.get("instances", {}).values():
+        if inst.get("external_port"):
+            ports.add(inst["external_port"])
+        if inst.get("longpolling_port"):
+            ports.add(inst["longpolling_port"])
+
+    return ports
+
+
+def check_host_port_collisions(
+    runner: "Runner", config: dict, compose_file: str = "docker-compose.generated.yml"
+) -> None:
+    """Warn (never block) if a wanted port is already held by a container
+    from a *different* Compose project running on this host.
+
+    ``validate_instances`` only catches duplicate ports *within* this one
+    ``instances.json`` — it has no way to see a second, separate
+    docker-odoo checkout on the same machine. This looks at the actual
+    Docker state instead: any port we want that's already published by a
+    container outside our own project is very likely another deployment
+    reusing the same port (a common copy-paste-from-example mistake),
+    which would otherwise only surface as a cryptic "address already in
+    use" from Docker itself.
+
+    Best-effort: if the Docker daemon isn't reachable (or ``docker`` isn't
+    installed), this silently does nothing — Docker's own bind-conflict
+    error remains the final safety net either way.
+    """
+    wanted_ports = _collect_config_ports(config)
+    if not wanted_ports:
+        return
+
+    try:
+        own = subprocess.run(
+            ["docker", "compose", "-f", compose_file, "ps", "-q"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        all_containers = subprocess.run(
+            ["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return
+
+    if all_containers.returncode != 0:
+        return
+
+    own_ids = set(own.stdout.split())
+
+    conflicts: list[tuple[str, list[int]]] = []
+    for line in all_containers.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        container_id, name, ports_str = parts
+        if container_id in own_ids:
+            continue
+        host_ports = {int(p) for p in re.findall(r":(\d+)->", ports_str)}
+        hit = wanted_ports & host_ports
+        if hit:
+            conflicts.append((name, sorted(hit)))
+
+    if conflicts:
+        runner.warn(
+            "\n⚠️  Posible colisión de puertos con OTRO despliegue/proyecto "
+            "de Docker ya corriendo en este host (no es el nuestro):"
+        )
+        for name, ports in conflicts:
+            runner.warn(
+                f"  - '{name}' ya está usando el/los puerto(s): "
+                f"{', '.join(str(p) for p in ports)}"
+            )
+        runner.warn(
+            "  Si son dos checkouts distintos de docker-odoo, revisá que "
+            "no reutilicen los mismos valores de external_port/database "
+            "port/pgadmin/mailhog en instances.json.\n"
+        )

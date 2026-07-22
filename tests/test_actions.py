@@ -11,10 +11,15 @@ stdout/stdin.
 
 from __future__ import annotations
 
+import subprocess
 import unittest
 from typing import Callable
+from unittest.mock import patch
 
-from odoo_cli.core.actions.validate import validate_instances
+from odoo_cli.core.actions.validate import (
+    check_host_port_collisions,
+    validate_instances,
+)
 
 
 class FakeRunner:
@@ -169,6 +174,73 @@ class ValidateInstancesTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as cm:
             validate_instances(runner, config)
         self.assertEqual(cm.exception.code, 1)
+
+
+class CheckHostPortCollisionsTest(unittest.TestCase):
+    """``check_host_port_collisions`` warns about ports another (non-ours)
+    Docker project already holds, and never raises even when Docker is
+    unreachable — it's a best-effort heads-up, not a hard gate.
+    """
+
+    def _make_config(self, **overrides) -> dict:
+        config: dict = {
+            "instances": {
+                "a": {"external_port": 8069, "database": "db_a"},
+            },
+            "databases": {
+                "db_a": {"user": "odoo", "password": "odoo", "port": 6000},
+            },
+        }
+        config.update(overrides)
+        return config
+
+    def _fake_run(self, own_ps_stdout, docker_ps_stdout, docker_ps_rc=0):
+        def _run(cmd, **kwargs):
+            if cmd[:4] == ["docker", "compose", "-f", "docker-compose.generated.yml"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=own_ps_stdout, stderr="")
+            if cmd[:2] == ["docker", "ps"]:
+                return subprocess.CompletedProcess(cmd, docker_ps_rc, stdout=docker_ps_stdout, stderr="")
+            raise AssertionError(f"unexpected subprocess.run call: {cmd}")
+
+        return _run
+
+    def test_no_conflict_when_port_free(self):
+        runner = FakeRunner()
+        with patch("subprocess.run", side_effect=self._fake_run("", "")):
+            check_host_port_collisions(runner, self._make_config())
+        self.assertEqual([m for m in runner.messages if m[0] == "warn"], [])
+
+    def test_warns_on_conflict_with_other_project(self):
+        runner = FakeRunner()
+        docker_ps_stdout = "abc123\tsome-other-project-db-v17-1\t0.0.0.0:8069->8069/tcp\n"
+        with patch("subprocess.run", side_effect=self._fake_run("", docker_ps_stdout)):
+            check_host_port_collisions(runner, self._make_config())
+        warn_texts = [m[1] for m in runner.messages if m[0] == "warn"]
+        self.assertTrue(
+            any("8069" in t and "some-other-project" in t for t in warn_texts),
+            f"No se reportó la colisión con el otro proyecto. Warnings: {warn_texts}",
+        )
+
+    def test_ignores_own_project_containers(self):
+        runner = FakeRunner()
+        # The container holding :8069 IS our own (its ID is in `docker
+        # compose ps -q` output) -> must not be reported as a conflict.
+        docker_ps_stdout = "abc123\tdocker-odoo-odoo-a-1\t0.0.0.0:8069->8069/tcp\n"
+        with patch("subprocess.run", side_effect=self._fake_run("abc123\n", docker_ps_stdout)):
+            check_host_port_collisions(runner, self._make_config())
+        self.assertEqual([m for m in runner.messages if m[0] == "warn"], [])
+
+    def test_silent_when_docker_unavailable(self):
+        runner = FakeRunner()
+        with patch("subprocess.run", side_effect=OSError("docker not found")):
+            check_host_port_collisions(runner, self._make_config())  # must not raise
+        self.assertEqual(runner.messages, [])
+
+    def test_noop_when_config_has_no_ports(self):
+        runner = FakeRunner()
+        with patch("subprocess.run") as mock_run:
+            check_host_port_collisions(runner, {"instances": {}, "databases": {}})
+        mock_run.assert_not_called()
 
 
 if __name__ == "__main__":
