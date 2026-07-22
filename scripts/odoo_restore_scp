@@ -20,6 +20,12 @@ from generators.config_loader import (
     get_db_internal_port,
 )
 
+# The container's real name is namespaced by the Compose project, not a
+# bare "odoo-<instance>" — everything here must go through ``docker
+# compose exec`` (by *service* name), never plain ``docker exec``
+# against a container name.
+COMPOSE_FILE = os.path.join(BASE_PATH, "docker-compose.generated.yml")
+
 
 class EnvConfig:
 	def __init__(self, container_name, db_user, db_host, db_port):
@@ -480,13 +486,20 @@ class ExpiredDatabaseCleaner:
 		self.db_prefix = db_prefix
 
 	def _run_container_command(self, command):
-		cmd = ["docker", "exec", self.env.container_name, *command]
+		cmd = [
+			"docker", "compose", "-f", COMPOSE_FILE, "exec", "-T",
+			self.env.container_name, *command,
+		]
 		subprocess.run(cmd, check=True)
 
 	def _run_psql(self, sql):
 		cmd = [
 			"docker",
+			"compose",
+			"-f",
+			COMPOSE_FILE,
 			"exec",
+			"-T",
 			self.env.container_name,
 			"psql",
 			"-U",
