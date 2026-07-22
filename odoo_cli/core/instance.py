@@ -31,6 +31,11 @@ if TYPE_CHECKING:
 # fall back to a sensible default that lets tests override it.
 _DEFAULT_BASE_PATH = os.environ.get("DOCKER_ODOO_BASE_PATH", os.getcwd())
 
+# Must match odoo_cli.core.actions.lifecycle.COMPOSE_FILE. Duplicated here
+# (not imported) to avoid a circular import: lifecycle.py already imports
+# from this module.
+_COMPOSE_FILE = "docker-compose.generated.yml"
+
 
 # ============================================================
 # Service name resolution (pure config lookups)
@@ -112,10 +117,11 @@ def get_databases(config: dict, instance: str) -> list[str]:
         db_user = db_conf["user"]
         db_password = db_conf["password"]
         db_port = get_db_internal_port(db_conf)
-        container = f"odoo-{instance}"
+        service = f"odoo-{instance}"
 
         cmd = (
-            f"docker exec -e PGPASSWORD={db_password} {container} "
+            f"docker compose -f {_COMPOSE_FILE} exec -T "
+            f"-e PGPASSWORD={db_password} {service} "
             f"psql --host {db_host} --port {db_port} -U {db_user} "
             f"-d postgres -At -c "
             f"\"SELECT datname FROM pg_database "
@@ -147,10 +153,11 @@ def get_users(config: dict, instance: str, dbname: str) -> list[str]:
         db_user = db_conf["user"]
         db_password = db_conf["password"]
         db_port = get_db_internal_port(db_conf)
-        container = f"odoo-{instance}"
+        service = f"odoo-{instance}"
 
         cmd = (
-            f"docker exec -e PGPASSWORD={db_password} {container} "
+            f"docker compose -f {_COMPOSE_FILE} exec -T "
+            f"-e PGPASSWORD={db_password} {service} "
             f"psql --host {db_host} --port {db_port} -U {db_user} "
             f"-d {dbname} -At -c "
             f"\"SELECT login FROM res_users WHERE active = true "
@@ -181,11 +188,11 @@ def _instance_has_db(
     db_user = db_conf["user"]
     db_password = db_conf["password"]
     db_port = get_db_internal_port(db_conf)
-    container = f"odoo-{instance}"
+    service = f"odoo-{instance}"
     env = {"PGPASSWORD": db_password, "PATH": os.environ.get("PATH", "")}
     proc = subprocess.run(
         [
-            "docker", "exec", container,
+            "docker", "compose", "-f", _COMPOSE_FILE, "exec", "-T", service,
             "psql",
             "--host", db_host,
             "--port", str(db_port),
