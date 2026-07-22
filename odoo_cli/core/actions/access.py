@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from odoo_cli.core.runner import Runner
 
 from odoo_cli.core.instance import get_db_services, get_instance_services
-from odoo_cli.core.actions.lifecycle import _docker_compose  # noqa: F401
+from odoo_cli.core.actions.lifecycle import COMPOSE_FILE, _docker_compose  # noqa: F401
 
 
 # ============================================================
@@ -26,22 +26,27 @@ from odoo_cli.core.actions.lifecycle import _docker_compose  # noqa: F401
 def run_bash(runner: "Runner", config: dict, instance: str) -> None:
     """Open bash in an Odoo instance container.
 
-    If the container is not running, prints a helpful hint and
-    returns. Otherwise delegates to ``docker exec -it ... bash``
-    through ``runner.run_interactive`` so the TTY stays connected.
+    If the service is not running, prints a helpful hint and returns.
+    Otherwise delegates to ``docker compose exec -it ... bash`` through
+    ``runner.run_interactive`` so the TTY stays connected.
+
+    Uses ``docker compose exec`` (by service name) rather than plain
+    ``docker exec``/``docker inspect`` against a container name: the
+    real container name is namespaced by the Compose project and is
+    no longer guaranteed to equal ``odoo-<instance>``.
     """
-    container = f"odoo-{instance}"
+    service = f"odoo-{instance}"
     result = subprocess.run(
-        ["docker", "inspect", "-f", "{{.State.Running}}", container],
+        ["docker", "compose", "-f", COMPOSE_FILE, "ps", "--status", "running", "--services"],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
     )
-    is_running = result.stdout.strip()
+    running_services = result.stdout.split()
 
-    if is_running != "true":
+    if service not in running_services:
         runner.error(
-            f"\n❌ El contenedor '{container}' no está en ejecución."
+            f"\n❌ El contenedor '{service}' no está en ejecución."
         )
         runner.error(
             f"Prueba iniciando la instancia con: ./odoo start {instance}"
@@ -50,7 +55,7 @@ def run_bash(runner: "Runner", config: dict, instance: str) -> None:
 
     runner.info(f"\n=== 🐚 ABRIENDO BASH EN: {instance.upper()} ===\n")
     runner.run_interactive(
-        ["docker", "exec", "-u", "root", "-it", container, "bash"],
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-u", "root", "-it", service, "bash"],
         cwd=".",
     )
 
@@ -104,14 +109,14 @@ def psql_connect(
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user = db_conf["user"]
     db_port = get_db_internal_port(db_conf)
-    container = f"odoo-{instance}"
+    service = f"odoo-{instance}"
 
     runner.info(
         f"\n=== 🐘 CONECTANDO PSQL A: {instance.upper()} (DB: {dbname}) ===\n"
     )
     runner.run_interactive(
         [
-            "docker", "exec", "-it", container,
+            "docker", "compose", "-f", COMPOSE_FILE, "exec", "-it", service,
             "psql",
             "--host", db_host,
             "--port", str(db_port),
