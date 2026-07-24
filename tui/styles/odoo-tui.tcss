@@ -31,7 +31,6 @@ Footer {
        'demo-integration-core' sin truncar. */
     width: 55%;
     margin-right: 1;
-    border: round $primary;
 }
 #right {
     border: round $secondary;
@@ -68,9 +67,10 @@ OptionList > Option.--highlight {
     text-style: bold;
 }
 
-/* ----- Category headers en la lista de acciones ----- */
+/* ----- Category headers en la lista de acciones -----
+   padding: 0 1 ya viene de la regla base "ListView > ListItem" de
+   arriba; solo se agrega lo que la distingue visualmente. */
 ListView > ListItem.category_header {
-    padding: 0 1;
     color: $secondary;
     text-style: bold;
     background: $boost;
@@ -156,8 +156,10 @@ RichLog {
     padding-top: 1;
 }
 #modal_buttons Button {
+    /* Sin min-width: los labels reales ("✕ Cancelar  (Esc)", ~17 chars)
+       ya exceden cualquier piso razonable de 14, asi que ese valor no
+       tenia ningun efecto — el ancho lo determina el contenido. */
     margin: 0 2;
-    min-width: 14;
 }
 
 /* ----- Picker modal (fzf-style) ----- */
@@ -235,13 +237,10 @@ RichLog {
 #update_progress #up_filters_row Static {
     margin-right: 2;
 }
-#update_progress #up_filters_row Static.active {
-    text-style: bold;
-    color: $success;
-}
-#update_progress #up_filters_row Static.inactive {
-    color: $text-muted;
-}
+/* No hay reglas .active/.inactive: UpdateProgress._filter_chip() ya
+   colorea cada chip inline via markup (verde si esta activo, gris si
+   no), asi que esas clases nunca se asignan — declararlas ademas por
+   CSS seria estado duplicado y potencialmente inconsistente. */
 
 #update_progress #up_hints_row {
     height: 1;
