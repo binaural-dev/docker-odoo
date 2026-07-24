@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from typing import Optional
 
+from rich.markup import escape
 from textual.binding import Binding
 from textual.widgets import ListView, Label
 
@@ -215,7 +216,7 @@ class KeybindingsMixin:
             self.copy_to_clipboard(text)
             self._log(f"[green]✓ {len(lines_to_copy)} líneas copiadas al portapapeles.[/green]")
         except Exception as exc:
-            self._log(f"[red]Error copiando al portapapeles:[/red] {exc}")
+            self._log(f"[red]Error copiando al portapapeles:[/red] {escape(str(exc))}")
 
     def action_refresh(self) -> None:
         """Recarga instances.json y repinta las dos listas."""

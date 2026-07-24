@@ -21,6 +21,7 @@ import sys
 import time
 from typing import Optional
 
+from rich.markup import escape
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
@@ -228,7 +229,7 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
         except SystemExit:
             self._raw_config = {}
         except Exception as exc:
-            self._log(f"[red]Error cargando instances.json:[/red] {exc}")
+            self._log(f"[red]Error cargando instances.json:[/red] {escape(str(exc))}")
             self._raw_config = {}
 
         # Filtered view used by action dispatch (enabled-only).
@@ -382,7 +383,8 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
         echo_cmd: bool = True, use_progress_widget: bool = False,
     ) -> int:
         if echo_cmd:
-            self._log(f"[cyan]→ {' '.join(shlex.quote(a) for a in argv)}[/cyan]")
+            cmd_str = escape(" ".join(shlex.quote(a) for a in argv))
+            self._log(f"[cyan]→ {cmd_str}[/cyan]")
         self._log("[dim]Ejecutando... (Ctrl+C para abortar)[/dim]")
 
         # Mostrar widget de progreso si corresponde
@@ -423,10 +425,19 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
             buf_plain = []
             last_flush = time.monotonic()
 
-        def on_line(line: str) -> None:
+        def on_line(raw_line: str) -> None:
             # Progress parsing is handled by the runner via ``on_progress``
             # (called below).  We only classify the line and buffer it here
             # so the regex runs exactly once per line, not twice.
+            #
+            # ``raw_line`` is untrusted subprocess stdout (Odoo tracebacks,
+            # domain reprs like "[('field','=',1)]", ...). It is escaped
+            # once here, before it reaches either buffer, because both
+            # ``buf_plain`` (written straight to the markup=True RichLog)
+            # and ``buf_lines`` (replayed into the RichLog later when the
+            # user toggles a log-level filter, see keybindings.py) would
+            # otherwise let stray "[" sequences be parsed as Rich markup.
+            line = escape(raw_line)
             if up is not None:
                 level = classify_level(line)
                 buf_lines.append((level, line))
@@ -473,7 +484,7 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
                 on_progress=on_progress,
             )
         except FileNotFoundError as exc:
-            self._log(f"[red]No encontrado:[/red] {exc}")
+            self._log(f"[red]No encontrado:[/red] {escape(str(exc))}")
             rc = 127
         finally:
             self._update_proc = None
