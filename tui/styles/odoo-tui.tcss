@@ -18,7 +18,7 @@ Footer {
 /* ----- Main split: instances | actions ----- */
 #main {
     height: 55%;
-    margin: 0 1 1 1;
+    margin: 1 1 1 1;
 }
 #left, #right {
     width: 1fr;
@@ -90,12 +90,16 @@ RichLog {
     padding: 0 1;
 }
 
-/* ----- Modal box ----- */
+/* ----- Modal box -----
+   width en % (no un valor fijo de columnas) para que se achique en
+   terminales angostas en vez de desbordar; min-width sigue poniendo
+   un piso legible y max-width evita que se estire de mas en pantallas
+   anchas. */
 #modal_box {
     background: $panel;
     border: thick $accent;
     padding: 1 4;
-    width: 70;
+    width: 90%;
     min-width: 50;
     max-width: 100;
     height: auto;
@@ -163,6 +167,7 @@ RichLog {
 }
 #picker_left, #picker_right {
     width: 1fr;
+    min-width: 20;
     border: round $primary;
     padding: 0 1;
     margin: 0 1;
@@ -190,7 +195,12 @@ RichLog {
     background: $surface-darken-1;
     padding: 0 2;
     height: auto;
-    min-height: 11;
+    /* Contenido real: title + progressbar + 2 labels + filtros + hints
+       = 6 filas + 2 de borde = 8. min-height:11 dejaba 3 filas de aire
+       de mas, que en una terminal baja le restaban espacio al RichLog
+       (min-height:5) y al panel principal. 9 = contenido + borde + 1
+       fila de respiro, sin comprimir nada visible. */
+    min-height: 9;
     margin: 0 1 1 1;
 }
 
