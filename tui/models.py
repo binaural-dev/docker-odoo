@@ -139,14 +139,13 @@ LOG_LEVEL_SHORT = {
 }
 
 
-CATEGORY_BADGE = {
-    "Lifecycle": "Lifecycle",
-    "Acceso": "Acceso",
-    "Mantenimiento": "Mant.",
-    "Módulos / DB": "Módulos",
-    "Sync": "Sync",
-    "Scripts": "Scripts",
-}
+# Width of the category badge shown before each action label (see
+# tui/widgets/items.py). Derived from the longest category name instead
+# of a hand-picked per-category abbreviation table, so every category
+# renders in full (no more "Mant." vs "Módulos" vs "Lifecycle"
+# inconsistency) and a new, longer category widens the column
+# automatically instead of silently misaligning.
+CATEGORY_BADGE_WIDTH = max(len(cat) for cat in CATEGORY_ORDER)
 
 
 FILTER_LEVEL_IDS = {

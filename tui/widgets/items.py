@@ -2,7 +2,7 @@
 
 from textual.widgets import Label, ListItem
 
-from tui.models import Action, CATEGORY_BADGE
+from tui.models import Action, CATEGORY_BADGE_WIDTH
 
 
 class InstanceItem(ListItem):
@@ -94,8 +94,8 @@ class ActionItem(ListItem):
     """
 
     def __init__(self, action: Action):
-        badge = CATEGORY_BADGE.get(action.category, "")
-        super().__init__(Label(f" [cyan]{badge:<10}[/cyan]  {action.label}"))
+        badge = f"{action.category:<{CATEGORY_BADGE_WIDTH}}"
+        super().__init__(Label(f" [cyan]{badge}[/cyan]  {action.label}"))
         self.action = action
 
 
@@ -120,6 +120,6 @@ class NoInstanceActionItem(ListItem):
     """Special: actions that don't need an instance (build, list, validate, sync, upgrade_manifest)."""
 
     def __init__(self, action: Action):
-        badge = CATEGORY_BADGE.get(action.category, "")
-        super().__init__(Label(f" [cyan]{badge:<10}[/cyan]  {action.label}"))
+        badge = f"{action.category:<{CATEGORY_BADGE_WIDTH}}"
+        super().__init__(Label(f" [cyan]{badge}[/cyan]  {action.label}"))
         self.action = action
