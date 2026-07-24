@@ -421,9 +421,13 @@ class DispatchMixin:
                     "overwrite_odoo_config", {}
                 ).get("db_name", self.selected_instance)
         if action.action_id == "script:test":
+            # NOTE: test_tags/install_modules are intentionally left
+            # without a default — they're specific to whatever module(s)
+            # this fork is testing. Only their placeholder text in
+            # ``_arg_to_field`` shows an example; prefilling one project's
+            # values here would silently apply them to every other
+            # project/client using this TUI.
             defaults[ARG_DB] = "testing"
-            defaults[ARG_TEST_TAGS] = "/binaural_accountant"
-            defaults[ARG_INSTALL] = "l10n_ve,binaural_rate,account,binaural_accountant"
         if action.action_id == "script:backup":
             defaults[ARG_TARGET_PG] = "16"
         return defaults
