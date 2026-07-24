@@ -198,12 +198,19 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
                 _current_hosts_block,
                 _parse_block_hosts,
             )
-        except Exception:
+        except Exception as exc:
+            self._log(
+                f"[dim]Chequeo de /etc/hosts salteado (no se pudo importar "
+                f"odoo_cli.core.actions.hosts: {escape(str(exc))}).[/dim]"
+            )
             return
         try:
             expected = set(_expected_subdomains(self._raw_config))
             current = _parse_block_hosts(_current_hosts_block())
-        except Exception:
+        except Exception as exc:
+            self._log(
+                f"[dim]Chequeo de /etc/hosts salteado ({escape(str(exc))}).[/dim]"
+            )
             return
         if expected == current:
             return

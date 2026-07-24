@@ -39,6 +39,8 @@ import shutil
 import sys
 from typing import Optional
 
+from rich.markup import escape
+
 from tui.actions import _odoo_cli_args, _script_args
 from tui.config import BASE_PATH
 from tui.models import (
@@ -345,7 +347,11 @@ class DispatchMixin:
             return
         try:
             from generators.config_loader import resolve_instance_config
-        except ImportError:
+        except ImportError as exc:
+            self._log(
+                f"[dim]Chequeo de módulos desconocidos salteado "
+                f"(no se pudo importar generators.config_loader: {escape(str(exc))}).[/dim]"
+            )
             return
         addons = resolve_instance_config(inst, self.config).get("addons", [])
         valid_paths = [
