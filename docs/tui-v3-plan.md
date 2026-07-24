@@ -88,15 +88,17 @@ Del review de 15 puntos sobre la versión original (antes de v2):
 | # | Issue | Estado |
 |---|---|---|
 | 1 | Dispatcher bloquea acciones sin instancia | **Resuelto en v2** (todas las acciones sin `ARG_INSTANCE` ahora pasan el guard) |
-| 2 | `remove` salta confirmación destructiva | **Abierto** — `ConfirmModal` existe pero nunca se instancia |
-| 3 | RichLog markup collision (stdout crudo → markup) | **Abierto** — el `module_cache` warnings pueden tener brackets; `markup=False` o escape sigue pendiente |
-| 4 | No se puede cancelar comando largo | **Abierto** — no hay propagación de SIGINT al child process |
-| 5-10 | Dead code (`ConfirmModal` instancia, `to_dict`, `needs_db_first`, `selected_instance` reactive, `tab` binding, `Refresh` label) | **Algunos resueltos en v2**, `ConfirmModal`/`to_dict`/`needs_db_first` siguen dead |
-| 11 | Defaults hardcoded a Binaural (`/binaural_accountant`, etc.) | **Abierto** — siguen en `script:test` defaults de `_arg_defaults` |
+| 2 | `remove` salta confirmación destructiva | **Resuelto** — `dispatch.py:_dispatch` pushea `ConfirmModal` antes de ejecutar `remove` |
+| 3 | RichLog markup collision (stdout crudo → markup) | **Resuelto (2026-07-24)** — `on_line` en `app.py:_run_streamed` escapa cada línea con `rich.markup.escape` antes de bufferearla (cubre tanto el write directo al `RichLog` como el replay vía `UpdateProgress.get_filtered_lines()` al togglear filtros de nivel). También se escaparon los mensajes de excepción interpolados en `_log()` (`app.py`, `dispatch.py`, `keybindings.py`) |
+| 4 | No se puede cancelar comando largo | **Resuelto** — `Esc` cancela `_current_task`, que dispara SIGTERM→SIGKILL en `runner.py:_terminate_and_reap` |
+| 5-10 | Dead code (`ConfirmModal` instancia, `to_dict`, `needs_db_first`, `selected_instance` reactive, `tab` binding, `Refresh` label) | **Algunos resueltos en v2**, verificar `to_dict`/`needs_db_first` en próxima pasada de limpieza |
+| 11 | Defaults hardcoded a Binaural (`/binaural_accountant`, etc.) | **Resuelto (2026-07-24)** — `_arg_defaults` para `script:test` ya no prefillea `test_tags`/`install_modules`; el placeholder en `_arg_to_field` sigue mostrando el ejemplo, pero el campo arranca vacío para no imponer valores de un proyecto a otro |
 | 12 | `_save_instances_json` revierte in-memory en `PermissionError` | **Resuelto en v2** |
-| 13 | CATEGORY_BADGE padding inconsistente | **Abierto** |
-| 14 | RichLog sin tope de líneas | **Abierto** |
+| 13 | CATEGORY_BADGE padding inconsistente | **Resuelto (2026-07-24)** — se reemplazó la tabla de abreviaturas manuales (`Mant.`, `Módulos`, ...) por `CATEGORY_BADGE_WIDTH = max(len(cat) for cat in CATEGORY_ORDER)` en `models.py`; ahora todas las categorías se muestran completas y el ancho se autoajusta si se agrega una categoría más larga |
+| 14 | RichLog sin tope de líneas | **Resuelto en v2** — `RichLog(..., max_lines=2000)` en `app.py:153` |
 | 15 | Mapeo `script:` → path duplica conocimiento del FS | **Abierto** |
+
+**Nota (2026-07-24):** este doc quedó desactualizado por varias sesiones — varios ítems marcados "Abierto" ya estaban resueltos en el código antes de esta pasada. Antes de retomar un ítem de esta tabla, verificar el código actual en vez de confiar en el estado acá anotado.
 
 ---
 
@@ -104,13 +106,13 @@ Del review de 15 puntos sobre la versión original (antes de v2):
 
 | Prioridad | Item | Dónde |
 |---|---|---|
-| Media | Wirear `ConfirmModal` a la acción `remove` | `odoo-tui` línea ~138 (definición de Action) |
-| Media | Decidir `needs_db_first` (declarado en 4 actions, nunca leído) | `odoo-tui:82` |
+| ~~Media~~ | ~~Wirear `ConfirmModal` a la acción `remove`~~ — **hecho** | `dispatch.py:_dispatch` |
+| Media | Decidir `needs_db_first` (declarado en 4 actions, nunca leído) — verificar si sigue existiendo | `tui/models.py` |
 | Media | Test unitario de `ModulePicker.on_option_list_option_selected` (ambos paneles) | nuevo `tests/test_module_picker.py` |
-| Baja | Fix `instances.example.json`: `client-b` referencia `external_pg16` no definida en `databases` | `instances.example.json:68-79` |
-| Baja | RichLog `max_lines=N` para evitar degradación con outputs largos | `odoo-tui:477` |
-| Baja | `_log` swallow silencioso (`except Exception: pass`) | `odoo-tui:730-731` |
-| Baja | Cancelación de comando largo (Ctrl+C propaga al child) | `_run_streamed` y `_run_interactive` |
+| Baja | Fix `instances.example.json`: `client-b` referencia `external_pg16` no definida en `databases` | `instances.example.json:68-79` — no verificado en esta pasada |
+| ~~Baja~~ | ~~RichLog `max_lines=N`~~ — **hecho** | `app.py:153` |
+| Media | Silent-swallow: warns ahora se loguean en vez de tragarse (`_hosts_check_and_warn`, `_warn_unknown_modules`); revisar los `except Exception: pass` de cacheo de widgets en `app.py:on_mount` — esos son deliberados (headless tests) pero vale confirmarlo con un comentario si no lo tienen ya | `app.py` |
+| ~~Baja~~ | ~~Cancelación de comando largo~~ — **hecho** (SIGTERM→SIGKILL vía `runner.py`) | `_run_streamed` / `runner.py` |
 | Estratégico | Evaluar `Textualize/trogon` como alternativa arquitectónica (auto-TUI desde Click). No aplicar; requiere replantear el producto. | https://github.com/Textualize/trogon |
 | DX | Documentar `textual run --dev ./odoo-tui` en el readme (cobra sentido una vez que v3 externalice el CSS) | `readme.md` |
 
