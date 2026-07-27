@@ -41,14 +41,15 @@ Del review de 15 puntos sobre la versión original (antes de v2):
 | Prioridad | Item | Dónde |
 |---|---|---|
 | ~~Media~~ | ~~Wirear `ConfirmModal` a la acción `remove`~~ — **hecho** | `dispatch.py:_dispatch` |
-| Media | Decidir `needs_db_first` (declarado en 4 actions, nunca leído) — verificar si sigue existiendo | `tui/models.py` |
+| ~~Media~~ | ~~Decidir `needs_db_first`~~ — **resuelto**: el campo ya no existe en el código (verificado 2026-07-24, 0 matches en `tui/`) | — |
 | Media | Test unitario de `ModulePicker.on_option_list_option_selected` (ambos paneles) | nuevo `tests/test_module_picker.py` |
-| Baja | Fix `instances.example.json`: `client-b` referencia `external_pg16` no definida en `databases` | `instances.example.json:68-79` — no verificado en esta pasada |
+| ~~Baja~~ | ~~Fix `instances.example.json`: `client-b` referencia `external_pg16` no definida~~ — **resuelto**: verificado 2026-07-24, `client-b` referencia `database: "v17"`, que sí existe en `databases`. El archivo además se renombró a `instances.example.jsonc` desde la sesión 2026-06-15 | `instances.example.jsonc` |
 | ~~Baja~~ | ~~RichLog `max_lines=N`~~ — **hecho** | `app.py:153` |
-| Media | Silent-swallow: warns ahora se loguean en vez de tragarse (`_hosts_check_and_warn`, `_warn_unknown_modules`); revisar los `except Exception: pass` de cacheo de widgets en `app.py:on_mount` — esos son deliberados (headless tests) pero vale confirmarlo con un comentario si no lo tienen ya | `app.py` |
+| ~~Media~~ | ~~Silent-swallow~~ — **hecho**: `_hosts_check_and_warn`/`_warn_unknown_modules` ahora loguean; los `except Exception: pass` de cacheo de widgets en `app.py:on_mount` ya tienen comentario explicando que son deliberados (headless tests) | `app.py` |
 | ~~Baja~~ | ~~Cancelación de comando largo~~ — **hecho** (SIGTERM→SIGKILL vía `runner.py`) | `_run_streamed` / `runner.py` |
+| Nueva (2026-07-24) | Memory leak: `_output_buffer` sin cap crecía sin límite en sesiones largas — **hecho**, capado a 2000 líneas | `app.py:_trim_output_buffer` |
 | Estratégico | Evaluar `Textualize/trogon` como alternativa arquitectónica (auto-TUI desde Click). No aplicar; requiere replantear el producto. | https://github.com/Textualize/trogon |
-| DX | Documentar `textual run --dev ./odoo-tui` en el readme — el CSS ya está externalizado (`tui/styles/odoo-tui.tcss`), así que el hot-reload ya funciona, solo falta documentarlo | `readme.md` / `tui/README.md` |
+| ~~DX~~ | ~~Documentar `textual run --dev ./odoo-tui` en el readme~~ — **ya estaba hecho** (verificado 2026-07-24: `readme.md` línea ~309 ya documenta el flag `--dev` y el hot-reload de CSS); este ítem del backlog estaba desactualizado, no el código | `readme.md` |
 
 ---
 
