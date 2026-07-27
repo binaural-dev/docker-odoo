@@ -53,6 +53,15 @@ from tui.widgets.items import (
 from tui.widgets.update_progress import UpdateProgress
 
 
+# Cap for DockerOdooApp._output_buffer (the plain-text mirror of the
+# RichLog, used by "copy output" and kept in memory for the life of
+# the app). Matches RichLog's own max_lines and UpdateProgress's
+# _all_lines cap: without a bound, a long session running several
+# large `update` actions accumulates hundreds of thousands of strings
+# that are never released, growing memory and GC pressure over time.
+MAX_OUTPUT_BUFFER_LINES = 2000
+
+
 def _scan_instance_modules_pure(inst_name: str, inst_conf: dict, full_config: dict) -> list:
     """Pure sync module scan (runs in a thread via to_thread).
 
@@ -520,6 +529,7 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
         except Exception as exc:
             print(f"[TUI _log fallback] {message} (error: {exc})", file=sys.stderr)
         self._output_buffer.append(message)
+        self._trim_output_buffer()
 
     def _log_bulk(self, message: str) -> None:
         """Escribe un string multi-linea al RichLog con UN solo write().
@@ -533,3 +543,16 @@ class DockerOdooApp(DispatchMixin, KeybindingsMixin, App):
         except Exception as exc:
             print(f"[TUI _log_bulk fallback] {message[:200]}... (error: {exc})", file=sys.stderr)
         self._output_buffer.extend(message.split("\n"))
+        self._trim_output_buffer()
+
+    def _trim_output_buffer(self) -> None:
+        """Keep only the last MAX_OUTPUT_BUFFER_LINES entries.
+
+        Without this, a long-lived session running several ``update``
+        actions (each emitting thousands of lines) grows this list
+        without bound — unlike the RichLog widget (``max_lines=2000``)
+        and UpdateProgress's own ``_all_lines`` (capped the same way).
+        """
+        overflow = len(self._output_buffer) - MAX_OUTPUT_BUFFER_LINES
+        if overflow > 0:
+            del self._output_buffer[:overflow]
