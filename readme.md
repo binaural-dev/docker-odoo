@@ -379,6 +379,7 @@ verde arriba del panel de output que muestra:
 | `Enter` | Seleccionar instancia / ejecutar acción |
 | `r` | Refrescar instancias desde `instances.json` |
 | `Space` | Toggle `enabled` de la instancia seleccionada (persiste en `instances.json`) |
+| `c` | Copiar las últimas 500 líneas del output al portapapeles |
 | `q` / `Esc` | Salir / cancelar modal |
 
 **Durante la actualización de módulos:**
