@@ -94,6 +94,10 @@ ACTIONS: list[Action] = [
            "(rama base, submódulo, tag, push y PR se preguntan en la "
            "terminal suspendida)",
            needs=[ARG_REPO], interactive=True),
+    Action("submodule-status", "Estado de submódulos", "Sync",
+           "Muestra en qué tag/rama/hash está parado cada submódulo "
+           "(solo lectura, no toca nada; vacío = todos los proyectos)",
+           needs=[ARG_REPO]),
 
     # Scripts auxiliares
     Action("script:backup", "Backup", "Scripts",

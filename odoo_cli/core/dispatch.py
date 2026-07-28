@@ -57,7 +57,12 @@ from odoo_cli.core.actions.lifecycle import (
     start_odoo,
     stop_odoo,
 )
-from odoo_cli.core.actions.maintenance import init_addons, sync, update_tags
+from odoo_cli.core.actions.maintenance import (
+    init_addons,
+    submodule_status,
+    sync,
+    update_tags,
+)
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.prompts import (
     prompt_for_branch,
@@ -243,6 +248,9 @@ def dispatch(
             args.tag,
             show=args.v,
         )
+
+    elif args.action == "submodule-status":
+        submodule_status(runner, args.proyecto)
 
     elif args.action == "validate-instances":
         runner.info("\n✅ El archivo instances.json es válido.\n")

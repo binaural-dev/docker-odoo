@@ -161,7 +161,14 @@ class DispatchMixin:
         for arg in action.needs:
             if arg == ARG_INSTANCE:
                 continue
-            fields.append(self._arg_to_field(arg))
+            field = self._arg_to_field(arg)
+            # submodule-status is the one action where an empty repo
+            # field is meaningful ("todos los proyectos"), unlike sync
+            # (and everything else using ARG_REPO), which requires one.
+            if action.action_id == "submodule-status" and arg == ARG_REPO:
+                field["optional"] = True
+                field["placeholder"] = "vacío = todos los proyectos"
+            fields.append(field)
 
         # ``update`` exposes an optional --load-language field that
         # isn't in action.needs (the picker handles its own modal).

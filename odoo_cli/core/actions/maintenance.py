@@ -568,8 +568,54 @@ def update_tags(
         os.chdir(base_path)
 
 
+# ============================================================
+# submodule-status: report-only — what tag/branch/hash is each
+# submodule checked out to, right now
+# ============================================================
+
+
+def submodule_status(runner: "Runner", project: str | None = None) -> None:
+    """Report each submodule's current tag/branch/hash, read-only.
+
+    With ``project`` given, only that project's submodules are
+    reported. Without it, every project under ``src/custom/`` is
+    reported. Unlike ``sync``/``update_tags``, this never touches git
+    state — no ``stash``/``checkout``/``pull``/``fetch``, only the
+    read-only ``git describe``/``rev-parse`` calls inside
+    :func:`_describe_submodule_ref`. A missing project is reported as
+    an error and skipped, not a hard stop, so one typo doesn't hide
+    the status of every other project when running over all of them.
+    """
+    if project:
+        projects = [project]
+    else:
+        from odoo_cli.core.instance import get_custom_repos
+
+        projects = get_custom_repos()
+        if not projects:
+            runner.info("No se encontraron proyectos en src/custom/.")
+            return
+
+    base_path = os.getcwd()
+    for proj in projects:
+        project_path = os.path.join(base_path, "src", "custom", proj)
+        if not os.path.isdir(project_path):
+            runner.error(f"Error: Proyecto '{proj}' no encontrado en src/custom/")
+            continue
+
+        runner.info(f"\n=== {proj} ===")
+        submodulos = _discover_submodules(project_path)
+        if not submodulos:
+            runner.info("   (sin submódulos)")
+            continue
+        for submodulo in submodulos:
+            estado = _describe_submodule_ref(os.path.join(project_path, submodulo))
+            runner.info(f"   • {submodulo}: {estado}")
+
+
 __all__ = [
     "init_addons",
     "sync",
     "update_tags",
+    "submodule_status",
 ]

@@ -29,6 +29,7 @@ from odoo_cli.core.actions.maintenance import (  # noqa: E402
     _discover_submodules,
     _filter_tags,
     _suggest_branch_name,
+    submodule_status,
     sync,
     update_tags,
 )
@@ -963,6 +964,147 @@ class UpdateTagsTest(unittest.TestCase):
             self.assertFalse(any(c[:2] == ["gh", "pr"] for c in calls))
             error_msgs = [m[1] for m in runner.messages if m[0] == "error"]
             self.assertTrue(any("gh" in t.lower() for t in error_msgs))
+
+
+class SubmoduleStatusTest(unittest.TestCase):
+    """``submodule_status`` — read-only report, one project or all."""
+
+    def _make_project(self, base, project, submodulos):
+        project_path = os.path.join(base, "src", "custom", project)
+        os.makedirs(project_path, exist_ok=True)
+        lines = []
+        for sub in submodulos:
+            os.makedirs(os.path.join(project_path, sub), exist_ok=True)
+            lines.append(f'[submodule "{sub}"]\n\tpath = {sub}\n\turl = git@x:{sub}.git\n')
+        with open(os.path.join(project_path, ".gitmodules"), "w") as f:
+            f.write("".join(lines))
+        return project_path
+
+    def _fake_run(self, calls):
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:2] == ["git", "describe"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        return fake_run
+
+    def test_reports_one_project(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1", ["integra-addons", "third-party-addons"])
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            runner = FakeRunner()
+            with patch("subprocess.run", side_effect=self._fake_run(calls)):
+                submodule_status(runner, "proj1")
+
+        info_texts = [m[1] for m in runner.messages if m[0] == "info"]
+        self.assertTrue(any("proj1" in t for t in info_texts))
+        self.assertTrue(
+            any("integra-addons" in t and "17.0.2.0.0-beta.1" in t for t in info_texts)
+        )
+        self.assertTrue(
+            any("third-party-addons" in t and "17.0.2.0.0-beta.1" in t for t in info_texts)
+        )
+
+    def test_reports_all_projects_when_none_given(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1", ["integra-addons"])
+            self._make_project(base, "proj2", ["odoo-venezuela"])
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            runner = FakeRunner()
+            with patch(
+                "subprocess.run", side_effect=self._fake_run(calls)
+            ), patch(
+                "odoo_cli.core.instance.get_custom_repos",
+                return_value=["proj1", "proj2"],
+            ):
+                submodule_status(runner, None)
+
+        info_texts = [m[1] for m in runner.messages if m[0] == "info"]
+        self.assertTrue(any("proj1" in t for t in info_texts))
+        self.assertTrue(any("proj2" in t for t in info_texts))
+        self.assertTrue(any("integra-addons" in t for t in info_texts))
+        self.assertTrue(any("odoo-venezuela" in t for t in info_texts))
+
+    def test_missing_project_errors_but_does_not_abort(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj-real", ["integra-addons"])
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            runner = FakeRunner()
+            with patch(
+                "subprocess.run", side_effect=self._fake_run(calls)
+            ), patch(
+                "odoo_cli.core.instance.get_custom_repos",
+                return_value=["proj-typo", "proj-real"],
+            ):
+                submodule_status(runner, None)
+
+        error_msgs = [m[1] for m in runner.messages if m[0] == "error"]
+        info_texts = [m[1] for m in runner.messages if m[0] == "info"]
+        self.assertTrue(any("proj-typo" in t for t in error_msgs))
+        self.assertTrue(any("proj-real" in t for t in info_texts))
+        self.assertTrue(any("integra-addons" in t for t in info_texts))
+
+    def test_project_without_submodules_reports_none(self):
+        with tempfile.TemporaryDirectory() as base:
+            project_path = os.path.join(base, "src", "custom", "bare-proj")
+            os.makedirs(project_path)
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            runner = FakeRunner()
+            with patch("subprocess.run") as mock_run:
+                submodule_status(runner, "bare-proj")
+            mock_run.assert_not_called()
+
+        info_texts = [m[1] for m in runner.messages if m[0] == "info"]
+        self.assertTrue(any("sin submódulos" in t for t in info_texts))
+
+    def test_never_mutates_git_state(self):
+        # Regression guard: submodule_status must be pure read-only —
+        # any stash/checkout/pull/fetch call is a bug (that's sync's
+        # and update-tags' job, not this one's).
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1", ["integra-addons"])
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            mutating = {"stash", "checkout", "pull", "fetch", "add", "commit", "push"}
+
+            def fake_run(cmd, **kwargs):
+                git_subcommand = cmd[1] if len(cmd) > 1 else ""
+                if git_subcommand in mutating:
+                    raise AssertionError(
+                        f"submodule_status no debería ejecutar: {cmd}"
+                    )
+                if cmd[:2] == ["git", "describe"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                    )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            runner = FakeRunner()
+            with patch("subprocess.run", side_effect=fake_run):
+                submodule_status(runner, "proj1")  # must not raise
+
+        error_msgs = [m[1] for m in runner.messages if m[0] == "error"]
+        self.assertEqual(error_msgs, [])
 
 
 if __name__ == "__main__":

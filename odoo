@@ -247,6 +247,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Mostrar salida de git",
     )
 
+    # submodule-status
+    p = subparsers.add_parser(
+        "submodule-status",
+        help="Muestra en qué tag/rama/hash está parado cada submódulo (solo lectura)",
+    )
+    p.add_argument(
+        "proyecto", nargs="?", default=None,
+        help="Proyecto en src/custom/ (opcional; sin esto corre sobre todos)",
+    )
+
     # validate-instances
     subparsers.add_parser(
         "validate-instances", help="Valida el archivo instances.json"
