@@ -993,6 +993,191 @@ class TuiStreamingRegressionTest(unittest.TestCase):
                 real_path.unlink()
 
 
+# ============================================================
+# submodule-status / update-tags — real dispatch through the TUI
+# ============================================================
+
+
+class TuiActionDispatchIntegrationTest(unittest.TestCase):
+    """Drive the real ListView -> InputModal -> submit pipeline with Pilot.
+
+    Unlike the CLI's own tests (which exercise ``update_tags``/
+    ``submodule_status`` directly with a scripted ``Runner``), these
+    verify the TUI's OWN wiring: that selecting the action in the real
+    ``ListView``, typing into the real ``InputModal``, and submitting
+    it actually reaches ``DispatchMixin`` with the right argv — not
+    just that ``_odoo_cli_args`` builds the right list in isolation.
+
+    Only the actual subprocess boundary is mocked (``stream_command``
+    for non-interactive actions, ``DockerOdooApp._run_interactive``
+    for ``interactive=True`` ones) — everything above that, including
+    real key presses and widget state, is genuine.
+    """
+
+    @staticmethod
+    def _select_action(actions_list, action_id: str) -> None:
+        idx = next(
+            i
+            for i, item in enumerate(actions_list.children)
+            if getattr(item, "action", None) and item.action.action_id == action_id
+        )
+        actions_list.index = idx
+        actions_list.focus()
+
+    def test_submodule_status_empty_repo_means_all_projects(self):
+        """Selecting 'Estado de submódulos' and submitting with the repo
+        field blank must reach stream_command with NO project positional
+        (the "optional" tweak for this one action must actually work)."""
+        from textual.widgets import Input, ListView
+
+        captured = {}
+
+        async def fake_stream_command(argv, cwd, on_line=None, on_progress=None, **kwargs):
+            captured["argv"] = argv
+            return 0
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                actions_list = app.query_one("#actions_list", ListView)
+                self._select_action(actions_list, "submodule-status")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                # Confirm the modal actually mounted with an empty,
+                # optional repo field before submitting blank.
+                inp = app.screen.query_one("#inp_repo", Input)
+                self.assertEqual(inp.value, "")
+                with patch("tui.runner.stream_command", side_effect=fake_stream_command):
+                    await pilot.press("ctrl+enter")
+                    await pilot.pause()
+                    await pilot.pause()
+
+        asyncio.run(go())
+        self.assertEqual(
+            captured.get("argv"), ["./odoo", "submodule-status"],
+            f"argv inesperado: {captured}",
+        )
+
+    def test_submodule_status_with_project_typed_in(self):
+        """Same flow, but typing a project name must append it as the
+        sole positional argument."""
+        from textual.widgets import Input, ListView
+
+        captured = {}
+
+        async def fake_stream_command(argv, cwd, on_line=None, on_progress=None, **kwargs):
+            captured["argv"] = argv
+            return 0
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                actions_list = app.query_one("#actions_list", ListView)
+                self._select_action(actions_list, "submodule-status")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                inp = app.screen.query_one("#inp_repo", Input)
+                inp.value = "bananera"
+                await pilot.pause()
+                with patch("tui.runner.stream_command", side_effect=fake_stream_command):
+                    await pilot.press("ctrl+enter")
+                    await pilot.pause()
+                    await pilot.pause()
+
+        asyncio.run(go())
+        self.assertEqual(
+            captured.get("argv"), ["./odoo", "submodule-status", "bananera"],
+            f"argv inesperado: {captured}",
+        )
+
+    def test_update_tags_routes_through_interactive_suspend_path(self):
+        """update-tags is interactive=True: selecting it and submitting
+        the project field must call DockerOdooApp._run_interactive
+        (the terminal-suspend path), not the streamed one — it needs a
+        live TTY for its confirm()/prompt_text() loop, which a streamed
+        subprocess can't give it."""
+        from textual.widgets import Input, ListView
+
+        captured = {}
+
+        async def fake_run_interactive(argv, action):
+            captured["argv"] = argv
+            captured["action_id"] = action.action_id
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                actions_list = app.query_one("#actions_list", ListView)
+                self._select_action(actions_list, "update-tags")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                inp = app.screen.query_one("#inp_repo", Input)
+                inp.value = "bananera"
+                await pilot.pause()
+                with patch.object(
+                    app, "_run_interactive", side_effect=fake_run_interactive
+                ):
+                    await pilot.press("ctrl+enter")
+                    await pilot.pause()
+                    await pilot.pause()
+
+        asyncio.run(go())
+        self.assertEqual(
+            captured.get("argv"), ["./odoo", "update-tags", "bananera"],
+            f"argv inesperado: {captured}",
+        )
+        self.assertEqual(captured.get("action_id"), "update-tags")
+
+    def test_sync_still_requires_repo_unlike_submodule_status(self):
+        """Regression guard: the optional=True tweak in _dispatch is
+        keyed off action_id == 'submodule-status' specifically. sync
+        shares the same ARG_REPO field and must still block submission
+        when it's left blank — if this ever starts passing (modal
+        dismisses, stream_command gets called), the tweak leaked to
+        every ARG_REPO-using action."""
+        from textual.widgets import Input, ListView
+
+        captured = {}
+
+        async def fake_stream_command(argv, cwd, on_line=None, on_progress=None, **kwargs):
+            captured["argv"] = argv
+            return 0
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                actions_list = app.query_one("#actions_list", ListView)
+                self._select_action(actions_list, "sync")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                inp = app.screen.query_one("#inp_repo", Input)
+                self.assertEqual(inp.value, "")
+                with patch("tui.runner.stream_command", side_effect=fake_stream_command):
+                    await pilot.press("ctrl+enter")
+                    await pilot.pause()
+                    await pilot.pause()
+                return len(app.screen_stack)
+
+        stack_depth = asyncio.run(go())
+        self.assertEqual(
+            captured, {},
+            f"sync no debía ejecutar con repo vacío. Llamadas: {captured}",
+        )
+        self.assertGreater(
+            stack_depth, 1,
+            "El modal de sync se cerró con el campo repo vacío (debería seguir "
+            "bloqueado pidiendo el valor requerido).",
+        )
+
+
 if __name__ == "__main__":
     # Permitir -v para verbosity
     parser = argparse.ArgumentParser(add_help=False)
