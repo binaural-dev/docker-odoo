@@ -89,6 +89,11 @@ ACTIONS: list[Action] = [
     Action("sync", "Sync submódulos", "Sync",
            "Sincroniza submódulos de un repo custom",
            needs=[ARG_REPO, ARG_BRANCH]),
+    Action("update-tags", "Update tags (submódulos)", "Sync",
+           "Bump de submódulo(s) a un tag en una rama nueva para PR "
+           "(rama base, submódulo, tag, push y PR se preguntan en la "
+           "terminal suspendida)",
+           needs=[ARG_REPO], interactive=True),
 
     # Scripts auxiliares
     Action("script:backup", "Backup", "Scripts",
