@@ -585,6 +585,12 @@ def submodule_status(runner: "Runner", project: str | None = None) -> None:
     :func:`_describe_submodule_ref`. A missing project is reported as
     an error and skipped, not a hard stop, so one typo doesn't hide
     the status of every other project when running over all of them.
+
+    Each project's header also shows the *project repo's own* current
+    branch/tag/hash (via the same ``_describe_submodule_ref``, which
+    works on any git repo, not just submodules) — a submodule's
+    checkout state is independent of which branch the project repo is
+    on, so without this the status list has no context to read it in.
     """
     if project:
         projects = [project]
@@ -603,7 +609,8 @@ def submodule_status(runner: "Runner", project: str | None = None) -> None:
             runner.error(f"Error: Proyecto '{proj}' no encontrado en src/custom/")
             continue
 
-        runner.info(f"\n=== {proj} ===")
+        proj_ref = _describe_submodule_ref(project_path)
+        runner.info(f"\n=== {proj} (rama: {proj_ref}) ===")
         submodulos = _discover_submodules(project_path)
         if not submodulos:
             runner.info("   (sin submódulos)")

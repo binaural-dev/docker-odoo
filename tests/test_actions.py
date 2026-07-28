@@ -1067,13 +1067,43 @@ class SubmoduleStatusTest(unittest.TestCase):
             os.chdir(base)
             self.addCleanup(os.chdir, orig_cwd)
 
+            calls = []
             runner = FakeRunner()
-            with patch("subprocess.run") as mock_run:
+            with patch("subprocess.run", side_effect=self._fake_run(calls)):
                 submodule_status(runner, "bare-proj")
-            mock_run.assert_not_called()
 
+        # The project itself still gets described (it's a real repo,
+        # separate from its — nonexistent — submodules), but nothing
+        # tries to describe a submodule since there are none.
+        self.assertTrue(any(c[:2] == ["git", "describe"] for c in calls))
         info_texts = [m[1] for m in runner.messages if m[0] == "info"]
         self.assertTrue(any("sin submódulos" in t for t in info_texts))
+
+    def test_header_shows_project_repo_branch(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1", ["integra-addons"])
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            def fake_run(cmd, **kwargs):
+                if cmd[:2] == ["git", "describe"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:2] == ["git", "rev-parse"] and "--abbrev-ref" in cmd:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="staging\n", stderr=""
+                    )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            runner = FakeRunner()
+            with patch("subprocess.run", side_effect=fake_run):
+                submodule_status(runner, "proj1")
+
+        info_texts = [m[1] for m in runner.messages if m[0] == "info"]
+        self.assertTrue(
+            any("proj1" in t and "staging" in t for t in info_texts),
+            f"El encabezado no muestra la rama del proyecto. Mensajes: {info_texts}",
+        )
 
     def test_never_mutates_git_state(self):
         # Regression guard: submodule_status must be pure read-only —
