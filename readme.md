@@ -162,7 +162,7 @@ Los addons de cada instancia se especifican en el campo `addons` de su configura
 
 Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si no se especifica nombre. El subcomando `tui` (ver [TUI interactiva](#tui-interactiva-odoo-tui--odoo-tui)) es un entry point alternativo a `./odoo-tui`.
 
-El script `./odoo` es un shim liviano (276 LOC) que delega a `odoo_cli/core/`, el package que implementa la lógica. Las acciones viven en `odoo_cli/core/actions/` y se invocan vía `odoo_cli/core/dispatch.py`, que mapea `argparse` a acción. El contrato de I/O con el usuario está abstraído en `odoo_cli.core.runner.Runner` (un `typing.Protocol` con `info`/`warn`/`confirm`/`run_streamed`), lo que permite testear las acciones con un `FakeRunner` y deja la puerta abierta a un futuro `TextualRunner` que reutilice las mismas acciones desde la TUI.
+El script `./odoo` es un shim liviano (323 LOC) que delega a `odoo_cli/core/`, el package que implementa la lógica. Las acciones viven en `odoo_cli/core/actions/` y se invocan vía `odoo_cli/core/dispatch.py`, que mapea `argparse` a acción. El contrato de I/O con el usuario está abstraído en `odoo_cli.core.runner.Runner` (un `typing.Protocol` con `info`/`warn`/`confirm`/`run_streamed`), lo que permite testear las acciones con un `FakeRunner` y deja la puerta abierta a un futuro `TextualRunner` que reutilice las mismas acciones desde la TUI.
 
 | Ruta | Responsabilidad |
 |------|-----------------|
@@ -175,7 +175,7 @@ El script `./odoo` es un shim liviano (276 LOC) que delega a `odoo_cli/core/`, e
 | `odoo_cli/core/actions/lifecycle.py` | `build_odoo`, `start_odoo`, `stop_odoo`, `restart_odoo`, `remove_odoo` |
 | `odoo_cli/core/actions/access.py` | `run_bash`, `show_logs`, `list_containers`, `psql_connect`, `fix_filestore` |
 | `odoo_cli/core/actions/modules.py` | `update`, `reset_password`, `bash_update_modules` |
-| `odoo_cli/core/actions/maintenance.py` | `init_addons`, `sync` |
+| `odoo_cli/core/actions/maintenance.py` | `init_addons`, `sync`, `update_tags`, `submodule_status` |
 | `odoo_cli/core/actions/hosts.py` | `hosts_status`, `hosts_apply`, `hosts_show` |
 
 | Comando | Descripción |
@@ -193,6 +193,8 @@ El script `./odoo` es un shim liviano (276 LOC) que delega a `odoo_cli/core/`, e
 | `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
+| `update-tags [proyecto] [branch_origin] [submodulo] [tag] [--v]` | Bumpea uno o más submódulos a un tag específico, en una rama nueva para PR. Todo argumento faltante se pregunta interactivamente (proyecto, rama base, submódulo, tag — con menú de tags filtrable, ej: `19, alpha`). Push y `gh pr create` se ofrecen al final, cada uno con su propia confirmación. |
+| `submodule-status [proyecto]` | Muestra en qué tag/rama/hash está parado cada submódulo (y el repo del proyecto en sí) — de solo lectura, no toca git. Sin proyecto, corre sobre todos los de `src/custom/`. |
 | `hosts [status\|show\|apply\|dry-run]` | Sincroniza `/etc/hosts` con los subdominios de las instances. Ver [Subdominios locales por instance](#subdominios-locales-por-instance). |
 | `tui` | Lanza la TUI interactiva (equivalente a `./odoo-tui`). |
 
@@ -228,6 +230,15 @@ El script `./odoo` es un shim liviano (276 LOC) que delega a `odoo_cli/core/`, e
 
 # Reiniciar todo
 ./odoo restart
+
+# Ver en qué tag/rama/hash está parado cada submódulo de un proyecto
+./odoo submodule-status bananera
+
+# Lo mismo para todos los proyectos de src/custom/
+./odoo submodule-status
+
+# Bumpear un submódulo a un tag y preparar el PR (todo interactivo si se omite)
+./odoo update-tags bananera
 ```
 
 ## Subdominios locales por instance
@@ -398,7 +409,11 @@ verde arriba del panel de output que muestra:
   al terminar el comando interactivo)
 - **Mantenimiento**: `fix-files`, `init`, `validate-instances`, `remove`
 - **Módulos / DB**: `update` (admite `--load-language`), `pw` (reset de password)
-- **Sync**: `sync` (submódulos git de un repo custom)
+- **Sync**: `sync` (submódulos git de un repo custom), `update-tags` (bump
+  interactivo de submódulo a un tag en una rama nueva — suspende la TUI y
+  te da la terminal real, porque necesita su loop de confirmaciones),
+  `submodule-status` (de solo lectura, corre streameado como cualquier
+  acción normal)
 - **Scripts**: `backup`, `restore`, `test`, `precommit`, `active-users`,
   `migrate`, `update-manifest`
 
@@ -450,7 +465,7 @@ cada uno sea legible y testeable en isolation:
 | Ruta | Contenido |
 |------|-----------|
 | `tui/app.py` | `DockerOdooApp` — composición, ciclo de vida, eventos de la app (455 LOC) |
-| `tui/dispatch.py` | `DispatchMixin` — mapea acciones a comandos y orquesta modales (502 LOC) |
+| `tui/dispatch.py` | `DispatchMixin` — mapea acciones a comandos y orquesta modales (553 LOC) |
 | `tui/runner.py` | Runner async (`stream_command`) — streamea stdout sin bloquear el event loop (218 LOC) |
 | `tui/keybindings.py` | Handlers de atajos (`r`, `Space`, `Esc`, `Tab`, `1`-`4`, etc.) (288 LOC) |
 | `tui/models.py` | `Action`, constantes, tipos |
