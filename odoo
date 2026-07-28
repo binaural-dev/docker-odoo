@@ -221,6 +221,32 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Mostrar salida de git",
     )
 
+    # update-tags
+    p = subparsers.add_parser(
+        "update-tags",
+        help="Actualiza un submódulo a un tag en una rama nueva para PR",
+    )
+    p.add_argument(
+        "proyecto", nargs="?", default=None,
+        help="Proyecto en src/custom/ (opcional, se pregunta si falta)",
+    )
+    p.add_argument(
+        "branch_origin", nargs="?", default=None,
+        help="Rama base para pull y para crear la rama nueva (opcional)",
+    )
+    p.add_argument(
+        "submodulo", nargs="?", default=None,
+        help="Submódulo a actualizar (opcional)",
+    )
+    p.add_argument(
+        "tag", nargs="?", default=None,
+        help="Tag exacto a checkear (opcional)",
+    )
+    p.add_argument(
+        "--v", action="store_true", default=False,
+        help="Mostrar salida de git",
+    )
+
     # validate-instances
     subparsers.add_parser(
         "validate-instances", help="Valida el archivo instances.json"

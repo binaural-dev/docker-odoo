@@ -25,6 +25,7 @@ Two reasons:
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from typing import TYPE_CHECKING
 
@@ -424,6 +425,107 @@ def prompt_for_repos(runner: "Runner") -> list[str]:
     return selected
 
 
+def prompt_for_project(runner: "Runner") -> str:
+    """Ask the user which project (``src/custom/<proyecto>``) to target.
+
+    Single-select, unlike :func:`prompt_for_repos` (multi-select for
+    ``sync``) — ``update-tags`` operates on one project at a time.
+    """
+    repos = get_custom_repos()
+    if not repos:
+        runner.info("\nNo se encontraron proyectos en src/custom/.")
+        sys.exit(1)
+
+    options = [(r, r) for r in repos]
+    selected = prompt_selection(runner, options, "Selecciona el proyecto")
+    if not selected:
+        runner.info("No se seleccionó ningún proyecto.")
+        sys.exit(0)
+    return selected
+
+
+def prompt_for_branch_origin(runner: "Runner", project_path: str) -> str:
+    """Ask for the base branch to pull from and branch off of.
+
+    Defaults to the project repo's current branch (best guess for
+    "where we are already working"), but the user can type a
+    different one.
+    """
+    current = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=project_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).stdout.strip()
+    default = current if current and current != "HEAD" else ""
+
+    branch = runner.prompt_text(
+        "\nRama base (branch_origin) para el pull y para crear la rama nueva",
+        default=default,
+    ).strip()
+    if not branch:
+        runner.info("La rama base es requerida.")
+        sys.exit(1)
+    return branch
+
+
+def prompt_for_submodule(runner: "Runner", project_path: str) -> str:
+    """Ask which submodule of the project to bump."""
+    from odoo_cli.core.actions.maintenance import _discover_submodules
+
+    submodulos = _discover_submodules(project_path)
+    if not submodulos:
+        runner.info(f"\nNo se encontraron submódulos en {project_path}.")
+        sys.exit(1)
+
+    options = [(s, s) for s in submodulos]
+    selected = prompt_selection(runner, options, "Selecciona el submódulo a actualizar")
+    if not selected:
+        runner.info("No se seleccionó ningún submódulo.")
+        sys.exit(0)
+    return selected
+
+
+def prompt_for_tag(runner: "Runner", submodule_path: str) -> str:
+    """Ask which tag to check out, with an optional text filter.
+
+    Lists tags sorted newest-first by semantic version
+    (``--sort=-v:refname``, not the alphabetical default of plain
+    ``git tag``) so the user picks from an already-correct order —
+    this is what avoids the alphabetical-sort bug of the old
+    ``grep ... | tail -n 1`` workflow.
+    """
+    from odoo_cli.core.actions.maintenance import _filter_tags
+
+    tags = subprocess.run(
+        ["git", "tag", "--sort=-v:refname"],
+        cwd=submodule_path,
+        stdout=subprocess.PIPE,
+        text=True,
+    ).stdout.splitlines()
+    tags = [t for t in tags if t.strip()]
+    if not tags:
+        runner.info(f"\nNo se encontraron tags en {submodule_path}.")
+        sys.exit(1)
+
+    text_filter = runner.prompt_text(
+        "\nFiltro opcional para los tags (ej: beta, ve, 17, alpha) "
+        "— Enter para ver todos"
+    ).strip()
+    filtered = _filter_tags(tags, text_filter)
+    if not filtered:
+        runner.info(f"Ningún tag coincide con el filtro '{text_filter}'.")
+        sys.exit(1)
+
+    options = [(t, t) for t in filtered]
+    selected = prompt_selection(runner, options, "Selecciona el tag exacto")
+    if not selected:
+        runner.info("No se seleccionó ningún tag.")
+        sys.exit(0)
+    return selected
+
+
 def prompt_for_branch(runner: "Runner", repo_name: str | None = None) -> str:
     """Ask the user for the branch name to sync to.
 
@@ -450,4 +552,8 @@ __all__ = [
     "prompt_for_user",
     "prompt_for_repos",
     "prompt_for_branch",
+    "prompt_for_project",
+    "prompt_for_branch_origin",
+    "prompt_for_submodule",
+    "prompt_for_tag",
 ]

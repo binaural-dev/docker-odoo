@@ -57,13 +57,14 @@ from odoo_cli.core.actions.lifecycle import (
     start_odoo,
     stop_odoo,
 )
-from odoo_cli.core.actions.maintenance import init_addons, sync
+from odoo_cli.core.actions.maintenance import init_addons, sync, update_tags
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.prompts import (
     prompt_for_branch,
     prompt_for_database,
     prompt_for_instance,
     prompt_for_modules,
+    prompt_for_project,
     prompt_for_repos,
     prompt_for_user,
 )
@@ -230,6 +231,18 @@ def dispatch(
                 runner, args.r if isinstance(args.r, str) else None
             )
         sync(runner, args.r, args.b, show=args.v)
+
+    elif args.action == "update-tags":
+        if getattr(args, "proyecto", None) is None:
+            args.proyecto = prompt_for_project(runner)
+        update_tags(
+            runner,
+            args.proyecto,
+            args.branch_origin,
+            args.submodulo,
+            args.tag,
+            show=args.v,
+        )
 
     elif args.action == "validate-instances":
         runner.info("\n✅ El archivo instances.json es válido.\n")
