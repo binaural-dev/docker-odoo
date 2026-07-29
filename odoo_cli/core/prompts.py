@@ -88,6 +88,7 @@ def prompt_selection(
                         return []
                     continue
                 if multi and choice == "all":
+                    runner.info(f"✔ {title}: todos")
                     return [val for _, val in options]
                 if multi:
                     indices = [
@@ -99,9 +100,15 @@ def prompt_selection(
                     for idx in indices:
                         if 1 <= idx <= len(options):
                             selected.append(options[idx - 1][1])
+                    labels = ", ".join(
+                        options[idx - 1][0] for idx in indices
+                        if 1 <= idx <= len(options)
+                    )
+                    runner.info(f"✔ {title}: {labels or '(ninguna)'}")
                     return selected
                 idx = int(choice)
                 if 1 <= idx <= len(options):
+                    runner.info(f"✔ {title}: {options[idx - 1][0]}")
                     return options[idx - 1][1]
                 runner.info("Selección inválida.")
             except ValueError:
@@ -274,8 +281,19 @@ def prompt_selection(
         sys.stdout.write("\033[?25h")  # Mostrar cursor
 
     if multi:
-        return [options[i][1] for i in sorted(list(selected_indices))]
-    return options[current_idx][1]
+        chosen = [options[i] for i in sorted(selected_indices)]
+    else:
+        chosen = [options[current_idx]]
+
+    # Dejar constancia en consola de lo elegido: el menú de arriba se
+    # borra (para no ensuciar el log con el grid completo), pero sin
+    # esta línea no quedaba ningún rastro de la selección tomada.
+    labels = ", ".join(text for text, _ in chosen) if chosen else "(ninguna)"
+    print(f"✔ {title}: {labels}")
+
+    if multi:
+        return [value for _, value in chosen]
+    return chosen[0][1]
 
 
 # ============================================================
