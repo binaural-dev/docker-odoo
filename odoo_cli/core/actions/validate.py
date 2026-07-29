@@ -163,7 +163,12 @@ def check_host_port_collisions(
             timeout=10,
         )
         all_containers = subprocess.run(
-            ["docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"],
+            # --no-trunc is load-bearing: `docker compose ps -q` prints
+            # full 64-char IDs, while `docker ps` truncates {{.ID}} to 12
+            # chars. Without it no container ever matches `own_ids` and
+            # every one of *our* containers gets reported as a foreign
+            # deployment.
+            ["docker", "ps", "--no-trunc", "--format", "{{.ID}}\t{{.Names}}\t{{.Ports}}"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -171,7 +176,9 @@ def check_host_port_collisions(
     except (OSError, subprocess.TimeoutExpired):
         return
 
-    if all_containers.returncode != 0:
+    if all_containers.returncode != 0 or own.returncode != 0:
+        # Without a reliable list of our own containers we can't tell
+        # ours from theirs — staying quiet beats warning about ourselves.
         return
 
     own_ids = set(own.stdout.split())

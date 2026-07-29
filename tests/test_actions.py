@@ -245,11 +245,16 @@ class CheckHostPortCollisionsTest(unittest.TestCase):
         config.update(overrides)
         return config
 
-    def _fake_run(self, own_ps_stdout, docker_ps_stdout, docker_ps_rc=0):
+    def _fake_run(self, own_ps_stdout, docker_ps_stdout, docker_ps_rc=0, own_ps_rc=0):
         def _run(cmd, **kwargs):
             if cmd[:4] == ["docker", "compose", "-f", "docker-compose.generated.yml"]:
-                return subprocess.CompletedProcess(cmd, 0, stdout=own_ps_stdout, stderr="")
+                return subprocess.CompletedProcess(cmd, own_ps_rc, stdout=own_ps_stdout, stderr="")
             if cmd[:2] == ["docker", "ps"]:
+                # The real `docker ps` truncates {{.ID}} to 12 chars
+                # unless --no-trunc is passed; `docker compose ps -q`
+                # always prints the full 64. Emulate that here so a
+                # missing --no-trunc fails the test instead of passing.
+                assert "--no-trunc" in cmd, "docker ps must be called with --no-trunc"
                 return subprocess.CompletedProcess(cmd, docker_ps_rc, stdout=docker_ps_stdout, stderr="")
             raise AssertionError(f"unexpected subprocess.run call: {cmd}")
 
@@ -276,8 +281,28 @@ class CheckHostPortCollisionsTest(unittest.TestCase):
         runner = FakeRunner()
         # The container holding :8069 IS our own (its ID is in `docker
         # compose ps -q` output) -> must not be reported as a conflict.
-        docker_ps_stdout = "abc123\tdocker-odoo-odoo-a-1\t0.0.0.0:8069->8069/tcp\n"
-        with patch("subprocess.run", side_effect=self._fake_run("abc123\n", docker_ps_stdout)):
+        # Real 64-char IDs on both sides: this is what regressed in
+        # production when `docker ps` was called without --no-trunc and
+        # its 12-char IDs never matched compose's full ones, so every
+        # container of ours was flagged as "another deployment".
+        own_id = "af0e2668e469fd447499ff989cb3b014d387781d1a573883381cc4ce591a2b1b"
+        docker_ps_stdout = f"{own_id}\tdocker-odoo-odoo-a-1\t0.0.0.0:8069->8069/tcp\n"
+        with patch("subprocess.run", side_effect=self._fake_run(f"{own_id}\n", docker_ps_stdout)):
+            check_host_port_collisions(runner, self._make_config())
+        self.assertEqual([m for m in runner.messages if m[0] == "warn"], [])
+
+    def test_silent_when_own_project_lookup_fails(self):
+        runner = FakeRunner()
+        # `docker compose ps -q` failed -> own_ids is empty, so every
+        # container looks foreign. Warning here would be pure noise.
+        docker_ps_stdout = (
+            "af0e2668e469fd447499ff989cb3b014d387781d1a573883381cc4ce591a2b1b"
+            "\tdocker-odoo-odoo-a-1\t0.0.0.0:8069->8069/tcp\n"
+        )
+        with patch(
+            "subprocess.run",
+            side_effect=self._fake_run("", docker_ps_stdout, own_ps_rc=1),
+        ):
             check_host_port_collisions(runner, self._make_config())
         self.assertEqual([m for m in runner.messages if m[0] == "warn"], [])
 
