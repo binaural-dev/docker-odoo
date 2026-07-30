@@ -267,14 +267,14 @@ def create_instance(name, repo_url, branch, odoo_version):
 
     print("\n🚀 Aplicando cambios automáticamente (stop -> build -> start)...")
     try:
-        print("\n>> Ejecutando: ./odoo stop")
-        subprocess.run(["./odoo", "stop", "all"], cwd=BASE_PATH, check=True)
+        print(f"\n>> Ejecutando: ./odoo stop {name}")
+        subprocess.run(["./odoo", "stop", name], cwd=BASE_PATH, check=True)
 
         print("\n>> Ejecutando: ./odoo build")
         subprocess.run(["./odoo", "build"], cwd=BASE_PATH, check=True)
 
-        print("\n>> Ejecutando: ./odoo start")
-        subprocess.run(["./odoo", "start", "all"], cwd=BASE_PATH, check=True)
+        print(f"\n>> Ejecutando: ./odoo start {name}")
+        subprocess.run(["./odoo", "start", name], cwd=BASE_PATH, check=True)
 
         print(
             f"\n🎉 ¡Instancia {name} lista y ejecutándose en http://localhost:{next_port}!\n"
