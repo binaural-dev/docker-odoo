@@ -134,7 +134,11 @@ def _suggest_branch_name(bumps: list[tuple[str, str]]) -> str:
     """
     segments = [f"{s}-{t}" for s, t in bumps]
     shown, rest = segments[:3], segments[3:]
-    name = "update/" + "_".join(shown)
+    # "bump/", not "update/": several projects use a plain branch named
+    # "update" as their working branch, which collides with the
+    # "update/<slug>" ref path at the git level (a ref can't be both a
+    # leaf and a directory) — see refs/heads/update vs refs/heads/update/x.
+    name = "bump/" + "_".join(shown)
     if rest:
         name += f"_+{len(rest)}-mas"
     return name
@@ -148,6 +152,24 @@ def _branch_exists(branch: str) -> bool:
         ).returncode
         == 0
     )
+
+
+def _branch_ref_conflict(candidate: str) -> str | None:
+    """The existing branch blocking ``candidate``, if any.
+
+    Git stores branches as a directory tree under ``refs/heads/``, so a
+    branch named e.g. ``update`` and one named ``update/foo`` can't
+    coexist — one needs ``update`` to be a leaf (a file), the other a
+    directory. ``git checkout -b`` fails on this with a raw "cannot
+    lock ref" error, so it's checked for up front to give a clear
+    message instead.
+    """
+    parts = candidate.split("/")
+    for i in range(1, len(parts)):
+        prefix = "/".join(parts[:i])
+        if _branch_exists(prefix):
+            return prefix
+    return None
 
 
 def _gh_repo_slug(cwd: str | None = None) -> str | None:
@@ -504,6 +526,18 @@ def update_tags(
                 runner.info(f"→ Reusando la rama existente {candidate}...")
                 checkout_cmd = ["git", "checkout", candidate]
             else:
+                conflict = _branch_ref_conflict(candidate)
+                if conflict:
+                    runner.error(
+                        f"❌ No se puede crear '{candidate}': ya existe una "
+                        f"rama local llamada '{conflict}' en este repo, y "
+                        f"Git no permite que '{conflict}' sea a la vez una "
+                        "rama y una carpeta de ramas. Borrá o renombrá "
+                        f"'{conflict}' (por ejemplo, git branch -d "
+                        f"{conflict}), o elegí otro nombre acá abajo."
+                    )
+                    suggested_branch = candidate
+                    continue
                 runner.info(f"→ Creando rama {candidate} desde {branch_origin}...")
                 checkout_cmd = ["git", "checkout", "-b", candidate]
 
