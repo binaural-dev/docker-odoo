@@ -150,6 +150,31 @@ def _branch_exists(branch: str) -> bool:
     )
 
 
+def _gh_repo_slug(cwd: str | None = None) -> str | None:
+    """Best-effort ``owner/repo`` for the ``origin`` remote of ``cwd``.
+
+    Passed straight to ``gh pr create --repo``, so it never has to
+    guess which GitHub repo the current directory belongs to. Without
+    it, a project ``gh`` hasn't seen before — every freshly cloned
+    project — makes it stop and ask the user to run
+    ``gh repo set-default owner/repo`` first, which hangs our
+    non-interactive ``subprocess.run`` call instead of failing loudly.
+
+    Returns ``None`` if ``origin`` isn't set or doesn't look like a
+    GitHub remote (SSH or HTTPS) — callers fall back to letting ``gh``
+    resolve it on its own.
+    """
+    url = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    ).stdout.strip()
+    match = re.search(r"[:/]([^/:]+)/([^/]+?)(?:\.git)?$", url)
+    return f"{match.group(1)}/{match.group(2)}" if match else None
+
+
 def _describe_submodule_ref(submodule_path: str) -> str:
     """Describe what ``submodule_path`` is currently checked out to.
 
@@ -499,6 +524,26 @@ def update_tags(
             _commit_bump(runner, bump_submodulo, bump_tag, stdout)
 
         resumen = ", ".join(f"{s}@{t}" for s, t in bumps)
+
+        # If every bump above was a no-op (all submodules already sat
+        # on their target tag), the new branch is identical to
+        # branch_origin: pushing it would be pointless and `gh pr
+        # create` would fail with "No commits between...". Bail out
+        # here, before touching the remote at all.
+        rev_count = subprocess.run(
+            ["git", "rev-list", "--count", f"{branch_origin}..{new_branch}"],
+            stdout=subprocess.PIPE,
+            text=True,
+        ).stdout.strip()
+        if rev_count == "0":
+            runner.info(
+                f"\nℹ {resumen} — ya estaban en esos tags. La rama "
+                f"'{new_branch}' no tiene commits nuevos respecto a "
+                f"'{branch_origin}', así que no hay nada para pushear ni "
+                "un PR que crear.\n"
+            )
+            return
+
         runner.info(f"\n✅ Rama '{new_branch}' lista con: {resumen}\n")
 
         do_push = runner.confirm(
@@ -546,14 +591,18 @@ def update_tags(
         ).strip() or suggested_body
 
         runner.info("→ Creando PR con gh...")
+        gh_pr_cmd = [
+            "gh", "pr", "create",
+            "--base", branch_origin,
+            "--head", new_branch,
+            "--title", title,
+            "--body", body,
+        ]
+        repo_slug = _gh_repo_slug()
+        if repo_slug:
+            gh_pr_cmd += ["--repo", repo_slug]
         pr = subprocess.run(
-            [
-                "gh", "pr", "create",
-                "--base", branch_origin,
-                "--head", new_branch,
-                "--title", title,
-                "--body", body,
-            ],
+            gh_pr_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,

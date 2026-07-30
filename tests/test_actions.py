@@ -943,6 +943,10 @@ class UpdateTagsTest(unittest.TestCase):
                     )
                 if cmd[:2] == ["git", "show-ref"]:
                     return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:4] == ["git", "remote", "get-url", "origin"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="git@github.com:org/repo.git\n", stderr=""
+                    )
                 if cmd[:2] == ["gh", "pr"]:
                     return subprocess.CompletedProcess(
                         cmd, 0, stdout="https://github.com/org/repo/pull/1\n", stderr=""
@@ -964,6 +968,11 @@ class UpdateTagsTest(unittest.TestCase):
             self.assertIn(
                 "update/integra-addons-17.0.2.0.0-beta.1", pr_calls[0]
             )
+            # --repo pinned explicitly from `origin`'s remote URL, so
+            # `gh` never has to guess/ask the user to run
+            # `gh repo set-default` on a project it hasn't seen before.
+            self.assertIn("--repo", pr_calls[0])
+            self.assertIn("org/repo", pr_calls[0])
             info_msgs = [m[1] for m in runner.messages if m[0] == "info"]
             self.assertTrue(
                 any("pull/1" in t for t in info_msgs),
@@ -989,6 +998,49 @@ class UpdateTagsTest(unittest.TestCase):
             self.assertFalse(any(c[:2] == ["gh", "pr"] for c in calls))
             error_msgs = [m[1] for m in runner.messages if m[0] == "error"]
             self.assertTrue(any("gh" in t.lower() for t in error_msgs))
+
+    def test_push_and_pr_skipped_when_all_bumps_are_noops(self):
+        # Every submodule was already at its target tag, so `git
+        # commit` finds nothing to stage (rc=1) for each one, and the
+        # new branch ends up with zero commits ahead of branch_origin
+        # — reproduces the "No commits between..." gh failure.
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base)
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "tag", "--list"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                    )
+                if cmd[:2] == ["git", "show-ref"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:2] == ["git", "commit"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 1, stdout="", stderr="nothing to commit\n"
+                    )
+                if cmd[:3] == ["git", "rev-list", "--count"]:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="0\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            runner = FakeRunner(confirm_answers=[False])
+            with patch("subprocess.run", side_effect=fake_run):
+                update_tags(
+                    runner, "testproj", "master", "integra-addons", "17.0.2.0.0-beta.1"
+                )
+
+            self.assertFalse(any(c[:2] == ["git", "push"] for c in calls))
+            self.assertFalse(any(c[:2] == ["gh", "pr"] for c in calls))
+            info_msgs = [m[1] for m in runner.messages if m[0] == "info"]
+            self.assertTrue(
+                any("no tiene commits nuevos" in t for t in info_msgs),
+                f"No se avisó que la rama no tenía commits nuevos. Mensajes: {info_msgs}",
+            )
 
 
 class SubmoduleStatusTest(unittest.TestCase):
