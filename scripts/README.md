@@ -49,6 +49,28 @@ Actualiza los módulos indicados (`<modulo1>`, `<modulo2>`, etc.) en la base de 
 ```
 Restaura el backup `<archivo_backup>` en la base de datos `<base_de_datos>`, utilizando los contenedores `<contenedor_db>` (PostgreSQL) y `<contenedor_odoo>` (Odoo).
 
+### odoo_restore
+
+```sh
+./scripts/odoo_restore restore -z <archivo_backup.zip> -d <base_de_datos>
+```
+
+Restaura una base de datos Odoo desde un ZIP generado por el flujo de backup. El script extrae primero `dump.sql`, lo restaura y lo elimina antes de extraer el `filestore`, para reducir el espacio temporal usado durante el proceso.
+
+Parámetros útiles:
+
+- `--workdir <ruta>`: carpeta base donde se crearán los temporales del restore.
+- Si no se especifica `--workdir`, se usa `.tmp_ignored/` en la raíz del proyecto y cada ejecución crea una subcarpeta única.
+- `--no-cleanup`: conserva los temporales para diagnóstico.
+
+### odoo_restore_scp
+
+```sh
+./scripts/odoo_restore_scp --host <host> --user <user> --remote-path <archivo.zip> --download-path <ruta_local>
+```
+
+Descarga un ZIP remoto por SCP y luego ejecuta `odoo_restore`. También acepta `--workdir <ruta>` para reenviar la carpeta base de temporales al restore local.
+
 
 ### Notas y solución de problemas para restore_db.sh
 

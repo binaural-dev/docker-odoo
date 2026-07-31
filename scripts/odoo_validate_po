@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+
+import subprocess
+import argparse
+import sys
+import os
+
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    raise SystemExit(
+        "Missing dependency: python-dotenv. Install it with 'sudo apt-get install python3-dotenv' or 'pip install python-dotenv'."
+    )
+
+
+class PoValidationManager:
+    def __init__(self, container, container_target_path):
+        self.container = container
+        self.container_target_path = container_target_path
+
+    def run_validation(self):
+        print(f"Ejecutando validación de archivos .po en el contenedor '{self.container}'...")
+        print(f"Ruta objetivo en el contenedor: {self.container_target_path}")
+
+        # Script de Python que se ejecutará DENTRO del contenedor de Odoo para poder importar odoo.tools
+        python_script = f"""
+import os
+import sys
+import glob
+
+# Intentar importar la librería de Odoo
+try:
+    from odoo.tools import translate
+except ImportError:
+    print('❌ ERROR: No se pudo importar odoo.tools.translate desde dentro del contenedor.')
+    sys.exit(1)
+
+po_files = glob.glob(os.path.join('{self.container_target_path}', '**', 'i18n', '*.po'), recursive=True)
+
+if not po_files:
+    print('⚠️ No se encontraron archivos .po bajo la ruta: {self.container_target_path}')
+    sys.exit(0)
+
+malformed_files = []
+
+for po_file in po_files:
+    try:
+        with open(po_file, 'rb') as f:
+            reader = translate.PoFileReader(f)
+            # Forzamos a Odoo a leer todo el archivo para atrapar errores de parseo
+            list(reader)
+    except Exception as e:
+        print('=' * 60)
+        print(f'❌ ERROR CRÍTICO DE SINTAXIS EN ARCHIVO PO')
+        print(f'ARCHIVO: {{po_file}}')
+        print(f'DETALLE: {{str(e)}}')
+        print('=' * 60)
+        malformed_files.append(po_file)
+
+if malformed_files:
+    print(f'🚨 Se encontraron {{len(malformed_files)}} archivos de traducción defectuosos.')
+    sys.exit(1)
+else:
+    print(f'✅ Todos los {{len(po_files)}} archivos .po analizados son correctos.')
+"""
+
+        # Inyectamos y ejecutamos el código Python iterando sobre `docker exec`
+        cmd = [
+            "docker",
+            "exec",
+            "-i",
+            self.container,
+            "python3",
+            "-c",
+            python_script,
+        ]
+
+        result = subprocess.run(cmd)
+
+        if result.returncode == 0:
+            print(f"\n✔ Validación completada correctamente para el contenedor '{self.container}'.\n")
+        else:
+            print(f"\n✘ Falló la validación. Por favor corrige los archivos PO listados arriba.\n")
+            sys.exit(result.returncode)
+
+
+class ValidationOrchestrator:
+    def __init__(self, container_name, target_path):
+        if not container_name:
+            raise ValueError(
+                "La variable de entorno PROJECT_NAME no está definida. Verifica que estás ejecutando el script en un directorio con archivo .env válido."
+            )
+        
+        self.container = container_name
+        self.target_path = target_path
+
+    def run(self):
+        print("\n=== Iniciando proceso de VALIDACIÓN DE ESPAÑOL (PO) ===")
+
+        manager = PoValidationManager(
+            container=self.container,
+            container_target_path=self.target_path,
+        )
+
+        manager.run_validation()
+
+
+if __name__ == "__main__":
+
+    # 1. Cargar el entorno local
+    load_dotenv()
+
+    # 2. Configurar argumentos de línea de comandos
+    parser = argparse.ArgumentParser(description="Script para validar archivos de traducción .po en Odoo")
+    subparsers = parser.add_subparsers(dest="run", help="Acciones")
+
+    validate_parser = subparsers.add_parser(
+        "validate", help="Validar la sintaxis de todos los archivos .po"
+    )
+
+    validate_parser.add_argument(
+        "-p",
+        "--path",
+        default="/mnt/extra-addons",
+        help="Ruta dentro del contenedor donde están los módulos (por defecto: /mnt/extra-addons)",
+    )
+
+    args = parser.parse_args()
+
+    # Validación del subcomando
+    if args.run != "validate":
+        parser.print_help()
+        sys.exit(1)
+
+    # 3. Construcción del orquestador copiando la lógica de odoo_restore
+    try:
+        orchestrator = ValidationOrchestrator(
+            container_name=os.environ.get("PROJECT_NAME"),
+            target_path=args.path,
+        )
+    except ValueError as e:
+        print(f"\nError de configuración: {str(e)}")
+        sys.exit(1)
+
+    # 4. Ejecución
+    try:
+        orchestrator.run()
+    except Exception as e:
+        print(f"\nError de ejecución: {str(e)}")
+        sys.exit(1)

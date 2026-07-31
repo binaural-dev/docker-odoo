@@ -37,6 +37,31 @@ def _docker_compose(*args):
     print(cmd)
     os.system(cmd)
 
+def tester(database, module, conf_path="/etc/odoo/odoo.conf", port=0):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    POSTGRES_USER = os.getenv("POSTGRES_USER")
+    os.system(
+        f"""docker exec -it {PROJECT_NAME} {POSTGRES_USER} -c {conf_path} -d {database} -i {module} --test-enable --stop-after-init -p {port}"""
+    )
+
+def scaffold_module(module_name: str, repo_name: str = None):
+    PROJECT_NAME = os.getenv("PROJECT_NAME")
+    if not repo_name:
+        repo_name = os.getenv("MAIN_REPO_NAME")
+    if not repo_name:
+        print("\n❌ Error: No se ha especificado el repositorio donde crear el módulo.")
+        print("Puedes especificarlo de las siguientes maneras:")
+        print("  1. Usando el parámetro -r: ./odoo scaffold mi_modulo -r nombre_repositorio")
+        print("  2. Configurando la variable MAIN_REPO_NAME en tu archivo .env (ej: MAIN_REPO_NAME=repositorio)\n")
+        return False
+    dest_path = f"/home/odoo/src/custom/{repo_name}"
+    cmd = f"docker exec -it {PROJECT_NAME} odoo scaffold {module_name} {dest_path}"
+    print(cmd)
+    res = os.system(cmd)
+    if res == 0:
+        print(f"\n✅ Módulo '{module_name}' creado con éxito en '{dest_path}'")
+    else:
+        print(f"\n❌ Error al crear el módulo '{module_name}'")
 
 def _get_instance_services(config, instance=None):
     """Get the list of docker compose service names for an instance (or all)."""
@@ -205,11 +230,13 @@ def run_bash(config, instance):
     os.system(f"docker exec -u root -it {container} bash")
 
 
-def bash_update_modules(config, instance, dbname, modules="all"):
+def bash_update_modules(config, instance, dbname, modules="all", overwrite_translation: bool = False):
     """Update Odoo modules in an instance."""
     print(f"\n\033[1;35m=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     container = f"odoo-{instance}"
     cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+    if overwrite_translation:
+        cmd += " --i18n-overwrite"
     print(cmd)
     return os.system(cmd)
 
@@ -778,6 +805,13 @@ def main():
     update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
     update_p.add_argument("-d", required=False, help="Nombre de la base de datos o 'all' (opcional)")
     update_p.add_argument("-m", default=None, help="Módulos a actualizar (opcional)")
+    update_p.add_argument(
+            "-i18n",
+            "--overwrite-translation",
+            action="store_true",
+            dest="overwrite_translation",
+            help="Overwrite translations",
+        )
 
     # init
     init_p = subparsers.add_parser("init", help="Inicializar addons/repositorios")
@@ -788,6 +822,25 @@ def main():
     sync_p.add_argument("r", nargs="?", default=None, help="Repositorio (opcional)")
     sync_p.add_argument("b", nargs="?", default=None, help="Branch (opcional)")
     sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
+
+    test_parser = subparsers.add_parser("test", help="Execute Tests of a module")
+    test_parser.add_argument("-d", required=True, help="Database name.")
+    test_parser.add_argument(
+        "-m",
+        required=True,
+        help="Module to execute the tests files.",
+    )
+    test_parser.add_argument("-c", default="/etc/odoo/odoo.conf", help="Odoo conf path (optional).")
+    test_parser.add_argument("-p", default=0, help="Port where execute the tests (optional).")
+
+    scaffold_parser = subparsers.add_parser("scaffold", help="Create a new Odoo module using scaffold")
+    scaffold_parser.add_argument("name", help="Name of the new module")
+    scaffold_parser.add_argument(
+        "-r",
+        "--repo",
+        default=None,
+        help="Repository folder name inside src/custom (defaults to MAIN_REPO_NAME in .env)",
+    )
 
     args = parser.parse_args()
 
@@ -842,6 +895,9 @@ def main():
             args.d = prompt_for_database(config, args.instance, allow_all=True)
         if args.m is None:
             args.m = prompt_for_modules(config, args.instance)
+        if args.overwrite_translation:
+            bash_update_modules(config, args.instance, args.d, args.m, overwrite_translation=True)
+            return True
         if args.d.strip().lower() == "all":
             databases = get_databases(config, args.instance)
             if not databases:
@@ -868,8 +924,16 @@ def main():
             args.r = prompt_for_repos()
         if args.b is None:
             args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
-        sync(args.r, args.b, show=args.v)
+        build_odoo(args.no_cache)
+        return True
 
+    if args.action == "test":
+        tester(args.d, args.m, args.c, args.p)
+        return True
+
+    if args.action == "scaffold":
+        scaffold_module(args.name, args.repo)
+        return True
 
 if __name__ == "__main__":
     main()

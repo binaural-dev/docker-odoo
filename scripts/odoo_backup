@@ -855,12 +855,23 @@ def backup(
 def main():
     default_backup_path = os.path.join(BASE_PATH, "backups")
 
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(script_dir)
+    default_backup_path = os.path.join(project_root, "backups")
+
     parser = argparse.ArgumentParser(description="Script de backup de Odoo")
 
     subparsers = parser.add_subparsers(dest="run", help="Acciones")
 
     backup_parser = subparsers.add_parser(
         "backup", help="Backup de la base de datos y filestore de Odoo"
+    )
+    
+    backup_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Mostrar mensajes detallados durante el backup",
+        default=False,
     )
 
     backup_parser.add_argument(
