@@ -125,12 +125,19 @@ def _filter_tags(tags: list[str], text_filter: str | None) -> list[str]:
     return [t for t in tags if all(n in t.lower() for n in needles)]
 
 
-def _suggest_branch_name(bumps: list[tuple[str, str]]) -> str:
+def _suggest_branch_name(bumps: list[tuple[str, str]], branch_origin: str) -> str:
     """Suggest a PR branch name that names every (submodulo, tag) bump.
 
     Caps at the first 3 bumps to keep the name usable — a run that
     bumps many submodules still gets a sane branch name, just with a
     ``+N-mas`` suffix instead of spelling out every single one.
+
+    Nests the name under ``branch_origin`` so the branch itself says
+    which base it targets — otherwise several update-tags branches for
+    different bases (e.g. ``17.0`` vs ``18.0``) look identical once
+    they pile up locally. Any ``/`` already in ``branch_origin`` (e.g.
+    ``release/17.0``) just becomes extra nesting, which git allows and
+    ``_branch_ref_conflict`` already checks for.
     """
     segments = [f"{s}-{t}" for s, t in bumps]
     shown, rest = segments[:3], segments[3:]
@@ -138,7 +145,7 @@ def _suggest_branch_name(bumps: list[tuple[str, str]]) -> str:
     # "update" as their working branch, which collides with the
     # "update/<slug>" ref path at the git level (a ref can't be both a
     # leaf and a directory) — see refs/heads/update vs refs/heads/update/x.
-    name = "bump/" + "_".join(shown)
+    name = f"bump/{branch_origin}/" + "_".join(shown)
     if rest:
         name += f"_+{len(rest)}-mas"
     return name
@@ -507,7 +514,7 @@ def update_tags(
         # 2) Now that every submodule already sits on its target tag,
         # create (or reuse) the PR branch — the uncommitted submodule
         # pointer changes from step 1 carry over onto it untouched.
-        suggested_branch = _suggest_branch_name(bumps)
+        suggested_branch = _suggest_branch_name(bumps, branch_origin)
         new_branch = None
         while new_branch is None:
             candidate = runner.prompt_text(

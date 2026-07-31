@@ -405,8 +405,8 @@ class FilterTagsTest(unittest.TestCase):
 class SuggestBranchNameTest(unittest.TestCase):
     def test_single_bump(self):
         self.assertEqual(
-            _suggest_branch_name([("integra-addons", "17.0.2.0.0-beta.1")]),
-            "bump/integra-addons-17.0.2.0.0-beta.1",
+            _suggest_branch_name([("integra-addons", "17.0.2.0.0-beta.1")], "17.0"),
+            "bump/17.0/integra-addons-17.0.2.0.0-beta.1",
         )
 
     def test_names_every_bump(self):
@@ -415,17 +415,22 @@ class SuggestBranchNameTest(unittest.TestCase):
                 [
                     ("integra-addons", "19.0.3.5.0-alpha.7"),
                     ("odoo-venezuela", "19.0.3.2.3-alpha.7"),
-                ]
+                ],
+                "19.0",
             ),
-            "bump/integra-addons-19.0.3.5.0-alpha.7_odoo-venezuela-19.0.3.2.3-alpha.7",
+            "bump/19.0/integra-addons-19.0.3.5.0-alpha.7_odoo-venezuela-19.0.3.2.3-alpha.7",
         )
 
     def test_caps_at_three_with_a_suffix(self):
         bumps = [
             ("a", "1.0"), ("b", "2.0"), ("c", "3.0"), ("d", "4.0"), ("e", "5.0"),
         ]
-        result = _suggest_branch_name(bumps)
-        self.assertEqual(result, "bump/a-1.0_b-2.0_c-3.0_+2-mas")
+        result = _suggest_branch_name(bumps, "master")
+        self.assertEqual(result, "bump/master/a-1.0_b-2.0_c-3.0_+2-mas")
+
+    def test_nests_under_branch_origin_with_slashes(self):
+        result = _suggest_branch_name([("a", "1.0")], "release/17.0")
+        self.assertEqual(result, "bump/release/17.0/a-1.0")
 
 
 class DescribeSubmoduleRefTest(unittest.TestCase):
@@ -578,7 +583,7 @@ class UpdateTagsTest(unittest.TestCase):
                 )
 
             self.assertIn(
-                ["git", "checkout", "-b", "bump/integra-addons-17.0.2.0.0-beta.1"],
+                ["git", "checkout", "-b", "bump/master/integra-addons-17.0.2.0.0-beta.1"],
                 calls,
             )
             self.assertIn(
@@ -667,7 +672,7 @@ class UpdateTagsTest(unittest.TestCase):
                 )
 
             self.assertIn(
-                ["git", "checkout", "bump/integra-addons-17.0.2.0.0-beta.1"],
+                ["git", "checkout", "bump/master/integra-addons-17.0.2.0.0-beta.1"],
                 calls,
             )
             self.assertFalse(any(c[:3] == ["git", "checkout", "-b"] for c in calls))
@@ -721,7 +726,7 @@ class UpdateTagsTest(unittest.TestCase):
                 f"rama reusada. Errores: {error_msgs}",
             )
             self.assertIn(
-                ["git", "push", "-u", "origin", "bump/integra-addons-17.0.2.0.0-beta.1"],
+                ["git", "push", "-u", "origin", "bump/master/integra-addons-17.0.2.0.0-beta.1"],
                 calls,
             )
 
@@ -733,7 +738,7 @@ class UpdateTagsTest(unittest.TestCase):
             self.addCleanup(os.chdir, orig_cwd)
 
             calls = []
-            first_name = "bump/integra-addons-17.0.2.0.0-beta.1"
+            first_name = "bump/master/integra-addons-17.0.2.0.0-beta.1"
             alternate_name = f"{first_name}-2"
 
             def fake_run(cmd, **kwargs):
@@ -849,7 +854,7 @@ class UpdateTagsTest(unittest.TestCase):
             branch_create_idx = calls.index(
                 [
                     "git", "checkout", "-b",
-                    "bump/integra-addons-17.0.2.0.0-beta.1_"
+                    "bump/master/integra-addons-17.0.2.0.0-beta.1_"
                     "third-party-addons-17.0.1.0.0",
                 ]
             )
@@ -887,7 +892,7 @@ class UpdateTagsTest(unittest.TestCase):
                 )
 
             self.assertIn(
-                ["git", "push", "-u", "origin", "bump/integra-addons-17.0.2.0.0-beta.1"],
+                ["git", "push", "-u", "origin", "bump/master/integra-addons-17.0.2.0.0-beta.1"],
                 calls,
             )
             info_msgs = [m[1] for m in runner.messages if m[0] == "info"]
@@ -966,7 +971,7 @@ class UpdateTagsTest(unittest.TestCase):
             self.assertEqual(len(pr_calls), 1)
             self.assertIn("master", pr_calls[0])
             self.assertIn(
-                "bump/integra-addons-17.0.2.0.0-beta.1", pr_calls[0]
+                "bump/master/integra-addons-17.0.2.0.0-beta.1", pr_calls[0]
             )
             # --repo pinned explicitly from `origin`'s remote URL, so
             # `gh` never has to guess/ask the user to run
