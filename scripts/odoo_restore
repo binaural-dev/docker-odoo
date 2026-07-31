@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 import re
@@ -368,10 +369,40 @@ class DatabaseRestoreManager:
 
         return None
 
+    def _run_capturing(self, cmd, error_context, retries=1, retry_delay=2):
+        # A diferencia de subprocess.run(check=True), esto conserva y muestra el
+        # stderr real del proceso en vez de dejar que se pierda dentro de un
+        # CalledProcessError genérico, y permite reintentar fallas transitorias
+        # de conectividad (p.ej. hipos de host.docker.internal).
+        last_error = None
+        for attempt in range(1, retries + 1):
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                return result
+
+            last_error = result.stderr.strip() or result.stdout.strip() or "(sin salida de error)"
+            if attempt < retries:
+                print(
+                    f"Intento {attempt}/{retries} falló al {error_context}: {last_error}\n"
+                    f"Reintentando en {retry_delay}s..."
+                )
+                time.sleep(retry_delay)
+
+        raise RuntimeError(
+            f"Falló al {error_context} después de {retries} intento(s).\n"
+            f"Comando: {' '.join(cmd)}\n"
+            f"Error real de psql: {last_error}"
+        )
+
     def _get_destination_server_version(self):
         cmd = self._psql_command("-d", "postgres", "-tAc", "SHOW server_version;")
 
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = self._run_capturing(
+            cmd,
+            error_context="conectar con el servidor PostgreSQL destino",
+            retries=3,
+            retry_delay=2,
+        )
         version_text = result.stdout.strip()
         match = self.SERVER_VERSION_PATTERN.match(version_text)
         if not match:
@@ -383,7 +414,7 @@ class DatabaseRestoreManager:
 
     def _get_psql_binary_version(self):
         cmd = ["docker", "exec", self.container, self.psql_bin, "--version"]
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        result = self._run_capturing(cmd, error_context="obtener la versión del binario psql")
         version_text = (result.stdout or result.stderr).strip()
         match = self.PSQL_VERSION_PATTERN.search(version_text)
         if not match:
@@ -554,6 +585,25 @@ class DatabaseRestoreManager:
         ]
 
         subprocess.run(create_cmd, check=True)
+
+    def drop_database(self):
+        print(f"Eliminando base de datos '{self.db_name}' del contenedor {self.container}")
+
+        drop_cmd = [
+            "docker",
+            "exec",
+            self.container,
+            "dropdb",
+            "-U",
+            self.db_user,
+            "-h",
+            self.db_host,
+            "-p",
+            str(self.db_port),
+            self.db_name,
+        ]
+
+        subprocess.run(drop_cmd, check=True)
 
     def _copy_dump_to_container(self):
         print(f"Copiando dump.sql al contenedor {self.container}")
@@ -771,7 +821,24 @@ class RestoreOrchestrator:
 
         db_manager.validate_dump_compatibility()
         db_manager.create_database()
-        db_manager.restore_dump()
+        try:
+            db_manager.restore_dump()
+        except Exception:
+            print(
+                f"\nEl restore de '{effective_db_name}' falló a mitad de camino.\n"
+                "Eliminando la base recién creada para no dejarla a medio restaurar...\n"
+            )
+            try:
+                db_manager.drop_database()
+                print(f"✔ Base '{effective_db_name}' eliminada correctamente.\n")
+            except subprocess.CalledProcessError as drop_exc:
+                print(
+                    f"⚠ No se pudo eliminar automáticamente la base '{effective_db_name}': {drop_exc}\n"
+                    f"Deberás eliminarla manualmente (dropdb -U {self.db_user} -h {self.db_host} "
+                    f"-p {self.db_port} {effective_db_name}) antes de reintentar el restore.\n",
+                    file=sys.stderr,
+                )
+            raise
         self.cleanup_manager.cleanup_local_path(local_dump_path)
         self.cleanup_manager.cleanup_container_path(self.workspace.container_restore_dir)
 

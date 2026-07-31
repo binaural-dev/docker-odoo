@@ -424,12 +424,23 @@ class DatabaseNameBuilder:
 
 
 class OdooRestoreScriptRunner:
-	def __init__(self, restore_script_path, workdir=None, psql_bin=None, verbose=False, db_prefix=None):
+	def __init__(
+		self,
+		restore_script_path,
+		workdir=None,
+		psql_bin=None,
+		verbose=False,
+		db_prefix=None,
+		env_config=None,
+		post_restore_config_path=None,
+	):
 		self.restore_script_path = restore_script_path
 		self.workdir = workdir
 		self.psql_bin = psql_bin
 		self.verbose = verbose
 		self.db_prefix = db_prefix
+		self.env_config = env_config
+		self.post_restore_config_path = post_restore_config_path
 
 	def run_restore(self, instance, zip_path, db_name):
 		if not os.path.isfile(self.restore_script_path):
@@ -458,6 +469,36 @@ class OdooRestoreScriptRunner:
 			cmd.append("--verbose")
 
 		print("\nEjecutando restore con script existente odoo_restore...\n")
+		subprocess.run(cmd, check=True)
+
+		self._run_post_restore_config(db_name)
+
+	def _run_post_restore_config(self, db_name):
+		if not self.env_config or not self.post_restore_config_path:
+			return
+
+		if not os.path.isfile(self.post_restore_config_path):
+			raise FileNotFoundError(
+				"No se encontró el script de configuración post-restore: "
+				f"{self.post_restore_config_path}"
+			)
+
+		cmd = [
+			sys.executable,
+			self.post_restore_config_path,
+			"--container",
+			self.env_config.container_name,
+			"--db-name",
+			db_name,
+			"--db-user",
+			self.env_config.db_user,
+			"--db-host",
+			self.env_config.db_host,
+			"--db-port",
+			str(self.env_config.db_port),
+		]
+
+		print(f"\nEjecutando configuración post-restore para la base '{db_name}'...\n")
 		subprocess.run(cmd, check=True)
 
 
@@ -1129,6 +1170,7 @@ def main():
 
 	scripts_dir = os.path.dirname(os.path.abspath(__file__))
 	restore_script_path = os.path.join(scripts_dir, "odoo_restore")
+	post_restore_config_path = os.path.join(scripts_dir, "odoo_post_restore_config")
 
 	scp_manager = SCPDownloadManager(
 		host=args.host,
@@ -1145,6 +1187,8 @@ def main():
 		psql_bin=args.psql_bin,
 		verbose=args.verbose,
 		db_prefix=args.db_prefix,
+		env_config=env_config,
+		post_restore_config_path=post_restore_config_path,
 	)
 
 	orchestrator = RestoreSCPOrchestrator(
