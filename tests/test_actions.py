@@ -984,6 +984,147 @@ class UpdateTagsTest(unittest.TestCase):
                 f"No se reportó el link del PR. Mensajes: {info_msgs}",
             )
 
+    def test_merge_confirmed_merges_and_deletes_local_branch(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base)
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "tag", "--list"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                    )
+                if cmd[:2] == ["git", "show-ref"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:4] == ["git", "remote", "get-url", "origin"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="git@github.com:org/repo.git\n", stderr=""
+                    )
+                if cmd[:2] == ["gh", "pr"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="https://github.com/org/repo/pull/1\n", stderr=""
+                    )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            # confirm(): "¿otro submódulo?" -> No, "¿push?" -> Yes,
+            # "¿PR?" -> Yes, "¿mergear?" -> Yes, "¿borrar rama local?" -> Yes.
+            runner = FakeRunner(confirm_answers=[False, True, True, True, True])
+            with patch("subprocess.run", side_effect=fake_run), patch(
+                "shutil.which", return_value="/usr/bin/gh"
+            ):
+                update_tags(
+                    runner, "testproj", "master", "integra-addons", "17.0.2.0.0-beta.1"
+                )
+
+            merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+            self.assertEqual(len(merge_calls), 1)
+            self.assertIn("--merge", merge_calls[0])
+            self.assertIn("--delete-branch", merge_calls[0])
+            self.assertIn(
+                "bump/master/integra-addons-17.0.2.0.0-beta.1", merge_calls[0]
+            )
+
+            merge_idx = calls.index(merge_calls[0])
+            # The *second* "checkout master" is the one after the merge
+            # (the first is the initial checkout onto branch_origin,
+            # before any submodule bump even starts).
+            checkout_idx = calls.index(["git", "checkout", "master"], merge_idx)
+            delete_idx = calls.index(
+                ["git", "branch", "-d", "bump/master/integra-addons-17.0.2.0.0-beta.1"]
+            )
+            self.assertLess(
+                checkout_idx, delete_idx,
+                "Debía volver a la rama base antes de intentar borrar la rama local.",
+            )
+            info_msgs = [m[1] for m in runner.messages if m[0] == "info"]
+            self.assertTrue(any("mergeado" in t for t in info_msgs))
+            self.assertTrue(any("Rama local" in t and "borrada" in t for t in info_msgs))
+
+    def test_merge_failure_does_not_prompt_branch_deletion(self):
+        # Blocked by required checks/reviews (no bypass) — gh errors
+        # out, and neither branch should get touched.
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base)
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "tag", "--list"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                    )
+                if cmd[:2] == ["git", "show-ref"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:3] == ["gh", "pr", "merge"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 1, stdout="",
+                        stderr="required status checks have not passed\n",
+                    )
+                if cmd[:2] == ["gh", "pr"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="https://github.com/org/repo/pull/1\n", stderr=""
+                    )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            # confirm(): "¿otro submódulo?" -> No, "¿push?" -> Yes,
+            # "¿PR?" -> Yes, "¿mergear?" -> Yes.
+            runner = FakeRunner(confirm_answers=[False, True, True, True])
+            with patch("subprocess.run", side_effect=fake_run), patch(
+                "shutil.which", return_value="/usr/bin/gh"
+            ):
+                update_tags(
+                    runner, "testproj", "master", "integra-addons", "17.0.2.0.0-beta.1"
+                )
+
+            self.assertFalse(any(c[:2] == ["git", "branch"] for c in calls))
+            error_msgs = [m[1] for m in runner.messages if m[0] == "error"]
+            self.assertTrue(any("no se pudo mergear" in t.lower() for t in error_msgs))
+
+    def test_declines_local_branch_delete_after_merge(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base)
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "tag", "--list"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                    )
+                if cmd[:2] == ["git", "show-ref"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:2] == ["gh", "pr"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="https://github.com/org/repo/pull/1\n", stderr=""
+                    )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            # confirm(): "¿otro submódulo?" -> No, "¿push?" -> Yes,
+            # "¿PR?" -> Yes, "¿mergear?" -> Yes, "¿borrar rama local?" -> No.
+            runner = FakeRunner(confirm_answers=[False, True, True, True, False])
+            with patch("subprocess.run", side_effect=fake_run), patch(
+                "shutil.which", return_value="/usr/bin/gh"
+            ):
+                update_tags(
+                    runner, "testproj", "master", "integra-addons", "17.0.2.0.0-beta.1"
+                )
+
+            self.assertTrue(any(c[:3] == ["gh", "pr", "merge"] for c in calls))
+            self.assertFalse(any(c[:2] == ["git", "branch"] for c in calls))
+
     def test_pr_skipped_when_gh_not_installed(self):
         with tempfile.TemporaryDirectory() as base:
             self._make_project(base)

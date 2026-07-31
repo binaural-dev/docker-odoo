@@ -444,6 +444,14 @@ def update_tags(
        only if that push succeeds — whether to open the PR (via
        ``gh pr create``). Both are gated by an explicit confirmation
        each; nothing touches the remote unless the user says so.
+    4. Only once the PR exists, ask whether to merge it — a direct
+       ``gh pr merge --merge --delete-branch`` (not ``--auto``, so the
+       result — merged or blocked by required checks/reviews — is
+       known immediately). Only if that merge succeeds does it ask
+       whether to also delete the local branch. Every one of these is
+       its own confirmation; declining any of them just stops there,
+       leaving whatever already happened (the branch, the push, the
+       PR) intact.
 
     If the target branch already exists locally (e.g. a retry after a
     previous run stopped before the push), the user is offered a
@@ -652,6 +660,59 @@ def update_tags(
             runner.error(f"❌ Error creando el PR: {pr.stderr.strip()}")
             return
         runner.info(f"✅ PR creado: {pr.stdout.strip()}")
+
+        # 4) Merge is a direct (non-``--auto``) ``gh pr merge`` — it
+        # resolves immediately (success or a clear error), so we know
+        # right away whether it's safe to offer deleting the local
+        # branch next. If the base branch has required checks/reviews
+        # and the caller has no bypass rights, ``gh`` just errors out
+        # here and neither branch gets touched.
+        do_merge = runner.confirm(
+            f"¿Mergear el PR de '{new_branch}' ahora (gh pr merge)?",
+            default=False,
+        )
+        if not do_merge:
+            return
+
+        runner.info("→ Mergeando PR (gh pr merge --merge --delete-branch)...")
+        gh_merge_cmd = [
+            "gh", "pr", "merge", new_branch,
+            "--merge", "--delete-branch",
+        ]
+        if repo_slug:
+            gh_merge_cmd += ["--repo", repo_slug]
+        merge = subprocess.run(
+            gh_merge_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if merge.returncode != 0:
+            runner.error(
+                "❌ No se pudo mergear el PR (¿faltan checks o aprobaciones "
+                f"requeridas?): {merge.stderr.strip()}"
+            )
+            return
+        runner.info(f"✅ PR mergeado — rama remota '{new_branch}' borrada.")
+
+        do_delete_local = runner.confirm(
+            f"¿Borrar también la rama local '{new_branch}'?", default=True
+        )
+        if not do_delete_local:
+            return
+
+        runner.info(f"→ Volviendo a '{branch_origin}' y borrando rama local...")
+        subprocess.run(["git", "checkout", branch_origin], stdout=stdout)
+        delete = subprocess.run(
+            ["git", "branch", "-d", new_branch],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if delete.returncode != 0:
+            runner.error(f"❌ No se pudo borrar la rama local: {delete.stderr.strip()}")
+            return
+        runner.info(f"✅ Rama local '{new_branch}' borrada.")
     except Exception as e:
         runner.error(f"❌ Error en update-tags: {e}")
     finally:
