@@ -527,14 +527,23 @@ def prompt_for_tag(runner: "Runner", submodule_path: str) -> str:
         runner.info(f"\nNo se encontraron tags en {submodule_path}.")
         sys.exit(1)
 
-    text_filter = runner.prompt_text(
-        "\nFiltro opcional para los tags (ej: beta, ve, 17, alpha) "
-        "— Enter para ver todos"
-    ).strip()
-    filtered = _filter_tags(tags, text_filter)
-    if not filtered:
-        runner.info(f"Ningún tag coincide con el filtro '{text_filter}'.")
-        sys.exit(1)
+    # A filter with zero matches only re-asks for the filter — it must
+    # NOT sys.exit(1) here: that would kill the whole update-tags run
+    # (including any submodule bumps already checked out earlier in
+    # the same loop) just because one filter typo/too-narrow term
+    # didn't match, instead of just letting the user try again.
+    while True:
+        text_filter = runner.prompt_text(
+            "\nFiltro opcional para los tags (ej: beta, ve, 17, alpha) "
+            "— Enter para ver todos"
+        ).strip()
+        filtered = _filter_tags(tags, text_filter)
+        if filtered:
+            break
+        runner.info(
+            f"Ningún tag coincide con el filtro '{text_filter}'. "
+            "Probá con otro filtro, o Enter para ver todos los tags."
+        )
 
     options = [(t, t) for t in filtered]
     selected = prompt_selection(runner, options, "Selecciona el tag exacto")
