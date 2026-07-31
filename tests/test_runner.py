@@ -54,6 +54,47 @@ class CliRunnerConfirmTest(unittest.TestCase):
         self.assertTrue(self._ask("  s  "))
 
 
+class CliRunnerConfirmRawTtyTest(unittest.TestCase):
+    """``CliRunner.confirm`` over a simulated TTY (raw keypress path).
+
+    Drives the ``termios``/``tty``/``select`` raw-mode branch directly
+    (as opposed to the plain ``input()`` fallback exercised above,
+    which is what a non-TTY stdin — e.g. under pytest — takes) so the
+    Esc-answers-No behavior actually gets covered.
+    """
+
+    def _ask_raw(self, keys: list[str], default: bool = False) -> bool:
+        runner = CliRunner()
+        key_iter = iter(keys)
+        with patch("sys.stdin.isatty", return_value=True), \
+             patch("sys.stdin.fileno", return_value=0), \
+             patch("termios.tcgetattr", return_value=None), \
+             patch("termios.tcsetattr"), \
+             patch("tty.setraw"), \
+             patch("select.select", return_value=([], [], [])), \
+             patch("sys.stdin.read", side_effect=lambda n: next(key_iter)), \
+             patch("builtins.print"), \
+             patch("sys.stdout"):
+            return runner.confirm("¿Continuar?", default=default)
+
+    def test_esc_answers_no_even_with_default_true(self):
+        self.assertFalse(self._ask_raw(["\x1b"], default=True))
+
+    def test_enter_with_empty_buffer_returns_default(self):
+        self.assertTrue(self._ask_raw(["\r"], default=True))
+        self.assertFalse(self._ask_raw(["\r"], default=False))
+
+    def test_typed_s_then_enter_is_yes(self):
+        self.assertTrue(self._ask_raw(["s", "\r"], default=False))
+
+    def test_typed_n_then_enter_is_no(self):
+        self.assertFalse(self._ask_raw(["n", "\r"], default=True))
+
+    def test_ctrl_c_raises_keyboard_interrupt(self):
+        with self.assertRaises(KeyboardInterrupt):
+            self._ask_raw(["\x03"])
+
+
 class CliRunnerSelectOneTest(unittest.TestCase):
     """``CliRunner.select_one`` returns the value at the chosen index."""
 

@@ -20,6 +20,7 @@ this module — keeping the surface small is what lets the future
 from __future__ import annotations
 
 import subprocess
+import sys
 from typing import Callable
 
 
@@ -48,16 +49,81 @@ class CliRunner:
     # ---- prompts ----------------------------------------------------
 
     def confirm(self, prompt: str, default: bool = False) -> bool:
-        """Read a y/N answer. Empty input returns ``default``.
+        """Read a y/N answer. Empty input (Enter) returns ``default``.
 
         The prompt itself is left untouched (no color) so the user's
         terminal renders it however it wants.
+
+        On a real TTY this reads raw keypresses (same ``termios`` /
+        ``tty.setraw`` approach as the grid menu in
+        :func:`odoo_cli.core.prompts.prompt_selection`) so Esc answers
+        "No" immediately, without needing Enter afterwards — a quick
+        alternate to typing ``n``. Enter still returns ``default`` in
+        both paths, unchanged: prompts that gate a destructive or
+        remote-touching action (deleting instances/volumes, ``git
+        push``, ``gh pr create``) pass ``default=False`` on purpose,
+        so those still require explicitly typing ``s`` — Esc/Enter
+        both answer "No" there, same as before.
         """
         suffix = "(S/n): " if default else "(s/N): "
-        raw = input(prompt + " " + suffix).strip().lower()
-        if not raw:
-            return default
-        return raw == "s"
+        full_prompt = prompt + " " + suffix
+
+        if not sys.stdin.isatty():
+            raw = input(full_prompt).strip().lower()
+            if not raw:
+                return default
+            return raw == "s"
+
+        try:
+            import termios
+            import tty
+        except ImportError:
+            raw = input(full_prompt).strip().lower()
+            if not raw:
+                return default
+            return raw == "s"
+
+        import select
+
+        print(full_prompt, end="", flush=True)
+        buffer = ""
+        fd = sys.stdin.fileno()
+        while True:
+            old_settings = termios.tcgetattr(fd)
+            try:
+                tty.setraw(fd)
+                ch = sys.stdin.read(1)
+            finally:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+            if ch == "\x03":  # Ctrl+C
+                print()
+                raise KeyboardInterrupt
+            if ch == "\x1b":
+                # A bare Esc answers "No". An arrow key also starts
+                # with \x1b, but the rest of its sequence arrives
+                # within a few ms — nothing else showing up in that
+                # window means it really was just Esc.
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    sys.stdin.read(2)  # discard the rest of the escape sequence
+                    continue
+                print()
+                return False
+            if ch in ("\r", "\n"):
+                print()
+                if not buffer:
+                    return default
+                return buffer.lower() == "s"
+            if ch in ("\x7f", "\b"):  # Backspace
+                if buffer:
+                    buffer = buffer[:-1]
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            if ch.isprintable():
+                buffer += ch
+                sys.stdout.write(ch)
+                sys.stdout.flush()
 
     def select_one(
         self, title: str, options: list[tuple[str, str]]
