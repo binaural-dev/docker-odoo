@@ -692,7 +692,31 @@ def update_tags(
                 "❌ No se pudo mergear el PR (¿faltan checks o aprobaciones "
                 f"requeridas?): {merge.stderr.strip()}"
             )
-            return
+            # `gh` itself suggests `--admin` in its stderr when the
+            # only thing blocking the merge is branch policy (not a
+            # failing check) — that's the signal it's even worth
+            # offering the bypass retry instead of just giving up.
+            if "--admin" not in merge.stderr:
+                return
+            do_admin_merge = runner.confirm(
+                "¿Reintentar con privilegios de administrador (gh pr merge "
+                "--admin), saltando la protección de la rama?",
+                default=False,
+            )
+            if not do_admin_merge:
+                return
+            runner.info("→ Reintentando merge con --admin...")
+            merge = subprocess.run(
+                gh_merge_cmd + ["--admin"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if merge.returncode != 0:
+                runner.error(
+                    f"❌ No se pudo mergear ni con --admin: {merge.stderr.strip()}"
+                )
+                return
         runner.info(f"✅ PR mergeado — rama remota '{new_branch}' borrada.")
 
         do_delete_local = runner.confirm(

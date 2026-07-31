@@ -1089,6 +1089,105 @@ class UpdateTagsTest(unittest.TestCase):
             error_msgs = [m[1] for m in runner.messages if m[0] == "error"]
             self.assertTrue(any("no se pudo mergear" in t.lower() for t in error_msgs))
 
+    def test_merge_blocked_by_policy_retries_with_admin_and_succeeds(self):
+        # gh's own stderr suggests --admin when policy (not a failing
+        # check) is the only thing blocking the merge — that mention
+        # is what should trigger the retry offer.
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base)
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "tag", "--list"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                    )
+                if cmd[:2] == ["git", "show-ref"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:3] == ["gh", "pr", "merge"]:
+                    if "--admin" in cmd:
+                        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+                    return subprocess.CompletedProcess(
+                        cmd, 1, stdout="",
+                        stderr=(
+                            "X Pull request is not mergeable: the base branch "
+                            "policy prohibits the merge.\nTo use administrator "
+                            "privileges to immediately merge the pull request, "
+                            "add the `--admin` flag.\n"
+                        ),
+                    )
+                if cmd[:2] == ["gh", "pr"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="https://github.com/org/repo/pull/1\n", stderr=""
+                    )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            # confirm(): "¿otro submódulo?" -> No, "¿push?" -> Yes,
+            # "¿PR?" -> Yes, "¿mergear?" -> Yes, "¿reintentar --admin?" ->
+            # Yes, "¿borrar rama local?" -> Yes.
+            runner = FakeRunner(confirm_answers=[False, True, True, True, True, True])
+            with patch("subprocess.run", side_effect=fake_run), patch(
+                "shutil.which", return_value="/usr/bin/gh"
+            ):
+                update_tags(
+                    runner, "testproj", "master", "integra-addons", "17.0.2.0.0-beta.1"
+                )
+
+            merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+            self.assertEqual(len(merge_calls), 2)
+            self.assertNotIn("--admin", merge_calls[0])
+            self.assertIn("--admin", merge_calls[1])
+            info_msgs = [m[1] for m in runner.messages if m[0] == "info"]
+            self.assertTrue(any("mergeado" in t for t in info_msgs))
+            self.assertTrue(any(c[:2] == ["git", "branch"] for c in calls))
+
+    def test_merge_blocked_by_policy_declines_admin_retry(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base)
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "tag", "--list"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                    )
+                if cmd[:2] == ["git", "show-ref"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:3] == ["gh", "pr", "merge"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 1, stdout="",
+                        stderr="policy prohibits the merge. Add `--admin`.\n",
+                    )
+                if cmd[:2] == ["gh", "pr"]:
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="https://github.com/org/repo/pull/1\n", stderr=""
+                    )
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            # confirm(): "¿otro submódulo?" -> No, "¿push?" -> Yes,
+            # "¿PR?" -> Yes, "¿mergear?" -> Yes, "¿reintentar --admin?" -> No.
+            runner = FakeRunner(confirm_answers=[False, True, True, True, False])
+            with patch("subprocess.run", side_effect=fake_run), patch(
+                "shutil.which", return_value="/usr/bin/gh"
+            ):
+                update_tags(
+                    runner, "testproj", "master", "integra-addons", "17.0.2.0.0-beta.1"
+                )
+
+            merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+            self.assertEqual(len(merge_calls), 1)
+            self.assertFalse(any(c[:2] == ["git", "branch"] for c in calls))
+
     def test_declines_local_branch_delete_after_merge(self):
         with tempfile.TemporaryDirectory() as base:
             self._make_project(base)
