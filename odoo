@@ -256,6 +256,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "proyecto", nargs="?", default=None,
         help="Proyecto en src/custom/ (opcional; sin esto corre sobre todos)",
     )
+    p.add_argument(
+        "--ref", default=None,
+        help=(
+            "Rama(s) a inspeccionar sin hacer checkout, separadas por "
+            "coma (ej: release,staging). Sin esto, muestra lo que está "
+            "físicamente checkeado ahora mismo."
+        ),
+    )
 
     # validate-instances
     subparsers.add_parser(

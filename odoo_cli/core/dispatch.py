@@ -250,7 +250,8 @@ def dispatch(
         )
 
     elif args.action == "submodule-status":
-        submodule_status(runner, args.proyecto)
+        refs = args.ref.split(",") if args.ref else None
+        submodule_status(runner, args.proyecto, refs)
 
     elif args.action == "validate-instances":
         runner.info("\n✅ El archivo instances.json es válido.\n")

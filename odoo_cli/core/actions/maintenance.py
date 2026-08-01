@@ -242,6 +242,68 @@ def _describe_submodule_ref(submodule_path: str) -> str:
     return f"{short_hash.stdout.strip()} (detached)"
 
 
+def _describe_submodule_at_ref(
+    project_path: str, submodulo: str, ref: str
+) -> str:
+    """Describe what ``submodulo`` is pinned to in ``ref``, without checkout.
+
+    Reads the submodule's commit pointer straight out of the project
+    repo's tree for ``ref`` (``git ls-tree``) — no ``checkout``/``pull``,
+    so the working tree and current branch are untouched. The commit is
+    then resolved to a tag inside the submodule's own local clone
+    (``git describe --tags --exact-match``); this only works if that
+    commit object was already fetched into the submodule at some point,
+    since this never fetches either. Falls back to the short hash when
+    no exact tag matches or the object isn't present locally.
+
+    When ``ref`` is a plain branch name (no ``/``, so not already a
+    remote-tracking ref, tag, or hash) and ``origin/<ref>`` exists,
+    that remote-tracking ref is used instead. A local branch like
+    ``release`` is often stale — nothing here ever fetches — while
+    ``origin/release`` reflects whatever the last fetch already saw,
+    which is what "what's on release" almost always means.
+    """
+    resolved_ref = ref
+    if "/" not in ref:
+        remote_ref = f"origin/{ref}"
+        check = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", remote_ref],
+            cwd=project_path,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if check.returncode == 0:
+            resolved_ref = remote_ref
+
+    ls_tree = subprocess.run(
+        ["git", "ls-tree", resolved_ref, "--", submodulo],
+        cwd=project_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if ls_tree.returncode != 0:
+        return f"(ref '{resolved_ref}' no existe)"
+    line = ls_tree.stdout.strip()
+    if not line:
+        return f"(no está en '{resolved_ref}')"
+    commit = line.split()[2]
+
+    submodule_path = os.path.join(project_path, submodulo)
+    tag = subprocess.run(
+        ["git", "describe", "--tags", "--exact-match", commit],
+        cwd=submodule_path,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if tag.returncode == 0:
+        return tag.stdout.strip()
+
+    short = commit[:7]
+    return f"{short} (sin tag exacto — puede necesitar fetch)"
+
+
 # ============================================================
 # sync: refresh custom repos and their submodules
 # ============================================================
@@ -749,23 +811,36 @@ def update_tags(
 # ============================================================
 
 
-def submodule_status(runner: "Runner", project: str | None = None) -> None:
+def submodule_status(
+    runner: "Runner", project: str | None = None, refs: list[str] | None = None
+) -> None:
     """Report each submodule's current tag/branch/hash, read-only.
 
     With ``project`` given, only that project's submodules are
     reported. Without it, every project under ``src/custom/`` is
     reported. Unlike ``sync``/``update_tags``, this never touches git
     state — no ``stash``/``checkout``/``pull``/``fetch``, only the
-    read-only ``git describe``/``rev-parse`` calls inside
-    :func:`_describe_submodule_ref`. A missing project is reported as
-    an error and skipped, not a hard stop, so one typo doesn't hide
-    the status of every other project when running over all of them.
+    read-only ``git describe``/``rev-parse``/``ls-tree`` calls inside
+    :func:`_describe_submodule_ref`/:func:`_describe_submodule_at_ref`.
+    A missing project is reported as an error and skipped, not a hard
+    stop, so one typo doesn't hide the status of every other project
+    when running over all of them.
+
+    With ``refs`` given (e.g. ``["release", "staging"]``), the working
+    tree is bypassed entirely: each submodule's pin is read straight
+    out of the project repo's tree for that ref via
+    :func:`_describe_submodule_at_ref`, one section per ref, so
+    comparing two branches doesn't require checking either of them
+    out. Without ``refs``, the report reflects whatever is physically
+    checked out right now, same as before.
 
     Each project's header also shows the *project repo's own* current
     branch/tag/hash (via the same ``_describe_submodule_ref``, which
     works on any git repo, not just submodules) — a submodule's
     checkout state is independent of which branch the project repo is
     on, so without this the status list has no context to read it in.
+    This header is skipped when ``refs`` is given, since the ref
+    itself already says what's being reported on.
     """
     if project:
         projects = [project]
@@ -784,9 +859,21 @@ def submodule_status(runner: "Runner", project: str | None = None) -> None:
             runner.error(f"Error: Proyecto '{proj}' no encontrado en src/custom/")
             continue
 
+        submodulos = _discover_submodules(project_path)
+
+        if refs:
+            for ref in refs:
+                runner.info(f"\n=== {proj} (ref: {ref}) ===")
+                if not submodulos:
+                    runner.info("   (sin submódulos)")
+                    continue
+                for submodulo in submodulos:
+                    estado = _describe_submodule_at_ref(project_path, submodulo, ref)
+                    runner.info(f"   • {submodulo}: {estado}")
+            continue
+
         proj_ref = _describe_submodule_ref(project_path)
         runner.info(f"\n=== {proj} (rama: {proj_ref}) ===")
-        submodulos = _discover_submodules(project_path)
         if not submodulos:
             runner.info("   (sin submódulos)")
             continue
