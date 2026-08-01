@@ -212,6 +212,21 @@ def prompt_selection(
             if ch == "\x03":  # Ctrl+C
                 raise KeyboardInterrupt
             elif ch in ("\r", "\n"):
+                # Typing digits only moves the cursor (see the digit
+                # branch below) — it never marks the item, unlike the
+                # non-TTY fallback where typing a number selects it
+                # outright. That mismatch is confusing in multi-select:
+                # someone who types "54" and hits Enter expects item 54
+                # marked, not silently skipped for lack of a Space. If
+                # there's a pending typed number, treat confirming on it
+                # as marking that item too.
+                if multi and input_buffer:
+                    try:
+                        typed_idx = int(input_buffer)
+                        if 1 <= typed_idx <= len(options):
+                            selected_indices.add(typed_idx - 1)
+                    except ValueError:
+                        pass
                 sys.stdout.write("\n")
                 break
             elif ch == " ":  # Espacio
