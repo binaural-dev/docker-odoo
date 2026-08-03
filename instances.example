@@ -56,7 +56,8 @@
   "databases": {
     "local_pg16": {
       "postgres_version": 16,                  # Version de PostgreSQL a usar (16, 15, 14, etc.)
-      "port": 5432,                            # Puerto expuesto en el host para conectarse a PostgreSQL
+      "port": 5432,                            # Puerto en el host, solo se publica si expose_host_port=true
+      "expose_host_port": false,               # true: publica "port" en el host (docker-compose ports). Por defecto la DB solo es alcanzable dentro de la red interna de Docker (db-<nombre>:5432)
       "user": "odoo",                          # Usuario de PostgreSQL (tambien usado por Odoo)
       "password": "odoo",                      # Password de PostgreSQL (tambien usado por Odoo)
       "config": "postgresql.conf",             # Archivo de configuracion de PostgreSQL en .resources/dbconfigs/
@@ -64,7 +65,7 @@
     },
     "external_pg16": {
       "postgres_version": 16,                  # Version de PostgreSQL (para referencia)
-      "port": 5432,                            # Puerto expuesto en el host
+      "port": 5432,                            # Puerto de la base de datos externa
       "user": "odoo",                          # Usuario de PostgreSQL
       "password": "odoo",                      # Password de PostgreSQL
       "create_container": false,               # false: No crea contenedor, conecta a base de datos externa

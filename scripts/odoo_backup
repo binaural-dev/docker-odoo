@@ -15,6 +15,7 @@ from generators.config_loader import (
     load_config,
     resolve_db_config,
     get_db_host,
+    get_db_internal_port,
 )
 
 
@@ -937,7 +938,7 @@ def main():
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user = db_conf["user"]
     db_password = db_conf["password"]
-    db_port = db_conf["port"]
+    db_port = get_db_internal_port(db_conf)
     container_name = f"odoo-{instance}"
 
     # Si no se pasa -d, listar y elegir

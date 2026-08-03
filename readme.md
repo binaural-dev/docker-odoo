@@ -65,6 +65,7 @@ Define las conexiones a PostgreSQL. `create_container` (default: `true`) control
     "pg16": {
       "postgres_version": 16,
       "port": 5432,
+      "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
       "config": "postgresql.conf"
@@ -80,6 +81,10 @@ Define las conexiones a PostgreSQL. `create_container` (default: `true`) control
   }
 }
 ```
+
+Las bases de datos gestionadas (`create_container: true`) **no publican su puerto al host por defecto**: los contenedores Odoo se conectan directamente a `db-<nombre>:5432` a través de la red interna de Docker (`odoo-multi`), sin pasar por el host. Esto evita que un Postgres corriendo localmente en la máquina (Homebrew, Postgres.app, etc.) sobre el mismo puerto termine interceptando las conexiones.
+
+Si necesitas conectarte a la base de datos desde el host (por ejemplo con un cliente de escritorio), agrega `"expose_host_port": true` para que se publique `port` en `docker-compose.generated.yml`. Para uso normal (`./odoo psql`, `./odoo bash`, backups, restores, pgAdmin) no hace falta: todos corren dentro de los contenedores y usan la red interna.
 
 ### `instances` — Instancias de Odoo
 
