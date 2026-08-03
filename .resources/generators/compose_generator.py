@@ -9,6 +9,7 @@ from .config_loader import (
     resolve_instance_config,
     resolve_db_config,
     get_db_host,
+    get_db_internal_port,
     get_managed_databases,
     get_odoo_minor,
 )
@@ -81,6 +82,7 @@ def _db_service(db_name, db_conf):
     user = db_conf["user"]
     password = db_conf["password"]
     pg_config = db_conf.get("config")
+    expose_host_port = db_conf.get("expose_host_port", False)
     container_name = f"db-{db_name}"
 
     lines = [
@@ -101,8 +103,18 @@ def _db_service(db_name, db_conf):
         "      args:",
         f"        POSTGRES_IMG_VERSION: {pg_version}",
         f"    image: local_odoo_db_{db_name}:{pg_version}",
-        "    ports:",
-        f'      - "{port}:5432"',
+    ]
+
+    # Host port publishing is opt-in: by default Postgres is only reachable
+    # from sibling containers over the internal Docker network (db-<name>:5432).
+    # Set "expose_host_port": true on the database config to publish it.
+    if expose_host_port:
+        lines += [
+            "    ports:",
+            f'      - "{port}:5432"',
+        ]
+
+    lines += [
         f"    networks:",
         f"      - {NETWORK_NAME}",
         "    volumes:",
@@ -123,7 +135,10 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     odoo_minor = get_odoo_minor(odoo_version)
     container_name = f"odoo-{inst_name}"
     db_host = get_db_host(db_name, db_conf)
-    db_port = db_conf["port"]
+    # NOTE: db_conf["port"] is the HOST-side port (only published when
+    # expose_host_port is set) — not reachable from sibling containers.
+    # Odoo always talks to Postgres over the internal Docker network.
+    db_port = get_db_internal_port(db_conf)
     db_user = db_conf["user"]
     db_password = db_conf["password"]
 
@@ -269,8 +284,6 @@ def _pgadmin_service(pgadmin_conf):
         "    environment:",
         f"      PGADMIN_DEFAULT_EMAIL: {email}",
         f"      PGADMIN_DEFAULT_PASSWORD: {password}",
-        "    extra_hosts:",
-        '      - "db:host-gateway"',
         "    ports:",
         f'      - "{port}:80"',
         f"    networks:",
