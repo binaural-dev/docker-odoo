@@ -542,13 +542,16 @@ def migration_homo_run(config, instance, dbname, do_install=False, do_uninstall=
         print(f"\n\033[1;33m  Desactivando {len(studio_views)} vista(s) personalizada(s)...\033[0m")
         _disable_studio_views(config, instance, dbname, studio_views)
 
+    # 5. Limpiar registros huérfanos en tablas relacionales antes de tocar Odoo
+    _run_cleanup_orphans(config, instance, dbname)
+
     install_ok = True
     uninstall_ok = True
     installed_modules = []
     failed_install_modules = []
     uninstalled_modules = []
 
-    # 5. Instalar módulos l10n_ve_ (todos juntos para que Odoo resuelva dependencias)
+    # 6. Instalar módulos l10n_ve_ (todos juntos para que Odoo resuelva dependencias)
     if do_install and m["pending_install"]:
         print(f"\n\033[1;35m{'='*60}\033[0m")
         print(f"\033[1;35m  PASO 1: INSTALANDO MÓDULOS HOMOLOGADOS ({len(m['pending_install'])})\033[0m")
@@ -568,7 +571,7 @@ def migration_homo_run(config, instance, dbname, do_install=False, do_uninstall=
                     failed_install_modules.append(mod)
                     install_ok = False
 
-    # 6. Desinstalar módulos binaural_
+    # 7. Desinstalar módulos binaural_
     if do_uninstall and all_binaural_to_uninstall:
         print(f"\n\033[1;33m{'='*60}\033[0m")
         print(f"\033[1;33m  ATENCION: MIGRACION DE MODULOS CUSTOM\033[0m")
@@ -1107,6 +1110,32 @@ def _list_disabled_studio_views(views):
         model = (v.get('model') or 'N/A')[:30]
         owner = (v.get('owner_module') or 'N/A')[:20]
         print(f"  {v['id']:6d}  {name:45s}  {model:30s}  {owner}")
+
+
+def _run_cleanup_orphans(config, instance, dbname):
+    """Check for orphaned M2M records and optionally clean them."""
+    script = os.path.join(BASE_PATH, "scripts", "cleanup-wizard-orphans")
+    print(f"\n\033[1;36m{'='*60}\033[0m")
+    print(f"\033[1;36m  🧹 LIMPIEZA PREVIA: verificando registros huérfanos...\033[0m")
+    print(f"\033[1;36m{'='*60}\033[0m")
+
+    ret = os.system(f"{script} {instance} -d {dbname} --dry-run")
+    exit_code = ret >> 8
+
+    if exit_code == 2:
+        print(f"\033[93m  ⚠️  Error al verificar huérfanos, continuando de todos modos...\033[0m")
+    elif exit_code == 1:
+        choice = prompt_selection(
+            [("Sí, limpiar registros huérfanos", True),
+             ("No, continuar sin limpiar", False)],
+            "¿Deseas limpiar los registros huérfanos encontrados?"
+        )
+        if choice:
+            print()
+            ret2 = os.system(f"{script} {instance} -d {dbname}")
+            if ret2 != 0:
+                print(f"\033[93m  ⚠️  Error en la limpieza, continuando de todos modos...\033[0m")
+    print()
 
 
 def _run_odoo_module_op(config, instance, dbname, modules, operation="update"):
