@@ -577,8 +577,8 @@ def migration_homo_run(config, instance, dbname, do_install=False, do_uninstall=
         print(f"  en los modulos custom del cliente (binaural_* -> l10n_ve_*).")
         print(f"  Ejecuta el agente de migracion desde el repositorio custom:")
         print(f"\n    \033[1mcd src/custom/<repo-del-cliente>")
-        print(f"    opencode")
-        print(f"    @mig-customs-to-homo\033[0m")
+        print(f"    claude")
+        print(f"    Usa el agente mig-customs-to-homo para migrar los customs\033[0m")
         print(f"\n  O realiza la migracion manualmente antes de continuar.")
         choice = prompt_selection(
             [("Si, ya migre los modulos custom. Continuar con la desinstalacion.", True),

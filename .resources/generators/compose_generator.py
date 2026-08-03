@@ -176,9 +176,12 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     for config_line in custom_config.split("\n") if isinstance(custom_config, str) else ["[options]"]:
         lines.append(f"        {config_line}")
 
+    custom_requirements = odoo_conf.get("custom_requirements", "# custom pip libraries")
+    lines.append("      CUSTOM_REQUIREMENTS: |-")
+    for req_line in custom_requirements.split("\n") if isinstance(custom_requirements, str) else [custom_requirements]:
+        lines.append(f"        {req_line}")
+
     lines += [
-        "      CUSTOM_REQUIREMENTS: |-",
-        "        # custom pip libraries",
         "      CUSTOM_ENTRYPOINT: |-",
         "        #!/bin/bash",
         f"      GEVENT_PORT: {ODOO_GEVENT_PORT}",
