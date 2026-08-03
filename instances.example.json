@@ -24,6 +24,7 @@
     "pg16": {
       "postgres_version": 16,
       "port": 5432,
+      "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
       "config": "postgresql.conf"
