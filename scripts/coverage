@@ -78,7 +78,12 @@ echo "
 
 
 # 🚀 Ejecutar Coverage dentro del contenedor
-docker exec -u root -it "$ODOO_CONTAINER" bash -c "
+DOCKER_EXEC_ARGS=(-u root)
+if [ -t 0 ] && [ -t 1 ]; then
+  DOCKER_EXEC_ARGS+=(-it)
+fi
+
+docker exec "${DOCKER_EXEC_ARGS[@]}" "$ODOO_CONTAINER" bash -c "
   pip3 install coverage >/dev/null 2>&1 &&
   python3 -m coverage erase &&
   python3 -m coverage run --rcfile=$COVERAGERC_PATH --source=$SOURCE_PATHS /usr/bin/odoo \
@@ -86,6 +91,7 @@ docker exec -u root -it "$ODOO_CONTAINER" bash -c "
     --stop-after-init \
     -d $DB_NAME \
     -i $MODULE_NAMES \
+    -u $MODULE_NAMES \
     --test-tags=$TEST_TAGS \
     --log-level=test \
     --log-handler=odoo.tests:DEBUG \
@@ -94,7 +100,7 @@ docker exec -u root -it "$ODOO_CONTAINER" bash -c "
 echo ""
 echo "🚀 Observa el reporte:"
 echo ""
-docker exec -u root -it "$ODOO_CONTAINER" bash -c "python3 -m coverage report -m"
+docker exec "${DOCKER_EXEC_ARGS[@]}" "$ODOO_CONTAINER" bash -c "python3 -m coverage report -m"
 
 echo ""
 echo ""

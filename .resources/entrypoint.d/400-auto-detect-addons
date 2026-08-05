@@ -15,6 +15,7 @@ RESOURCES = str(os.environ.get("RESOURCES"))
 # If INSTANCE_ADDONS is set (multi-instance mode), use explicit addons list
 INSTANCE_ADDONS = os.environ.get("INSTANCE_ADDONS", "").strip()
 
+
 if INSTANCE_ADDONS:
     _logger.info("Using explicit INSTANCE_ADDONS: %s" % INSTANCE_ADDONS)
     addons = []
@@ -34,7 +35,7 @@ if INSTANCE_ADDONS:
                 print()
                 print()
                 subprocess.check_call([
-                    "pip", "install", "--no-cache-dir", "-r", requirement_file,
+                    "pip", "install", "--no-cache-dir", "-r", requirement_file
                 ])
         else:
             _logger.warning("Addon path not found, skipping: %s" % full_path)

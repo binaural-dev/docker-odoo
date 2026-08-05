@@ -8,6 +8,7 @@ Reads instances.json and generates/manages Docker containers for multiple Odoo i
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -169,7 +170,7 @@ def restart_odoo(config, instance=None):
 
 
 def remove_odoo(config, instance=None):
-    """Remove containers and volumes."""
+    """Remove containers, volumes, repository and configuration."""
     if instance:
         target = f"instancia '\033[91m{instance}\033[0m'"
     else:
@@ -177,16 +178,47 @@ def remove_odoo(config, instance=None):
 
     print(f"\n⚠️  \033[1mPELIGRO\033[0m: Esto eliminará {target} y sus volúmenes de datos.")
     do_continue = input("¿Estás seguro de que deseas continuar? (s/N): ")
+    do_continue = input(
+        f"⚠️  Esto eliminará {target}, sus datos, sus repositorios y su configuración en instances.json. ¿Deseas continuar? (s/n): "
+    )
     if do_continue.lower() != "s":
         print("\nOperación cancelada.")
         return
 
     if instance:
+        # Borrar contenedores
         odoo_services = _get_instance_services(config, instance)
         for svc in odoo_services:
             os.system(f"docker compose -f {COMPOSE_FILE} rm -s -v -f {svc}")
+        
+        # Eliminar repositorio src/custom/instance (si existe)
+        repo_path = os.path.join(BASE_PATH, "src", "custom", instance)
+        if os.path.exists(repo_path):
+            print(f"→ Eliminando repositorio: {repo_path}")
+            os.system(f"sudo rm -rf {repo_path}")
+
+        # Eliminar del instances.json
+        print(f"→ Eliminando configuración de {instance} en instances.json...")
+        config["instances"].pop(instance, None)
+        with open(os.path.join(BASE_PATH, "instances.json"), "w") as f:
+            json.dump(config, f, indent=2)
+
     else:
+        # Borrar todo
         _docker_compose("down", "-v", "--remove-orphans")
+
+        # Eliminar todos los repositorios en src/custom
+        for inst_name in config["instances"].keys():
+            repo_path = os.path.join(BASE_PATH, "src", "custom", inst_name)
+            if os.path.exists(repo_path):
+                print(f"→ Eliminando repositorio: {repo_path}")
+                os.system(f"sudo rm -rf {repo_path}")
+
+        # Limpiar instances.json
+        print("→ Limpiando todas las instancias de instances.json...")
+        config["instances"] = {}
+        with open(os.path.join(BASE_PATH, "instances.json"), "w") as f:
+            json.dump(config, f, indent=2)
 
     print("\n🛑 Eliminado.\n")
 
@@ -230,8 +262,49 @@ def show_logs(config, instance=None):
 
 def list_containers(config):
     """List running containers."""
-    print("\n\033[1;32m=== 🐳 CONTENEDORES EN EJECUCIÓN ===\033[0m\n")
-    _docker_compose("ps")
+    print(f"\n{'Instancia':<25} | {'Contenedor':<30} | {'Puerto':<10}")
+    print("-" * 73)
+    
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", COMPOSE_FILE, "ps", "--format", "json"],
+            capture_output=True,
+            text=True
+        )
+        
+        running_containers = {}
+        if result.stdout.strip():
+            for line in result.stdout.strip().split('\n'):
+                try:
+                    data = json.loads(line)
+                    svc = data.get("Service", "")
+                    container_name = data.get("Name", "")
+                    running_containers[svc] = container_name
+                except json.JSONDecodeError:
+                    try:
+                        data_arr = json.loads(result.stdout)
+                        if isinstance(data_arr, list):
+                            for d in data_arr:
+                                running_containers[d.get("Service", "")] = d.get("Name", "")
+                        break
+                    except Exception:
+                        pass
+        
+        found = False
+        for instance, conf in config.get("instances", {}).items():
+            service_name = f"odoo-{instance}"
+            if service_name in running_containers:
+                port = conf.get("external_port", "N/A")
+                container_name = running_containers[service_name]
+                print(f"{instance:<25} | {container_name:<30} | {port:<10}")
+                found = True
+                
+        if not found:
+            print(f"{'No hay instancias de Odoo en ejecución.':^73}")
+            
+    except Exception as e:
+        print(f"Error al listar contenedores: {e}")
+    print()
 
 
 def fix_filestore(config, instance=None):
@@ -385,6 +458,85 @@ def sync(repo_names, branch, show=False):
             print(f"❌ Error sincronizando {repo_name}: {e}")
         finally:
             os.chdir(BASE_PATH)
+
+
+def mcp_start(config):
+    """Setup and configure bin-odoo-mcp for opencode."""
+    print("\n\033[1;36m=== 🔧 CONFIGURANDO BIN-ODOO-MCP ===\033[0m\n")
+
+    opencode_bin = shutil.which("opencode")
+    if not opencode_bin:
+        fallback = Path.home() / ".opencode" / "bin" / "opencode"
+        if fallback.exists():
+            opencode_bin = str(fallback)
+
+    if not opencode_bin:
+        print("\033[91m❌ opencode no está instalado.\033[0m")
+        print("Instalalo con: curl -fsSL https://opencode.ai/install.sh | bash")
+        sys.exit(1)
+
+    print(f"✓ opencode encontrado en: {opencode_bin}")
+
+    mcp_server_path = Path(BASE_PATH) / "mcp-server"
+    venv_path = mcp_server_path / ".venv"
+
+    if not venv_path.exists():
+        print("\n→ Creando entorno virtual...")
+        result = subprocess.run(
+            [sys.executable, "-m", "venv", str(venv_path)],
+            capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"\033[91m❌ Error creando venv: {result.stderr}\033[0m")
+            sys.exit(1)
+        print("✓ Entorno virtual creado")
+    else:
+        print("✓ Entorno virtual ya existe")
+
+    venv_pip = venv_path / "bin" / "pip"
+    print("\n→ Instalando dependencias...")
+    result = subprocess.run(
+        [str(venv_pip), "install", "-e", "."],
+        cwd=str(mcp_server_path),
+        capture_output=True, text=True
+    )
+    if result.returncode != 0:
+        print(f"\033[91m❌ Error instalando dependencias: {result.stderr}\033[0m")
+        sys.exit(1)
+    print("✓ Dependencias instaladas")
+
+    opencode_json_path = Path.home() / ".config" / "opencode" / "opencode.json"
+    if not opencode_json_path.exists():
+        print(f"\033[91m❌ No se encontró {opencode_json_path}\033[0m")
+        sys.exit(1)
+
+    with open(opencode_json_path, "r") as f:
+        opencode_config = json.load(f)
+
+    if "mcp" not in opencode_config:
+        opencode_config["mcp"] = {}
+
+    opencode_config["mcp"].pop("odoo-db", None)
+
+    venv_python = venv_path / "bin" / "python"
+    instances_json = str(Path(BASE_PATH) / "instances.json")
+
+    opencode_config["mcp"]["bin-odoo-mcp"] = {
+        "type": "local",
+        "command": [str(venv_python), "-m", "odoo_mcp_server"],
+        "environment": {
+            "INSTANCES_JSON": instances_json,
+            "ALLOW_WRITE": "false"
+        }
+    }
+
+    with open(opencode_json_path, "w") as f:
+        json.dump(opencode_config, f, indent=2)
+
+    print(f"✓ MCP configurado en {opencode_json_path}")
+
+    print("\n\033[92m✅ bin-odoo-mcp configurado correctamente.\033[0m")
+    print("\nReinicia opencode para que los cambios surtan efecto.\n")
 
 
 # ============================================================
@@ -557,6 +709,7 @@ def prompt_selection(options, title, multi=False):
     item_width = max_text_len + 10 # prefix + num + text + spacing
     num_cols = max(1, term_width // item_width)
     num_rows = (len(options) + num_cols - 1) // num_cols
+    redraw_up_lines = num_rows
     lines_to_clear = num_rows + 1
 
     print(f"\n{title}:")
@@ -652,7 +805,7 @@ def prompt_selection(options, title, multi=False):
                     pass
 
             # Regresar cursor arriba
-            sys.stdout.write(f"\033[{lines_to_clear}F")
+            sys.stdout.write(f"\033[{redraw_up_lines}F")
             render_menu()
 
         # Al salir, limpiar el menú de la pantalla para no ensuciar el log
@@ -790,6 +943,16 @@ def main():
     sync_p.add_argument("b", nargs="?", default=None, help="Branch (opcional)")
     sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
 
+    # new
+    new_inst_p = subparsers.add_parser("new", help="Crea una nueva instancia (interactivo o por argumentos)")
+    new_inst_p.add_argument("name", nargs="?", default=None, help="Nombre de instancia")
+    new_inst_p.add_argument("repo", nargs="?", default=None, help="URL del repositorio (SSH)")
+    new_inst_p.add_argument("branch", nargs="?", default=None, help="Rama del repositorio")
+    new_inst_p.add_argument("version", nargs="?", default=None, help="Versión de Odoo")
+
+    # mcp-start
+    subparsers.add_parser("mcp-start", help="Configura bin-odoo-mcp para opencode")
+
     args = parser.parse_args()
 
     if not args.action:
@@ -870,7 +1033,19 @@ def main():
         if args.b is None:
             args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
         sync(args.r, args.b, show=args.v)
-
+    elif args.action == "new":
+        cmd = [sys.executable, os.path.join(BASE_PATH, "scripts", "create_instance.py")]
+        if args.name: cmd.append(args.name)
+        if args.repo: cmd.append(args.repo)
+        if args.branch: cmd.append(args.branch)
+        if args.version: cmd.append(args.version)
+        subprocess.run(cmd)
+    elif args.action == "mcp-start":
+        mcp_start(config)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)
