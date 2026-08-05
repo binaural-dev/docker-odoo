@@ -719,6 +719,26 @@ def prompt_for_modules(config, instance):
     return ",".join(selected)
 
 
+def prompt_for_test_modules(config, instance):
+    """Como prompt_for_modules, pero para 'test': no hay un 'all' valido,
+    asi que si no se selecciona nada se sale con error."""
+    modules = get_custom_modules(config, instance)
+    if not modules:
+        print(f"\nNo se encontraron módulos custom en los addons de '{instance}'.")
+        sys.exit(1)
+
+    options = [(mod, mod) for mod in modules]
+    selected = prompt_selection(
+        options,
+        f"Selecciona modulo(s) a testear para '{instance}' (Espacio para marcar, Enter para confirmar)",
+        multi=True,
+    )
+    if not selected:
+        print("Debes seleccionar al menos un módulo.")
+        sys.exit(1)
+    return ",".join(selected)
+
+
 def main():
     os.chdir(BASE_PATH)
 
@@ -790,18 +810,68 @@ def main():
     sync_p.add_argument("b", nargs="?", default=None, help="Branch (opcional)")
     sync_p.add_argument("--v", action="store_true", default=False, help="Mostrar salida de git")
 
+    # test
+    test_p = subparsers.add_parser(
+        "test",
+        help="Ejecuta tests de uno o varios módulos con cobertura",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Ejemplos:\n"
+            "  ./odoo test integra-17 binaural_brand\n"
+            "  ./odoo test integra-17 binaural_brand,binaural_mobile   # varios modulos\n"
+            "  ./odoo test -i integra-17 -m binaural_brand             # con flags\n"
+            "  ./odoo test integra-17 binaural_brand --recursive\n"
+            "  ./odoo test integra-17 binaural_brand --out-coverage-json ./reportes\n"
+            "  ./odoo test                                             "
+            "# elige instancia y modulo(s) interactivamente\n"
+        ),
+    )
+    test_p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional, se elige interactivamente). Alternativa: -i/--instance."
+    )
+    test_p.add_argument(
+        "module", nargs="?", default=None,
+        help="Modulo(s) a testear, separados por coma (opcional, se elige "
+             "interactivamente). Alternativa: -m/--modules."
+    )
+    test_p.add_argument(
+        "-i", "--instance", dest="instance_flag", default=None, metavar="INSTANCIA",
+        help="Instancia (alternativa al posicional)."
+    )
+    test_p.add_argument(
+        "-m", "--modules", dest="module_flag", default=None, metavar="MODULOS",
+        help="Modulo(s), separados por coma (alternativa al posicional)."
+    )
+    test_p.add_argument("-d", "--db", default=None, help="Nombre de la base de datos (opcional)")
+    test_p.add_argument("--tags", default="all", help="Ver ./scripts/odoo-test -h")
+    test_p.add_argument("--recursive", action="store_true", help="Calcula el arbol completo de dependencias")
+    test_p.add_argument("--exclude", default="", help="Modulos a omitir del arbol (con --recursive)")
+    test_p.add_argument("--no-rm-db", action="store_true", help="No borra la base de datos al terminar")
+    test_p.add_argument("--dry-run", action="store_true", help="Solo muestra el comando sin ejecutarlo")
+    test_p.add_argument(
+        "--out-coverage-json", default=None, metavar="RUTA",
+        help="Exporta el reporte de cobertura en JSON. Si RUTA es un directorio "
+             "se guarda como coverage.json dentro; si no, RUTA es el nombre de "
+             "archivo completo (ej: ./mi_reporte.json)."
+    )
+
     args = parser.parse_args()
 
     if not args.action:
         parser.print_help()
         return
 
+    if args.action == "test":
+        args.instance = args.instance_flag or args.instance
+        args.module = args.module_flag or args.module
+
     # Load config for all commands
     config = load_config(BASE_PATH)
 
     actions_with_instance = {
-        "start", "stop", "restart", "logs", "remove", 
-        "fix-files", "init", "bash", "psql", "pw", "update"
+        "start", "stop", "restart", "logs", "remove",
+        "fix-files", "init", "bash", "psql", "pw", "update", "test"
     }
     
     if args.action in actions_with_instance and getattr(args, "instance", None) is None:
@@ -870,6 +940,26 @@ def main():
         if args.b is None:
             args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
         sync(args.r, args.b, show=args.v)
+    elif args.action == "test":
+        if args.module is None:
+            args.module = prompt_for_test_modules(config, args.instance)
+        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-test"), args.instance, args.module]
+        if args.db:
+            cmd += ["-d", args.db]
+        if args.tags != "all":
+            cmd += ["--tags", args.tags]
+        if args.recursive:
+            cmd.append("--recursive")
+        if args.exclude:
+            cmd += ["--exclude", args.exclude]
+        if args.no_rm_db:
+            cmd.append("--no-rm-db")
+        if args.out_coverage_json:
+            cmd += ["--out-coverage-json", args.out_coverage_json]
+        if args.dry_run:
+            cmd.append("--dry-run")
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
 
 
 if __name__ == "__main__":

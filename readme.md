@@ -165,6 +165,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
+| `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
 
 ### Ejemplos
 
@@ -195,6 +196,15 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 
 # Actualizar todas las bases de datos de una instancia
 ./odoo update bananera -d all
+
+# Correr tests con cobertura de un modulo
+./odoo test bananera sale_extension
+
+# Correr tests de varios modulos juntos
+./odoo test bananera sale_extension,purchase_extension
+
+# Correr tests de un modulo y todo su arbol de dependencias
+./odoo test bananera sale_extension --recursive
 
 # Reiniciar todo
 ./odoo restart
