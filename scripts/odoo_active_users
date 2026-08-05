@@ -16,37 +16,29 @@ Este script considera que un usuario ya no esta usando el ambiente cuando su
 ultima marca de presencia queda fuera de la ventana definida por --minutes.
 Solo cuenta usuarios activos y, salvo que se indique lo contrario, excluye
 usuarios portal/share.
+
+La consulta corre dentro del contenedor de la instancia (`docker exec`), ya
+que las bases de datos ya no publican su puerto al host por defecto: el
+contenedor Odoo ya trae las variables PGHOST/PGPORT/PGUSER/PGPASSWORD
+correctas para hablar con su base de datos por la red interna de Docker.
 """
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
-
-import psycopg2
 
 BASE_PATH = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
-from generators.config_loader import (
-    load_config,
-    resolve_db_config,
-    get_db_host,
-    get_db_internal_port,
-)
+from generators.config_loader import load_config
 
 
-def env_required(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Falta variable de entorno: {name}")
-    return value
-
-
-def arg_or_env(value: Optional[str], env_name: str) -> str:
-    if value:
-        return value
-    return env_required(env_name)
+# Ejecutado dentro del contenedor Odoo vía `docker exec -i <container> python3 -`.
+# Usa PGHOST/PGPORT/PGUSER/PGPASSWORD ya presentes en el entorno del contenedor.
+PAYLOAD = r'''
+import sys
+import psycopg2
 
 
 def list_databases(conn):
@@ -83,7 +75,7 @@ def get_presence_timestamp_field(conn):
     return None
 
 
-def count_online_users(conn, minutes: int, include_portal: bool):
+def count_online_users(conn, minutes, include_portal):
     with conn.cursor() as cur:
         cur.execute("SELECT to_regclass('public.bus_presence')")
         exists = cur.fetchone()[0] is not None
@@ -114,64 +106,11 @@ def count_online_users(conn, minutes: int, include_portal: bool):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Cuenta usuarios online por base de datos Odoo"
-    )
-    parser.add_argument(
-        "instance",
-        help="Nombre de la instancia de Odoo",
-    )
-    parser.add_argument(
-        "--host",
-        help="Host de Postgres (override: usa instances.json por defecto)",
-    )
-    parser.add_argument(
-        "--port",
-        help="Puerto de Postgres (override: usa instances.json por defecto)",
-    )
-    parser.add_argument(
-        "--user",
-        help="Usuario de Postgres (override: usa instances.json por defecto)",
-    )
-    parser.add_argument(
-        "--password",
-        help="Password de Postgres (override: usa instances.json por defecto)",
-    )
-    parser.add_argument(
-        "--minutes",
-        type=int,
-        default=2,
-        help="Ventana en minutos para considerar usuario online (default: 2)",
-    )
-    parser.add_argument(
-        "--include-portal",
-        action="store_true",
-        help="Incluir usuarios portal/share",
-    )
-    args = parser.parse_args()
-
-    config = load_config(BASE_PATH)
-    instance = args.instance
-    if instance not in config["instances"]:
-        print(f"Error: instancia '{instance}' no existe")
-        sys.exit(1)
-
-    inst_conf = config["instances"][instance]
-    db_conf = resolve_db_config(inst_conf, config)
-    db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
-    db_port = get_db_internal_port(db_conf)
-
-    host = args.host or db_host
-    port = args.port or str(db_port)
-    user = args.user or db_user
-    password = args.password or db_password
+    minutes = int(sys.argv[1])
+    include_portal = sys.argv[2] == "1"
 
     try:
-        admin_conn = psycopg2.connect(
-            host=host, port=port, user=user, password=password, dbname="postgres"
-        )
+        admin_conn = psycopg2.connect(dbname="postgres")
         admin_conn.autocommit = True
     except Exception as e:
         print(f"Error conectando a postgres: {e}", file=sys.stderr)
@@ -187,13 +126,9 @@ def main():
 
     for dbname in dbs:
         try:
-            conn = psycopg2.connect(
-                host=host, port=port, user=user, password=password, dbname=dbname
-            )
+            conn = psycopg2.connect(dbname=dbname)
             conn.autocommit = True
-            count, status = count_online_users(
-                conn, minutes=args.minutes, include_portal=args.include_portal
-            )
+            count, status = count_online_users(conn, minutes, include_portal)
             conn.close()
 
             if count is None:
@@ -203,6 +138,48 @@ def main():
 
         except Exception as e:
             print(f"{dbname:40} {'-':>8} {'error: ' + str(e):>24}")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Cuenta usuarios online por base de datos Odoo"
+    )
+    parser.add_argument(
+        "instance",
+        help="Nombre de la instancia de Odoo",
+    )
+    parser.add_argument(
+        "--minutes",
+        type=int,
+        default=2,
+        help="Ventana en minutos para considerar usuario online (default: 2)",
+    )
+    parser.add_argument(
+        "--include-portal",
+        action="store_true",
+        help="Incluir usuarios portal/share",
+    )
+    args = parser.parse_args()
+
+    config = load_config(BASE_PATH)
+    if args.instance not in config["instances"]:
+        print(f"Error: instancia '{args.instance}' no existe")
+        sys.exit(1)
+
+    container = f"odoo-{args.instance}"
+    cmd = [
+        "docker", "exec", "-i", container,
+        "python3", "-",
+        str(args.minutes),
+        "1" if args.include_portal else "0",
+    ]
+    result = subprocess.run(cmd, input=PAYLOAD.encode())
+    sys.exit(result.returncode)
 
 
 if __name__ == "__main__":

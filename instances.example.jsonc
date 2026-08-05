@@ -56,7 +56,8 @@
   "databases": {
     "v16": {
       "postgres_version": 15,                  // Version de PostgreSQL a usar
-      "port": 5432,                            // Puerto expuesto en el host
+      "port": 5432,                            // Puerto en el host (solo se publica si expose_host_port: true)
+      "expose_host_port": false,               // true para publicar el puerto al host (clientes de escritorio, etc.)
       "user": "odoo",                          // Usuario de PostgreSQL
       "password": "odoo",                      // Password de PostgreSQL
       "config": "postgresql.small.conf"        // Archivo de config en .resources/dbconfigs/
@@ -64,6 +65,7 @@
     "v17": {
       "postgres_version": 16,
       "port": 5432,
+      "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
       "config": "postgresql.xlarge.conf"
@@ -71,6 +73,7 @@
     "v18": {
       "postgres_version": 17,
       "port": 5432,
+      "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
       "config": "postgresql.small.conf"
@@ -78,6 +81,7 @@
     "v19": {
       "postgres_version": 18,
       "port": 5432,
+      "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
       "config": "postgresql.small.conf"
