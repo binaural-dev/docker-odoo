@@ -44,11 +44,11 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | Categoría | Cantidad |
 |-----------|----------|
 | skills/19.0/skills/ (99 skills base + 20 nuevos) | **119** |
-| skills/.opencode/skills/ (19.0 base + OpenRAG) | 43 |
-| **Total skills 19.0** | **162** |
-| skills/17.0/skills/ (160 skills) | 160 |
+| skills/.opencode/skills/ (19.0 base + OpenRAG) | 44 |
+| **Total skills 19.0** | **163** |
+| skills/17.0/skills/ (160 skills + 20 PostgreSQL/BD = 180) | **180** |
 | skills/global (~/.config/opencode/skills/) | ~116 |
-| **TOTAL WORKSPACE** | **358** |
+| **TOTAL WORKSPACE** | **379** |
 | Archivos documentación (.opencode/docs/) | 647 |
 | Chunks indexados en OpenSearch | ~2,211 |
 
@@ -69,8 +69,11 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `odoo_devops-19.0` | Module system, CLI, deployment, DB management |
 | `odoo-migration-19` | Migration guide 17→19 (45 lessons) |
 | `odoo-performance-19` | Performance: N+1, batch-first, indexes |
-| `odoo-code-review-19.0` | Code review checklist (41 rules incl. recordset safety, scope creep, security, dead assets, start() lifecycle, ES2020, RPC error handling, focus restoration) |
+| `odoo-code-review-19.0` | Code review checklist (58 rules incl. recordset safety, scope creep, security, dead assets, start() lifecycle, ES2020, RPC error handling, focus restoration, compute-group-visibility, button-xpath) |
 | `odoo-context-keys-19` | **NUEVO** — Context keys: warehouse_id, location, stock filtering |
+| `odoo-compute-group-visibility` | **NUEVO** — `depends_context('uid')` + `has_group()` pattern, 4 anti-patterns, Odoo core reference |
+| `odoo-button-xpath-patterns` | **NUEVO** — 6 safe patterns for `//header/button` xpath, 4 anti-patterns, decision tree |
+| `odoo-payment-transaction-architecture` | **NUEVO** — M2M table `account_invoice_transaction_rel`, ORM vs raw SQL, payment flow diagrams |
 
 ### Módulos Binaural (`.opencode/skills/`)
 
@@ -83,6 +86,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `binaural-website-sale-delivery` | Métodos de envío, OWL patching |
 | `binaural-website-sale-transit` | Stock en tránsito, mail templates |
 | `l10n-ve-accountant` | Localización contable venezolana |
+| `odoo-combo-product-validation-19.0` | **NUEVO** — Bug recurrente: validaciones custom de "impuesto único" (taxes_id/supplier_taxes_id) que no exceptúan `type='combo'`. 2 módulos afectados (`l10n_ve_accountant`, `binaural_purchase`), checklist de code review, constraints CORE relacionadas (combo_ids/combo_item_ids) |
 | `cadipa-sale-suscription-payment` | **NUEVO** — Portal payment flow + VES conversion + l10n_ve bug fix para cadipa_sale_suscription |
 | `binaural-stock-barcode` | Barcode picking con fake lines |
 
@@ -90,11 +94,11 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 
 | Skill | Descripción |
 |-------|-------------|
-| `coverage-workflow` | Ejecutar, analizar y mejorar cobertura |
-| `sdd-workflow` | Spec-Driven Development: spec → plan → tasks |
-| `odoo-testing-workflow` | Flujo de tests Odoo |
-| `workspace-structure` | Estructura del workspace, pre-commit, instancias |
-| `guia_precommit_odoo` | **NUEVO** — Guía completa del sistema pre-commit: script, hooks, troubleshooting |
+| `coverage-workflow` | Ejecutar, analizar y mejorar cobertura. Incluye SDD validation cycle, anti-patterns C1-C14 |
+| `sdd-workflow` | Spec-Driven Development: spec → plan → tasks. Incluye post-implementation validation cycle |
+| `odoo-testing-workflow` | Flujo de tests Odoo. Incluye coverage validation post-implementation |
+| `workspace-structure` | Estructura del workspace, pre-commit, instancias. Incluye container↔instance mapping |
+| `guia_precommit_odoo` | Guía completa del sistema pre-commit: script, hooks, warnings catalog, troubleshooting |
 | `openrag` | OpenRAG RAG: ingestión, búsqueda semántica, chat MCP |
 
 ### Globales (`~/.config/opencode/skills/`)
@@ -147,6 +151,33 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `oca-contribution-workflow` | **NUEVO** — OCA Contribution Workflow: Git commit format y tags, PR lifecycle y merge criteria, code review checklist, CI/testing, debugging en Runbot, documentación readme/. 478 líneas. |
 | `odoo-17-subscription-invoice-currency` | **ACTUALIZADO** — Conversión de moneda en facturas de suscripción con localización venezolana (Odoo 17.0): `_prepare_invoice()` override forzando currency_id a VES + recalculación de moneda alterna (AC) con `company.currency_foreign_id` y `_get_conversion_rate()`; `_prepare_invoice_line()` con `price_unit` convertido via `_convert()` + `foreign_price`/`foreign_subtotal` hacia moneda alterna; `_recompute_subscription_rates()` con sync de `foreign_currency_id`; `_recompute_foreign_rates()` + onchange integration; rate semantics USD vs non-USD; constraint `_check_currency_id` de `l10n_ve_accountant`; MRO chain; tests 280-312; code review rules FIX-SIC-001 a 010. Skill en `.opencode/17.0/skills/odoo-17-subscription-invoice-currency/SKILL.md`. |
 | `odoo-17-subscription-validation-patterns` | **NUEVO** — Patrones de validación en suscripciones (Odoo 17.0): dependencia circular `is_sale_order` vs `is_subscription`, `action_confirm()` vs `@api.constrains`, `required` condicional con contexto, XPath en fields duplicados por groups. 5 anti-patrones, 4 reglas RQ-FIX, código de referencia del fix implementado en `cadipa_sale_suscription`. Skill en `.opencode/17.0/skills/odoo-17-subscription-validation-patterns/SKILL.md`. |
+
+### PostgreSQL/BD Skills (`.opencode/17.0/skills/` — 20 skills, ~9,550 líneas)
+
+Ciclo de automejoramiento de 20 loops para PostgreSQL/BD en Odoo 17.0. Analiza `odoo-17.0/odoo/sql_db.py`, `odoo/models.py`, `odoo/fields.py`, `odoo/tools/sql.py`, `odoo/modules/registry.py`, y addons custom. Base de datos estudio: `cadipa1_db_study` (437 tables, 28 MB, PG 16.14).
+
+| # | Skill | Área | Líneas |
+|---|-------|------|--------|
+| 001 | `odoo-db-architecture-17.0` | ConnectionPool, Cursor, Savepoint, Registry singleton | 698 |
+| 002 | `odoo-ddl-schema-17.0` | DDL functions, `_auto_init()`, column/constraint evolution | 924 |
+| 003 | `odoo-orm-type-mapping-17.0` | 18 field types → PG types, 4-stage conversion pipeline | 632 |
+| 004 | `odoo-indexing-strategies-17.0` | Index types, `check_indexes()`, trigram/GIN, naming | ~450 |
+| 005 | `odoo-explain-analyze-17.0` | Query timing, execution plans, table tracking | ~400 |
+| 006 | `odoo-window-functions-17.0` | ROW_NUMBER, SUM OVER, LAG, FIRST_VALUE (33 usages) | ~350 |
+| 007 | `odoo-cte-recursive-17.0` | 45 CTE usages, recursive view inheritance, parent_path | ~400 |
+| 008 | `odoo-aggregation-grouping-17.0` | `_read_group()`, 10 aggregates, 6 time granularities | ~400 |
+| 009 | `odoo-jsonb-array-17.0` | Json/Properties fields, translation JSONB, 8 JSONB functions | ~400 |
+| 010 | `odoo-datetime-interval-17.0` | timezone(), date_trunc(), INTERVAL, UTC storage | ~400 |
+| 011 | `odoo-connection-pooling-17.0` | ConnectionPool, worker architecture, LISTEN/NOTIFY | ~400 |
+| 012 | `odoo-vacuum-statistics-17.0` | @api.autovacuum, TransientModel GC, pg_stat views | ~350 |
+| 013 | `odoo-lock-management-17.0` | FOR UPDATE, SKIP LOCKED, NOWAIT, savepoint patterns | ~350 |
+| 014 | `odoo-batch-bulk-17.0` | INSERT_BATCH_SIZE=100, IN_MAX=1000, execute_values() | ~500 |
+| 015 | `odoo-table-partitioning-17.0` | Logical partitioning: _table_query, _auto=False, _inherits | ~500 |
+| 016 | `odoo-db-security-17.0` | 6-layer security: ACL, Record Rules, SQL class, sudo() | ~500 |
+| 017 | `odoo-backup-pitr-17.0` | pg_dump, restore, duplicate, neutralization, obfuscation | ~450 |
+| 018 | `odoo-db-monitoring-17.0` | Profiler, query counters, cache stats, PerfFilter | ~450 |
+| 019 | `odoo-custom-module-db-17.0` | Custom SQL patterns, hooks, migrations, PL/pgSQL | ~500 |
+| 020 | `odoo-db-master-reference-17.0` | **SÍNTESIS** — Cross-reference 19 skills, decision trees, top 30 anti-patterns | ~500 |
 
 ### OWL Framework Skills
 
@@ -399,6 +430,59 @@ OpenRAG usa stack externo que **no se despliega con docker-multi**:
 72. **Double re-apply pattern SQL**: Cuando SQL UPDATE directo modifica stored computed fields, el flush posterior los sobrescribe. Patrón: (1) SQL UPDATE, (2) flush, (3) re-aplicar SQL UPDATE, (4) invalidate_recordset. Referencia: FIX-035 (17.0), FIX-056 (19.0).
 
 73. **`_prepare_*` pureza**: Los métodos `_prepare_invoice()`, `_prepare_invoice_line()` DEBEN ser puros (sin side effects). No mutar `self` ni argumentos. Usar copia defensiva `dict(vals or {})`. Referencia: FIX-036 (17.0), FIX-057 (19.0).
+
+### Compute Group Visibility & Button XPath Patterns
+
+74. **`has_group()` en compute DEBE tener `depends_context('uid')`**: Cualquier método `_compute_*` que llame a `self.env.user.has_group()` DEBE declarar `depends_context='uid'` en el campo. Sin esto, el ORM cachea el resultado por (model, field, record_id) sin considerar el usuario → **cache pollution**. Todos los usuarios ven el mismo resultado. Context key válida: `'uid'`, NUNCA `'user'`. Referencia: FIX-051 (19.0), FIX-038 (17.0), Skill `odoo-compute-group-visibility`. Bugs reales: `binaural_credit_limit/res_partner.py:14-18`, `binaural_club_socios/res_partner.py:388-392`.
+75. **Context key `'user'` NO es válida**: Usar `'uid'` en `depends_context()`. `'user'` no es una context key estándar de Odoo y no invalida el cache correctamente. Referencia: Skill `odoo-compute-group-visibility`. Bug real: `binaural_last_cost/product_template.py:43`.
+76. **`has_group()` NO funciona en XML `invisible`**: Las expresiones `invisible` se evalúan con `safe_eval` que NO tiene `has_group()` en sus builtins. Crear un campo Boolean compute con `depends_context('uid')` y usarlo en la expresión. Patrón: `<field name="user_has_group_xxx" invisible="1"/>` + `invisible="not user_has_group_xxx"`. Referencia: FIX-052 (19.0), FIX-039 (17.0), Skill `odoo-compute-group-visibility`, Odoo core `account/models/res_partner_bank.py:42,94-98`.
+77. **`position="replace"` en `//header/button` DESTRUYE el botón original**: Si otro módulo hace `position="after"` o `position="before"` sobre el mismo elemento, su extensión se pierde. Usar `position="attributes"` para modificar atributos, `position="after"/"before"` para agregar nuevos botones. Solo usar `replace` cuando el elemento original es inherentemente incompatible. Referencia: FIX-054 (19.0), FIX-041 (17.0), Skill `odoo-button-xpath-patterns`. Anti-patrón `binaural_memberships/views/action_partner.xml:23`.
+78. **N+1 en `_compute_*` con `search_count()`/`browse()` por registro**: Dentro de un loop en `_compute_*`, cada `search_count()` o `browse()` genera 1 SQL query. Para N registros = N queries. Usar raw SQL batch (`SELECT ... WHERE invoice_id = ANY(%s)`) o `search_count` con dominio que cubra todos los IDs. Referencia: FIX-055 (19.0), FIX-042 (17.0), Skill `odoo-payment-transaction-architecture`.
+79. **XPath frágil con índice `[2]` o `[last()]`**: Los selectores XPath basados en índice son frágiles ante cambios en core o en otros módulos. Preferir selectores específicos: `[@name=...][hasclass(...)]`, `[@name=...][@groups=...]`, `[@name=...][@class=...]`. Referencia: FIX-053 (19.0), FIX-040 (17.0), Skill `odoo-button-xpath-patterns`.
+80. **Tabla M2M `account_invoice_transaction_rel`**: La relación Many2many entre `account.move` y `payment.transaction` usa la tabla `account_invoice_transaction_rel` con columnas `invoice_id` y `transaction_id`. Para queries batch, usar raw SQL con `WHERE invoice_id = ANY(%s)` en vez de ORM `search_count` por registro. Referencia: Skill `odoo-payment-transaction-architecture`, `account_payment/models/account_move.py:12-15`.
+
+### Testing Infrastructure & Dependencies
+
+81. **`run_tests.sh` bug: `--db_name` siempre agrega timestamp**: `src/scripts/run_tests.sh` línea 65 ejecuta `DB_NAME="${DB_BASE}_$(date +%s)"` — si `--db_name=tests_custom` se pasa, el DB real es `tests_custom_1722500000`. **Workaround**: usar `scripts/coverage` (root) que NO tiene este bug, o pasar `--keep-db` y crear la DB manualmente. El script `scripts/run_tests.sh` (root) sí respeta `--db_name` directamente. Referencia: `src/scripts/run_tests.sh:43,65`.
+82. **`l10n_ve` dependency para tests de contabilidad**: Módulos que dependen de `l10n_ve_accountant` necesitan que `l10n_ve` (chart of accounts) esté instalado en la DB de tests. Sin él, no existen cuentas `asset_receivable` → constraint `_check_payable_receivable` falla: "Any journal item on a receivable account must have a due date". **Fix**: agregar `invoice_date_due` + `invoice_payment_term_id` en tests, o instalar `l10n_ve` explícitamente. Cadena: `l10n_ve_accountant` → `l10n_ve_tax` (NO `l10n_ve`). Referencia: `cadipa_sale_suscription/tests/test_cancel_draft_invoices.py:139-157`.
+83. **Estructura documentación OCA**: Módulos Odoo DEBEN seguir estructura OCA: `readme/DESCRIPTION.rst` (descripción + features), `readme/USAGE.rst` (instalación + uso + casos), `static/description/index.html` (HTML para Odoo Apps). Agregar `i18n/<lang>.po` con traducciones. Referencia: Skill `oca-contribution-workflow`, `odoo-documentation-guidelines-19.0`.
+
+### Portal Fields Recomputation & copy() Flow
+
+84. **`force=True` en `_recompute_portal_fields()` desde onchange/create**: Métodos que invocan `_recompute_portal_fields()` desde `_onchange_pricelist_id()` o `create()` DEBEN pasar `force=True`. Sin `force=True`, solo se recalculan suscripciones con `display_late=True` (state∈[3_progress,4_paused] AND next_invoice_date<today) — draft subscriptions y las con future next_invoice_date quedan con portal fields (`amount_to_invoice_bs`, `current_bcv_rate`) en 0.0. `create()` ya usa `force=True` (line 64). `_onchange_pricelist_id()` DEBE usar `force=True` (line 416). Referencia: Skill `cadipa-sale-suscription-payment`, FIX-PAY-006/007.
+85. **`copy()` → `create()` gateway**: Odoo `copy()` invoca internamente `copy_data()` → `create()`. Custom `create()` override IS invoked during copy. Enterprise `copy_data()` copia `is_subscription=True` (stored computed) al vals dict. NO crear override de `copy()` para lógica que ya cubre `create()`. Portal fields con `copy=False` se resetean a 0.0 en copy, luego `create()` los recalcula con `force=True`. Referencia: Skill `cadipa-sale-suscription-payment`, FIX-PAY-007/008/009.
+
+### Combo Products & Custom Tax Validations (2026-08-03)
+
+86. **Validaciones de "impuesto único" DEBEN exceptuar `type='combo'`**: Cualquier `@api.constrains`/override de `create()`/`write()` que valide cardinalidad de `taxes_id`/`supplier_taxes_id` en `product.template` bloquea el guardado de productos combo si no exceptúa `type == 'combo'` — no tienen impuestos propios. Bug encontrado en **dos módulos independientes**: `l10n_ve_accountant._enforce_single_tax_vals` (fix en `src/specs/fix-product-combo-tax-validation/`) y `binaural_purchase._check_taxes_id` (fix previo por `purchase_ok`, commit `696cb8fd6`). Tratar como clase de bug recurrente. Referencia: FIX-059 (19.0), Skill `odoo-combo-product-validation-19.0`.
+87. **`purchase_ok=False` en combo solo vía onchange de UI**: El fix de `binaural_purchase` exceptúa por `purchase_ok` en vez de `type` directamente — pero `purchase_ok=False` para combo solo lo setea el onchange del formulario (`_onchange_type` core), NO la creación programática (API/import/server action), que deja `purchase_ok=True` (default) y sigue disparando la validación. Preferir chequear `type` directamente en validaciones nuevas. Referencia: Skill `odoo-combo-product-validation-19.0`.
+88. **`product.combo` requiere `combo_ids`/`combo_item_ids` no vacíos (constraint CORE)**: Todo `type='combo'` necesita ≥1 `product.combo` (`combo_ids`), y todo `product.combo` necesita ≥1 `product.combo.item` (`combo_item_ids`) — independiente de cualquier validación custom de impuestos. Al testear productos combo, crear el fixture completo primero o falla con `ValidationError: A combo product must contain at least 1 combo choice.`, fácil de confundir con el bug que se está probando. Referencia: Skill `odoo-testing-workflow` Anti-Pattern 11.
+89. **Context sticky de `create()` filtra `write()` posterior sobre el mismo objeto**: Un override de `create()` que usa `self.with_context(ctx)` antes de `super().create()` produce un recordset que HEREDA ese contexto (incluyendo flags de skip-validation). Un `write()` posterior sobre ESE MISMO objeto en memoria (sin volver a `browse()`) hereda el flag silenciosamente y salta la validación sin error visible — produce falsos negativos en tests. Referencia: Skill `odoo_orm_backend-19.0`, `odoo-testing-workflow` Anti-Pattern 12.
+
+### Workspace: Client Checkouts & Docker Infra (2026-08-03)
+
+90. **`src/custom/<client>/<repo>` son checkouts git independientes, NO se sincronizan solos**: `src/custom/<client>/integra-addons`, `.../odoo-venezuela`, etc. son submodules git separados del pool compartido (`src/integra-addons-19.0/`, `src/odoo-venezuela-19.0/`). Un fix aplicado al repo compartido NO se propaga automáticamente — verificar con `diff` antes de asumir que un cliente específico ya tiene un fix, y sincronizar con `./odoo sync <client>` si diverge. Caso real: `binaural_purchase` fix (commit `696cb8fd6`) presente en `src/integra-addons-19.0/` pero ausente en `src/custom/19-homologacion-julio-2026-2/integra-addons/`. Referencia: Skill `workspace-structure`.
+91. **Docker: referencia de nombre de contenedor corrupta en el daemon**: Si `./odoo start <instancia>` falla con "Conflict. The container name ... already in use by container `<hash>`" pero ese hash NO existe en `docker ps -a` ni `/var/lib/docker/containers/`, es un índice corrupto del daemon (bug Moby) — `docker rm -f`/`prune` NO lo resuelven. Requiere `sudo systemctl restart docker`. Antes de escalar, verificar y matar procesos `docker compose up` colgados. Referencia: Skill `workspace-structure`.
+
+### Migración `l10n_ve_*` → `binaural_*` & Política de Commits SDD (2026-08-04, ticket 14303)
+
+92. **Migración entre módulos hermanos: verificar huecos de cobertura entre agentes paralelos**: al dividir un build de migración (ej. `l10n_ve_tax`/`l10n_ve_invoice` → `binaural_tax`/`binaural_invoice`) por módulo/archivo entre agentes en paralelo, un campo/override que "naturalmente" pertenece a un módulo distinto del que cada agente tiene asignado puede quedar sin cubrir — cada agente asume que el otro lo hace. Caso real: el override de `_get_computed_taxes()` para producto exento de compra internacional debía ir en `binaural_tax/models/account_move_line.py` (paridad con `l10n_ve_tax`), no en `binaural_invoice`, y quedó sin implementar hasta detección manual post-build. Verificar explícitamente el mapa de dependencias cruzadas entre módulos antes de pasar a tests, no asumir "cada agente cubrió su parte". Referencia: Skill `odoo-lve-to-binaural-migration-17.0`.
+93. **Campo de configuración sin consumidor real = bug silencioso**: agregar un booleano/Many2one nuevo a `res.company`/Settings y verificar solo que "existe y persiste" no es suficiente — si el método que debería leerlo (ej. una sección condicional de un wizard de reporte, como `_get_purchase_book_field_groups()`) no lo consulta, el campo no tiene ningún efecto visible aunque los tests de "el campo existe" pasen. Requiere un test que ejercite el flujo de negocio completo (generar el reporte real y verificar el efecto), no solo la existencia/persistencia del campo. Referencia: Skill `odoo-lve-to-binaural-migration-17.0`.
+94. **`field.related` es un string punteado, NO una tupla**: `env['modelo']._fields['campo'].related` retorna `"company_id.campo"` (string), confirmado por `assert isinstance(self.related, str)` en `odoo/fields.py`. Tests que comparen contra una tupla `('company_id', 'campo')` fallan siempre, aunque el campo `related` esté correctamente definido. Referencia: Skill `odoo-lve-to-binaural-migration-17.0`.
+95. **`binaural_tax`/`binaural_accountant` exigen `company.currency_foreign_id` configurado, y `account.move.currency_id` no puede diferir de la moneda de la compañía**: cualquier `account.move` creado en una compañía con `binaural_tax` instalado dispara `_prepare_tax_totals` → `ValidationError("No foreign currency configured in the company")` si `currency_foreign_id` no está seteado, incluso en tests que no prueban nada de moneda extranjera — todo `setUpClass` que cree facturas debe configurarlo primero. Además, `binaural_accountant._check_currency_id` prohíbe que `move.currency_id` difiera de la moneda base de la compañía — el patrón multi-moneda de este proyecto es `company.currency_foreign_id` + columnas `foreign_*` computadas, nunca cambiar `currency_id` del propio documento. Referencia: Skill `odoo-lve-to-binaural-migration-17.0`.
+96. **Ciclo SDD: NUNCA commitear automáticamente al terminar Build/QC**: el cierre técnico del flujo SDD (tests + QC en verde) no implica autorización para commitear — el usuario decide cuándo y cómo se agrupa el commit en el historial. Tras un caso donde el flujo generó 5 commits intermedios que hubo que rehacer a mano en uno solo (ticket 14303), `sdd-builder-agent` y `sdd-lead-agent` (nuevo Gate 6: Commit Authorization) documentan explícitamente que ningún agente del flujo SDD ejecuta `git commit`/`git merge`/`git push` por su cuenta — el commit final sigue el formato de `crear-texto-conventional-commit.md` y solo se ejecuta cuando el usuario lo autoriza de forma explícita. Referencia: Skill `sdd-builder-agent`, `sdd-lead-agent`.
+
+### Testing Infrastructure & Scripts (2026-08-05)
+
+97. **Ciclo de validación SDD: pre-commit → tests no-cov → tests con coverage → comparar**: después de completar implementación SDD, ejecutar en orden: (1) `scripts/precommit` para validar código, (2) tests sin coverage con `--no-cov --keep-db` para confirmar que pasan, (3) tests con coverage sobre la misma DB con `python3 -m coverage run` manual, (4) `scripts/coverage` o equivalente para obtener reporte. **NUNCA saltarse un paso** — cada paso valida un aspecto diferente. Referencia: Skill `coverage-workflow`, validación `binaural-mig-international-purchase` (2026-08-05).
+
+98. **`-i` vs `-u` flag en Odoo: `-i` reinstala XML data, `-u` solo actualiza**: el flag `-i` (install) ejecuta `load_data()` que re-procesa todos los XML del módulo — si hay `unique` constraints en tablas de datos (ej: `payment_concept_line_unique_code`), falla con `IntegrityError` al re-insertar. El flag `-u` (update) NO re-ejecuta XML data a menos que el archivo haya cambiado. Para re-ejecutar tests sobre DB existente, usar `-u` o ejecutar sin flag de install/update. `scripts/coverage` línea 88 usa `-i` que falla con constraints existentes. `run_tests.sh` Pass 2 línea 164 usa `-i` con el mismo problema. Referencia: `scripts/coverage:88`, `src/scripts/run_tests.sh:164`.
+
+99. **`scripts/coverage` línea 81: `docker exec -it` falla sin TTY**: el script usa `docker exec -u root -it` que requiere terminal interactiva. Cuando se ejecuta desde CI, pipelines, o sesiones no-interactivas, falla con `the input device is not a TTY`. **Workaround**: ejecutar el equivalente manual sin `-it`: `docker exec -u root <container> bash -c "pip3 install coverage && python3 -m coverage erase && python3 -m coverage run ... && python3 -m coverage report -m"`. Referencia: `scripts/coverage:81`.
+
+100. **Interpretación de coverage: SDD-specific vs total**: el coverage total de un módulo incluye código pre-existente NO modificado por la migración SDD. Ejemplo: `binaural_invoice` tiene 65% total, pero los archivos tocados por SDD (`res_company.py`, `account_journal.py`) tienen 100%. **Al reportar coverage SDD, desglosar**: (1) archivos modificados por SDD, (2) código pre-existente no cubierto. El SDD-specific coverage suele ser 95%+ aunque el total sea bajo por código legacy. Referencia: validación `binaural-mig-international-purchase` (2026-08-05).
+
+101. **`run_tests.sh` Pass 2 grep filter oculta fallos de coverage**: el script pasa la salida por `grep -E "(Starting|FAILED|ERROR|passed|failed|error\(s\)|TOTAL|Name|Stmts|Miss)"`. Si el paso de coverage falla antes de imprimir el reporte (ej: `pip3 install coverage` falla, o `coverage run` aborta), el grep no muestra ningún error visible — el log simplemente termina sin sección de coverage. **Verificar manualmente**: `docker exec -u root <container> python3 -m coverage report -m --include='*/<module>/*'`. Si dice "No data to report", el `coverage run` no llegó a ejecutarse. Referencia: Skill `coverage-workflow` Anti-Pattern C11.
 
 ## Plugins (opencode.jsonc)
 
@@ -996,3 +1080,44 @@ Ciclo de 2 loops de automejoramiento para el módulo `helpdesk` (Enterprise, OEE
 | `helpdesk-master-reference` | MR | **NUEVO** — Master Reference V37: 2 skills consolidados (28 patrones, 42+ XML, ~3,800L). Anti-pattern catalog (17 total), 2 decision trees, 10 migration notes, 5 meta-learning findings, 12-item checklist. 214 líneas. |
 
 <!-- END V37: helpdesk-self-improvement (Loops 001-002 ✅) -->
+
+### V38: odoo-db-skills-19.0 — Database/PostgreSQL Skills for Odoo 19.0 ✅ COMPLETED (20/20 loops)
+
+Ciclo de 20 loops de automejoramiento para DB/PostgreSQL skills de Odoo 19.0. Cubre architecture, DDL/schema, type mapping, SQL class, database layer, indexing, EXPLAIN, window functions, CTE, aggregation, JSONB, datetime, locks, batch/bulk, table partitioning, security, monitoring, vacuum, custom SQL, y master reference. Source: `odoo-19.0/odoo/sql_db.py` (852L), `tools/sql.py` (781L), `orm/registry.py` (1269L), `orm/models.py`, `orm/fields.py`, `tools/profiler.py` (747L), `tools/query.py` (276L), `orm/table_objects.py` (205L), `orm/domains.py` (~400L). **READ-ONLY**: No se modifica `odoo-19.0/`.
+
+| # | Skill | Loop | Descripción |
+|---|-------|------|-------------|
+| 1 | `odoo-db-architecture-19.0` | 001 | **NUEVO** — ConnectionPool, Cursor, Savepoint, Registry singleton (LRU 42), inter-process signaling (tables NOT sequences for logical replication). ~300L. |
+| 2 | `odoo-db-schema-ddl-19.0` | 002 | **NUEVO** — _auto_init() pipeline, Constraint/Index/UniqueIndex (table_objects.py 205L), field.update_db(), DDL functions from tools/sql.py. ~350L. |
+| 3 | `odoo-db-orm-type-mapping-19.0` | 003 | **NUEVO** — 18+ field types → PG types (Float→numeric NOT float8!, Char→varchar/text pg_varchar threshold 1024), conversion pipeline, convert_to_column_insert() batch optimization. ~300L. |
+| 4 | `odoo-db-sql-class-19.0` | 004 | **NUEVO** — SQL class (tools/sql.py L46-201), Domain AST to_sql(), Query class (tools/query.py 276L), make_identifier() crc32 hash, DDL functions. ~300L. |
+| 5 | `odoo-db-core-database-layer-19.0` | 005 | **NUEVO** — TestCursor (savepoint-based commit simulation), _FlushingSavepoint, ConnectionPool 3-phase borrow, Cursor lifecycle REPEATABLE READ. ~300L. |
+| 6 | `odoo-db-indexing-strategies-19.0` | 006 | **NUEVO** — field.index (btree/btree_not_null/trigram), check_indexes() pg_index/pg_class/pg_am queries, auto_join REMOVED in 19.0, _condition_to_sql_company(). ~250L. |
+| 7 | `odoo-db-explain-analyze-19.0` | 007 | **NUEVO** — EXPLAIN ANALYZE plan nodes, ORM search pipeline, SQLCollector (profiler.py), N+1 detection, assertQueryCount. ~250L. |
+| 8 | `odoo-db-window-functions-19.0` | 008 | **NUEVO** — ROW_NUMBER(), SUM() OVER(), LAG/LEAD, read_group() with aggregates, _read_group_expand_full(). ~250L. |
+| 9 | `odoo-db-cte-recursive-19.0` | 009 | **NUEVO** — Non-recursive/recursive CTE, parent_path (format "1/5/12/45/", LIKE patterns), ORM search with parent_path. ~250L. |
+| 10 | `odoo-db-aggregation-grouping-19.0` | 010 | **NUEVO** — _read_group() pipeline, GroupBy class, aggregates (count/sum/avg/min/max/array_agg), read_group_expand(). ~250L. |
+| 11 | `odoo-db-jsonb-properties-19.0` | 011 | **NUEVO** — Json field, Properties field, JSONB operations (->/->>/@>/?), GIN index, PropertiesDefinition schema. ~200L. |
+| 12 | `odoo-db-datetime-interval-19.0` | 012 | **NUEVO** — UTC storage, AT TIME ZONE, INTERVAL, timedelta vs relativedelta, date_trunc, read_group time intervals. ~200L. |
+| 13 | `odoo-db-lock-management-19.0` | 013 | **NUEVO** — FOR UPDATE/NOWAIT/SKIP LOCKED, increment_fields_skiplock(), lock_timeout, deadlock prevention. ~200L. |
+| 14 | `odoo-db-batch-bulk-19.0` | 014 | **NUEVO** — execute_values(), batch create/write, UPSERT ON CONFLICT, page_size tuning, memory management. ~200L. |
+| 15 | `odoo-db-table-partitioning-19.0` | 015 | **NUEVO** — _auto=True/False, _table_query, range/list/hash partitioning, partition pruning. ~200L. |
+| 16 | `odoo-db-security-19.0` | 016 | **NUEVO** — check_access() unified API, has_access(), _filtered_access(), record rules, field-level security, parameterized queries. ~250L. |
+| 17 | `odoo-db-monitoring-19.0` | 017 | **NUEVO** — Profiler system (SQLCollector/QwebCollector), sql_counter, pg_stat views, cache statistics, pg_badger. ~200L. |
+| 18 | `odoo-db-vacuum-statistics-19.0` | 018 | **NUEVO** — VACUUM/ANALYZE, autovacuum tuning, table bloat detection, pg_stat_user_tables, scheduled maintenance. ~200L. |
+| 19 | `odoo-db-custom-module-sql-19.0` | 019 | **NUEVO** — init() hook, raw SQL patterns, migration scripts, DDL functions, PL/pgSQL, batch operations. ~250L. |
+| 20 | `odoo-db-master-reference-19.0` | 020 | **NUEVO** — Capstone: cross-reference 19 skills, 4 decision trees, 30 anti-patterns (5 CRITICAL/10 HIGH/10 MED/5 LOW), 7 key 19.0 changes. ~400L. |
+
+**Key 19.0 Changes Documented:**
+- check_access() unified (replaces check_access_rights + check_access_rule)
+- Domain.AND/OR class-based AST (replaces expression.AND/OR)
+- models.Constraint/Index/UniqueIndex (replaces _sql_constraints)
+- auto_join REMOVED (must use explicit domain joins)
+- SQL.__iter__() DEPRECATED (use SQL.identifier())
+- flush_query()/execute_query() NEW on Environment
+- ormcache_context DEPRECATED (use @ormcache)
+- Inter-process signaling uses INSERT-only tables (NOT sequences) for logical replication
+
+**Total: 20 skills, ~5,500+ líneas, 100+ anti-patterns, 30+ source files analyzed**
+
+<!-- END V38: odoo-db-skills-19.0 (20/20 loops — COMPLETED ✅) -->
