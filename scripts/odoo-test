@@ -438,6 +438,30 @@ def drop_db(container, db_name):
     subprocess.run(["docker", "exec", container, "dropdb", "--if-exists", db_name], check=False)
 
 
+def query_module_states(container, db_name, module_names):
+    """Devuelve {modulo: state} consultando ir_module_module directamente
+    (state: 'installed', 'to install', 'uninstalled', etc.) -- fuente de
+    verdad real de que se instalo y que no, sin parsear texto de terminal/log.
+    Un modulo que ni siquiera llego a registrarse (crash muy temprano) no
+    aparece en el resultado. Debe llamarse ANTES de borrar la base."""
+    if not module_names:
+        return {}
+    names_list = ", ".join("'" + m.replace("'", "''") + "'" for m in module_names)
+    cmd = [
+        "docker", "exec", container, "psql", "-d", db_name, "-tAc",
+        f"SELECT name || '|' || state FROM ir_module_module WHERE name IN ({names_list})",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    states = {}
+    if result.returncode != 0:
+        return states
+    for line in result.stdout.strip().splitlines():
+        if "|" in line:
+            name, state = line.split("|", 1)
+            states[name.strip()] = state.strip()
+    return states
+
+
 def resolve_coverage_json_path(out_arg):
     """Si out_arg es un directorio (existente o terminado en '/'), el
     destino es <out_arg>/coverage.json; si no, out_arg es el nombre del
@@ -494,6 +518,27 @@ def export_container_file(container, container_path, dest_path, label):
         print(f"→ {label} guardado en: {dest_path}")
     else:
         print(f"⚠ No se pudo exportar {label.lower()}: {result.stderr.strip()}")
+
+
+def export_test_json(test_report, closure, module_states, dest_path):
+    """Escribe el reporte de tests a dest_path, agregandole "modules" (total/
+    installed/not_installed, de query_module_states -- nunca de texto). No es
+    un 'docker cp' directo del JSON del contenedor porque esta key se calcula
+    en el host, despues de leer el reporte."""
+    installed_modules = [m for m in closure if module_states.get(m) == "installed"]
+    not_installed_modules = [m for m in closure if m not in installed_modules]
+    payload = dict(test_report) if test_report else {}
+    payload["modules"] = {
+        "total": len(closure),
+        "installed": installed_modules,
+        "not_installed": not_installed_modules,
+    }
+    parent = os.path.dirname(dest_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(dest_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    print(f"→ Reporte JSON de tests guardado en: {dest_path}")
 
 
 def read_container_json(container, container_json_path):
@@ -648,18 +693,50 @@ def print_verbose_test_details(test_report):
         print(row)
 
 
-def print_test_summary(module, db_name, output, test_report):
+def print_test_summary(module, db_name, output, test_report, exit_code, closure, module_states):
     """Muestra un resumen final prolijo. La fuente de verdad de pass/fail es
     el JSON del hook de tests (test_report, ver HOOK_SOURCE arriba): exacto
     porque viene de OdooTestResult, no de parsear texto. Si por algun motivo
     el hook no genero el JSON, se cae al regex sobre la salida como respaldo
-    (igual que antes de tener el hook)."""
+    (igual que antes de tener el hook).
+
+    exit_code manda por encima de lo que diga test_report: el hook solo ve
+    resultados de tests que LLEGARON A CORRER -- si Odoo crashea instalando
+    modulos (ej: un data file roto, una tabla que no existe) ANTES de llegar
+    a cualquier test, el hook nunca se entera y el reporte queda vacio/en
+    cero, lo cual se veria como "OK, 0 tests" sin este chequeo, ocultando un
+    fallo real de instalacion. Un exit_code != 0 siempre fuerza CON FALLOS,
+    sea lo que sea que diga test_report.
+
+    closure/module_states (de query_module_states, consulta directa a
+    ir_module_module -- nunca parseo de texto) dan el conteo real de modulos
+    instalados vs no, y fuerzan CON FALLOS igual que exit_code si falta
+    alguno."""
     coverage_match = re.search(r"^TOTAL\b.*?(\d+)%\s*$", output, re.MULTILINE)
+    process_failed = exit_code != 0
+    installed_modules = [m for m in closure if module_states.get(m) == "installed"]
+    not_installed_modules = [m for m in closure if m not in installed_modules]
+    modules_failed = bool(not_installed_modules)
+
+    module_rows = [
+        f"Modulos totales       : {len(closure)}",
+        f"Modulos instalados    : {len(installed_modules)}",
+        f"Modulos NO instalados : {len(not_installed_modules)}",
+    ]
+    if not_installed_modules:
+        module_rows.append(
+            f"⚠ {len(not_installed_modules)} modulo(s) no se instalaron -- revisar "
+            f"el log completo (--out-logs) para ver el motivo: "
+            f"{', '.join(not_installed_modules)}"
+        )
 
     rows = [f"RESUMEN — {module}"]
     if test_report:
         totals = test_report["totals"]
-        ok = totals["failures"] == 0 and totals["errors"] == 0
+        ok = (
+            totals["failures"] == 0 and totals["errors"] == 0
+            and not process_failed and not modules_failed
+        )
         icon = "✅" if ok else "❌"
         estado = "OK" if ok else "CON FALLOS"
         rows += [
@@ -669,8 +746,15 @@ def print_test_summary(module, db_name, output, test_report):
             f"Fallos           : {totals['failures']}",
             f"Errores          : {totals['errors']}",
             f"Omitidos         : {totals['skipped']}",
-            f"Resultado        : {icon} {estado}",
         ]
+        rows += module_rows
+        if process_failed:
+            rows.append(
+                f"⚠ El proceso de Odoo termino con codigo de salida {exit_code} "
+                "-- probablemente crasheo instalando modulos ANTES de llegar a "
+                "algun test (revisar el log completo, no solo este resumen)."
+            )
+        rows.append(f"Resultado        : {icon} {estado}")
     else:
         result_match = re.search(
             r"(\d+) failed, (\d+) error\(s\) of (\d+) tests", output
@@ -678,17 +762,32 @@ def print_test_summary(module, db_name, output, test_report):
         rows.append("(hook de resultados no disponible, usando resumen de texto)")
         if result_match:
             failed, errors, tests_run = (int(x) for x in result_match.groups())
-            ok = failed == 0 and errors == 0
+            ok = failed == 0 and errors == 0 and not process_failed and not modules_failed
             icon = "✅" if ok else "❌"
             estado = "OK" if ok else "CON FALLOS"
             rows += [
                 f"Tests ejecutados : {tests_run}",
                 f"Fallos           : {failed}",
                 f"Errores          : {errors}",
-                f"Resultado        : {icon} {estado}",
             ]
+            rows += module_rows
+            if process_failed:
+                rows.append(
+                    f"⚠ El proceso de Odoo termino con codigo de salida {exit_code} "
+                    "-- revisar el log completo, no solo este resumen."
+                )
+            rows.append(f"Resultado        : {icon} {estado}")
         else:
             rows.append("(no se detecto el resumen de tests de Odoo)")
+            rows += module_rows
+            icon = "❌" if (process_failed or modules_failed) else "❓"
+            estado = "CON FALLOS" if (process_failed or modules_failed) else "DESCONOCIDO"
+            rows.append(
+                f"⚠ El proceso de Odoo termino con codigo de salida {exit_code}."
+                if process_failed else
+                "⚠ No se pudo determinar si los tests pasaron o no."
+            )
+            rows.append(f"Resultado        : {icon} {estado}")
     rows.append(
         f"Cobertura        : {coverage_match.group(1)}%"
         if coverage_match else "Cobertura        : (no disponible)"
@@ -977,13 +1076,18 @@ def run_command():
         print("Ejecutando tests con cobertura...")
         exit_code, output = run_and_capture(full_cmd)
         test_report = read_container_json(container, container_test_report_path)
-  
-        print_test_summary(modules_label, db_name, output, test_report)
-        
+
+        # Consulta directa a ir_module_module -- DEBE correr antes de borrar
+        # la base (finally, mas abajo). Es la unica fuente confiable de que
+        # se instalo y que no; nunca se determina parseando texto.
+        module_states = query_module_states(container, db_name, closure)
+
+        print_test_summary(modules_label, db_name, output, test_report, exit_code, closure, module_states)
+
         if coverage_json_dest:
             export_container_file(container, container_json_path, coverage_json_dest, "Reporte JSON de cobertura")
         if test_json_dest:
-            export_container_file(container, container_test_report_path, test_json_dest, "Reporte JSON de tests")
+            export_test_json(test_report, closure, module_states, test_json_dest)
         if logs_dest:
             if args.container_log_path:
                 export_container_file(container, args.container_log_path, logs_dest, "Log de la corrida")
