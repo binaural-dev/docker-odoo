@@ -476,6 +476,17 @@ def get_custom_modules(config, instance):
     return []
 
 
+def resolve_container_addon_paths(config, instance):
+    """Paths de addons de la instancia, convertidos al path que tienen DENTRO
+    del contenedor (montados via ./src:/home/odoo/src en compose_generator.py).
+    Es el equivalente, para 'scripts/odoo-test --addons', de lo que antes
+    resolvia ese script directamente leyendo instances.json."""
+    inst_conf = config["instances"][instance]
+    odoo_conf = resolve_instance_config(inst_conf, config)
+    addons = odoo_conf.get("addons", [])
+    return [f"/home/odoo/{a}" for a in addons if os.path.isdir(os.path.join(BASE_PATH, a))]
+
+
 def prompt_selection(options, title, multi=False):
     """
     Generic interactive selection menu.
@@ -822,6 +833,9 @@ def main():
             "  ./odoo test -i integra-17 -m binaural_brand             # con flags\n"
             "  ./odoo test integra-17 binaural_brand --recursive\n"
             "  ./odoo test integra-17 binaural_brand --out-coverage-json ./reportes\n"
+            "  ./odoo test integra-17 binaural_brand --out-json ./reportes\n"
+            "  ./odoo test integra-17 binaural_brand --all-verbose     "
+            "# guarda todo en ./logs/\n"
             "  ./odoo test                                             "
             "# elige instancia y modulo(s) interactivamente\n"
         ),
@@ -854,6 +868,29 @@ def main():
         help="Exporta el reporte de cobertura en JSON. Si RUTA es un directorio "
              "se guarda como coverage.json dentro; si no, RUTA es el nombre de "
              "archivo completo (ej: ./mi_reporte.json)."
+    )
+    test_p.add_argument(
+        "--out-json", default=None, metavar="RUTA",
+        help="Exporta el resultado exacto de los tests (por test, separado en "
+             "at_install/post_install) en JSON. Mismo criterio de RUTA que "
+             "--out-coverage-json."
+    )
+    test_p.add_argument(
+        "--out-logs", default=None, metavar="RUTA",
+        help="Guarda en RUTA la salida completa de la corrida (boot, "
+             "instalacion de modulos, tests, coverage). Mismo criterio de "
+             "RUTA que --out-coverage-json."
+    )
+    test_p.add_argument(
+        "--out-verbose", action="store_true",
+        help="Muestra ademas el detalle por test (fase, resultado, tiempo, queries)."
+    )
+    test_p.add_argument(
+        "--all-verbose", action="store_true",
+        help="Atajo: activa --out-verbose y, para --out-json/--out-coverage-json/"
+             "--out-logs que no se hayan indicado explicitamente, los apunta a "
+             "./logs/ (se crea si no existe) con el nombre por defecto de cada "
+             "uno (test_report.json, coverage.json, test_run.log)."
     )
 
     args = parser.parse_args()
@@ -943,7 +980,31 @@ def main():
     elif args.action == "test":
         if args.module is None:
             args.module = prompt_for_test_modules(config, args.instance)
-        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-test"), args.instance, args.module]
+
+        container = f"odoo-{args.instance}"
+        container_addons = resolve_container_addon_paths(config, args.instance)
+        if not container_addons:
+            print(f"Error: no se encontraron directorios de addons para la instancia '{args.instance}'.")
+            sys.exit(1)
+
+        if args.all_verbose:
+            logs_dir = os.path.join(BASE_PATH, "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            args.out_json = args.out_json or logs_dir
+            args.out_coverage_json = args.out_coverage_json or logs_dir
+            args.out_logs = args.out_logs or logs_dir
+            args.out_verbose = True
+            print(f"--all-verbose: guardando reportes en {logs_dir}/")
+
+        # scripts/odoo-test es standalone (no lee instances.json): este
+        # comando es el unico punto acoplado a docker-odoo-multi, y le pasa
+        # todo lo que necesita por flag (--container, --addons).
+        cmd = [
+            str(Path(BASE_PATH) / "scripts" / "odoo-test"),
+            args.module,
+            "--container", container,
+            "--addons", ",".join(container_addons),
+        ]
         if args.db:
             cmd += ["-d", args.db]
         if args.tags != "all":
@@ -956,6 +1017,12 @@ def main():
             cmd.append("--no-rm-db")
         if args.out_coverage_json:
             cmd += ["--out-coverage-json", args.out_coverage_json]
+        if args.out_json:
+            cmd += ["--out-json", args.out_json]
+        if args.out_logs:
+            cmd += ["--out-logs", args.out_logs]
+        if args.out_verbose:
+            cmd.append("--out-verbose")
         if args.dry_run:
             cmd.append("--dry-run")
         result = subprocess.run(cmd)
