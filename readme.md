@@ -195,13 +195,19 @@ El script `./odoo` es un shim liviano (323 LOC) que delega a `odoo_cli/core/`, e
 | `remove [instance]` | Elimina contenedores y volúmenes. |
 | `fix-files [instance]` | Corrige permisos del filestore. |
 | `psql <instance> -d <db>` | Conecta a PostgreSQL. |
+| `pw <instance> [-d <db>] [-l <login>] [-p <password>]` | Restablece la contraseña de un usuario. |
 | `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
 | `init [instance]` | Verifica que los addons referenciados existen. |
+| `new [nombre] [repo] [branch] [version]` | Wizard: clona el repo del cliente y da de alta la instancia en `instances.json`. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `update-tags [proyecto] [branch_origin] [submodulo] [tag] [--v]` | Bumpea uno o más submódulos a un tag específico, en una rama nueva para PR. Todo argumento faltante se pregunta interactivamente (proyecto, rama base, submódulo, tag — con menú de tags filtrable, ej: `19, alpha`). Push y `gh pr create` se ofrecen al final, cada uno con su propia confirmación. |
 | `submodule-status [proyecto]` | Muestra en qué tag/rama/hash está parado cada submódulo (y el repo del proyecto en sí) — de solo lectura, no toca git. Sin proyecto, corre sobre todos los de `src/custom/`. |
+| `validate-instances` | Valida `instances.json` de forma explícita (ya corre implícitamente antes de cualquier comando). |
 | `hosts [status\|show\|apply\|dry-run]` | Sincroniza `/etc/hosts` con los subdominios de las instances. Ver [Subdominios locales por instance](#subdominios-locales-por-instance). |
 | `tui` | Lanza la TUI interactiva (equivalente a `./odoo-tui`). |
+
+Referencia detallada de cada comando (comportamiento interno, validaciones,
+gotchas): [`docs/comandos-odoo.md`](docs/comandos-odoo.md).
 
 ### Ejemplos
 
