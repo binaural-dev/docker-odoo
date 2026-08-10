@@ -937,13 +937,23 @@ def run_command():
         "--recursive", action="store_true",
         help="Calcula el subarbol completo de dependencias (dependientes + "
              "dependencias), muestra el arbol y pide confirmacion antes de "
-             "ejecutar. Sin este flag, solo se instala/testea el modulo indicado."
+             "ejecutar (ver --no-confirm para saltar esa confirmacion). Sin "
+             "este flag, solo se instala/testea el modulo indicado."
     )
     parser.add_argument(
         "--exclude", default="",
         help="Modulos a omitir del subarbol, separados por coma "
              "(ej: binaural_mobile,binaural_commissions). Solo tiene efecto "
              "junto con --recursive."
+    )
+    parser.add_argument(
+        "--no-confirm", action="store_true",
+        help="Salta las confirmaciones interactivas de --recursive (la "
+             "pregunta de 'Continuar?' y la de modulos arrastrados por "
+             "--exclude), asumiendo la respuesta por defecto. Pensado para "
+             "uso en automatizacion/CI, donde no hay una terminal esperando "
+             "un input() -- sin esto, --recursive se cuelga o revienta con "
+             "EOFError al correr sin stdin interactivo."
     )
     parser.add_argument(
         "--no-rm-db", action="store_true",
@@ -1039,6 +1049,10 @@ def run_command():
                 print(f"  {i}) {dep}")
             if args.dry_run:
                 print("(en la ejecucion real se preguntara si omitirlos)")
+            elif args.no_confirm:
+                print("(--no-confirm: se asume la respuesta por defecto, si, se omiten)")
+                excluded.update(dragged)
+                closure = [m for m in closure if m not in excluded]
             else:
                 answer = input("Omitirlos tambien? [si/no] (por defecto si): ").strip().lower()
                 if answer not in ("no", "n"):
@@ -1050,6 +1064,8 @@ def run_command():
         print_recursive_overview(modules_arg, closure, excluded, modules, reverse)
         if args.dry_run:
             print("\n(dry-run: no se pedira confirmacion)")
+        elif args.no_confirm:
+            print("\n(--no-confirm: se continua sin pedir confirmacion)")
         else:
             confirm_recursive_run(closure)
 
