@@ -191,9 +191,15 @@ Este archivo se importa (via sitecustomize, automatico si su directorio esta
 en PYTHONPATH) en CUALQUIER proceso python3 de la cadena de comandos, no solo
 en el proceso de Odoo -- incluyendo "python3 -m coverage report -m", que
 corre despues de Odoo y tambien hereda PYTHONPATH/CICD_TEST_REPORT_PATH. Por
-eso el flush final (atexit) esta condicionado a _ENGAGED: sin ese guard, la
-salida normal de ese proceso auxiliar pisaria el reporte ya escrito con uno
-vacio, ya que nunca llama a odoo.tests.loader.make_suite.
+eso el flush final (atexit) esta condicionado a _IS_MAIN (env var
+CICD_TEST_HOOK_ROLE=main, puesta SOLO alrededor del sub-comando de coverage
+run que ejecuta /usr/bin/odoo): sin ese guard, la salida normal de ese
+proceso auxiliar pisaria el reporte ya escrito con uno vacio, ya que nunca
+llama a odoo.tests.loader.make_suite. A diferencia de un guard basado en
+"ya corrio algun test" (_ENGAGED), _IS_MAIN SI permite escribir el reporte
+(en ceros, con "engaged": false) cuando Odoo crashea instalando modulos
+antes de llegar a un test -- ese caso debe quedar registrado, no omitido,
+para que un consumidor pueda distinguirlo de una corrida sana sin tests.
 
 Ademas de pass/fail, captura por su cuenta tiempo y cantidad de queries SQL
 por test (independiente del logger de stats que usa Odoo internamente para
@@ -224,6 +230,20 @@ _TEST_START = {}
 _OUT_PATH = os.environ.get("CICD_TEST_REPORT_PATH", "/tmp/test_report.json")
 ENGAGED_MARKER = "===CICD_TEST_HOOK_ENGAGED==="
 
+# Este archivo se carga (via sitecustomize) en CUALQUIER proceso python3 de la
+# cadena de bash que herede PYTHONPATH -- no solo el que corre /usr/bin/odoo,
+# tambien "python3 -m coverage report -m", "coverage erase", etc. Antes se
+# usaba _ENGAGED (abajo) para que solo el proceso que de verdad corrio tests
+# escribiera el reporte, pero eso mezclaba dos cosas distintas: evitar que un
+# proceso auxiliar pise el reporte bueno, Y evitar escribir un reporte vacio
+# cuando Odoo crashea instalando modulos ANTES de llegar a un test. Ese
+# segundo caso es exactamente el que se queria poder distinguir (ver
+# compute_verdict en el script principal), asi que ahora se separan: esta
+# marca (env var puesta SOLO alrededor del sub-comando de coverage run, no de
+# toda la cadena) identifica al proceso real de Odoo sin importar si llego a
+# engancharse con algun test.
+_IS_MAIN = os.environ.get("CICD_TEST_HOOK_ROLE") == "main"
+
 try:
     import odoo.tests.loader as _loader
     import odoo.tests.result as _result_mod
@@ -250,7 +270,14 @@ def _summarize(records):
 
 
 def _flush():
-    if not _ENGAGED:
+    # Solo el proceso real de Odoo escribe -- nunca los procesos auxiliares
+    # de la misma cadena de bash (coverage report -m, pip install, etc.), que
+    # no llevan CICD_TEST_HOOK_ROLE=main y pisarian el reporte bueno con uno
+    # vacio de su propia memoria (nunca llamaron a make_suite). A diferencia
+    # del chequeo viejo (basado en _ENGAGED), esto SI escribe aunque Odoo
+    # crashee instalando modulos antes de cualquier test -- ese caso debe
+    # quedar registrado (en ceros, con "engaged": false), no omitido.
+    if not _IS_MAIN:
         return
     with _LOCK:
         payload = {
@@ -261,6 +288,7 @@ def _flush():
         key: payload["at_install"][key] + payload["post_install"][key]
         for key in ("testsRun", "failures", "errors", "skipped")
     }
+    payload["engaged"] = _ENGAGED
     payload["engaged_marker"] = ENGAGED_MARKER
     tmp_path = _OUT_PATH + ".tmp"
     with open(tmp_path, "w") as f:
@@ -419,6 +447,18 @@ def generate_db_name(module):
     return f"test_{safe_module}_{ts}_{suffix}"[:63]
 
 
+def random_high_port():
+    """Puerto al azar en 20000-59999, para --http-port/--gevent-port.
+
+    No hay forma de chequear puertos libres DENTRO del contenedor desde el
+    host sin otro exec de por medio, asi que esto no garantiza que el puerto
+    este libre -- pero alcanza para lo que hace falta: evitar los puertos
+    fijos (8069/8072) que ya usa el proceso principal del contenedor si el
+    contenedor no se recreo entre corridas, y reducir la chance de colision
+    si corren dos test en paralelo contra el mismo contenedor."""
+    return 20000 + int.from_bytes(os.urandom(2), "big") % 40000
+
+
 def db_exists(container, db_name):
     cmd = [
         "docker", "exec", container, "psql", "-d", "postgres", "-tAc",
@@ -520,19 +560,69 @@ def export_container_file(container, container_path, dest_path, label):
         print(f"⚠ No se pudo exportar {label.lower()}: {result.stderr.strip()}")
 
 
-def export_test_json(test_report, closure, module_states, dest_path):
+def _empty_phase_summary():
+    return {"testsRun": 0, "failures": 0, "errors": 0, "skipped": 0, "tests": []}
+
+
+def empty_test_report():
+    """Mismo shape que escribe el hook (HOOK_SOURCE._flush) cuando nunca se
+    engancho con ningun test -- se usa como fallback cuando ni siquiera el
+    hook llego a escribir un reporte (caso patologico: proceso matado con
+    SIGKILL/OOM, atexit nunca corrio). Garantiza que "totals"/"at_install"/
+    "post_install" SIEMPRE existan, para que ningun consumidor necesite
+    chequeos defensivos por una key ausente."""
+    return {
+        "at_install": _empty_phase_summary(),
+        "post_install": _empty_phase_summary(),
+        "totals": {"testsRun": 0, "failures": 0, "errors": 0, "skipped": 0},
+        "engaged": False,
+        "engaged_marker": "===CICD_TEST_HOOK_ENGAGED===",
+    }
+
+
+def compute_verdict(test_report, exit_code, closure, module_states):
+    """Unica fuente de verdad de pass/fail, usada tanto por print_test_summary
+    (consola) como por export_test_json (--out-json) -- evita que un
+    consumidor externo (ej. _bincli_fork) tenga que reimplementar esta logica
+    por su cuenta para saber si la corrida esta realmente OK."""
+    totals = test_report["totals"]
+    not_installed = [m for m in closure if module_states.get(m) != "installed"]
+    reasons = []
+    if exit_code != 0:
+        reasons.append("process_exit_nonzero")
+    if not_installed:
+        reasons.append("modules_not_installed")
+    if totals["failures"] > 0:
+        reasons.append("test_failures")
+    if totals["errors"] > 0:
+        reasons.append("test_errors")
+    if not test_report.get("engaged") and totals["testsRun"] == 0:
+        reasons.append("no_tests_ran")
+    return {
+        "passed": not reasons,
+        "fail_reasons": reasons,
+        "not_installed_modules": not_installed,
+    }
+
+
+def export_test_json(test_report, exit_code, closure, module_states, dest_path):
     """Escribe el reporte de tests a dest_path, agregandole "modules" (total/
-    installed/not_installed, de query_module_states -- nunca de texto). No es
-    un 'docker cp' directo del JSON del contenedor porque esta key se calcula
-    en el host, despues de leer el reporte."""
+    installed/not_installed, de query_module_states -- nunca de texto) y
+    "verdict" (compute_verdict). No es un 'docker cp' directo del JSON del
+    contenedor porque esas keys se calculan en el host, despues de leer el
+    reporte. test_report nunca es None aca: si el hook no escribio nada, se
+    usa empty_test_report() -- el JSON exportado SIEMPRE tiene el shape
+    completo, nunca solo "modules"."""
+    report = test_report if test_report is not None else empty_test_report()
     installed_modules = [m for m in closure if module_states.get(m) == "installed"]
     not_installed_modules = [m for m in closure if m not in installed_modules]
-    payload = dict(test_report) if test_report else {}
+    payload = dict(report)
     payload["modules"] = {
         "total": len(closure),
         "installed": installed_modules,
         "not_installed": not_installed_modules,
     }
+    payload["verdict"] = compute_verdict(report, exit_code, closure, module_states)
     parent = os.path.dirname(dest_path)
     if parent:
         os.makedirs(parent, exist_ok=True)
@@ -695,23 +785,13 @@ def print_verbose_test_details(test_report):
 
 def print_test_summary(module, db_name, output, test_report, exit_code, closure, module_states):
     """Muestra un resumen final prolijo. La fuente de verdad de pass/fail es
-    el JSON del hook de tests (test_report, ver HOOK_SOURCE arriba): exacto
-    porque viene de OdooTestResult, no de parsear texto. Si por algun motivo
-    el hook no genero el JSON, se cae al regex sobre la salida como respaldo
-    (igual que antes de tener el hook).
-
-    exit_code manda por encima de lo que diga test_report: el hook solo ve
-    resultados de tests que LLEGARON A CORRER -- si Odoo crashea instalando
-    modulos (ej: un data file roto, una tabla que no existe) ANTES de llegar
-    a cualquier test, el hook nunca se entera y el reporte queda vacio/en
-    cero, lo cual se veria como "OK, 0 tests" sin este chequeo, ocultando un
-    fallo real de instalacion. Un exit_code != 0 siempre fuerza CON FALLOS,
-    sea lo que sea que diga test_report.
-
-    closure/module_states (de query_module_states, consulta directa a
-    ir_module_module -- nunca parseo de texto) dan el conteo real de modulos
-    instalados vs no, y fuerzan CON FALLOS igual que exit_code si falta
-    alguno."""
+    compute_verdict (mismo calculo que se exporta en --out-json, ver
+    export_test_json), a su vez basado en el JSON del hook de tests
+    (test_report, ver HOOK_SOURCE arriba): exacto porque viene de
+    OdooTestResult, no de parsear texto. test_report ya viene siempre con el
+    shape completo (empty_test_report() como fallback si el hook no escribio
+    nada -- ver call site); el regex sobre la salida solo se usa como ultimo
+    respaldo si ni siquiera eso esta disponible."""
     coverage_match = re.search(r"^TOTAL\b.*?(\d+)%\s*$", output, re.MULTILINE)
     process_failed = exit_code != 0
     installed_modules = [m for m in closure if module_states.get(m) == "installed"]
@@ -733,12 +813,9 @@ def print_test_summary(module, db_name, output, test_report, exit_code, closure,
     rows = [f"RESUMEN — {module}"]
     if test_report:
         totals = test_report["totals"]
-        ok = (
-            totals["failures"] == 0 and totals["errors"] == 0
-            and not process_failed and not modules_failed
-        )
-        icon = "✅" if ok else "❌"
-        estado = "OK" if ok else "CON FALLOS"
+        verdict = compute_verdict(test_report, exit_code, closure, module_states)
+        icon = "✅" if verdict["passed"] else "❌"
+        estado = "OK" if verdict["passed"] else "CON FALLOS"
         rows += [
             f"Tests ejecutados : {totals['testsRun']} "
             f"(at_install: {test_report['at_install']['testsRun']}, "
@@ -748,7 +825,11 @@ def print_test_summary(module, db_name, output, test_report, exit_code, closure,
             f"Omitidos         : {totals['skipped']}",
         ]
         rows += module_rows
-        if process_failed:
+        if "no_tests_ran" in verdict["fail_reasons"] and process_failed:
+            # Si ya corrieron tests (testsRun > 0), un exit_code != 0 es el
+            # comportamiento normal de Odoo cuando algun test falla/da error
+            # (ya se ve arriba en Fallos/Errores) -- no hace falta ni es
+            # correcto sugerir un crash de instalacion en ese caso.
             rows.append(
                 f"⚠ El proceso de Odoo termino con codigo de salida {exit_code} "
                 "-- probablemente crasheo instalando modulos ANTES de llegar a "
@@ -1006,9 +1087,34 @@ def run_command():
     # Ademas, en ese modo los tests corren dentro de un proceso hijo
     # forkeado que el `coverage run` del proceso padre no puede trazar, asi
     # que el % de cobertura reportado tampoco seria confiable.
+    #
+    # --http-port/--gevent-port en puertos al azar (no los de siempre,
+    # 8069/8072) son necesarios porque --no-http NO evita que Odoo intente
+    # levantar el servidor HTTP: server.py hace
+    # `if config['test_enable'] or (config['http_enable'] and not stop): self.http_spawn()`
+    # y test_enable=True (activado por --test-tags) siempre entra por la
+    # primera condicion, sin importar --no-http. Si el contenedor ya tiene
+    # su propio proceso de Odoo corriendo (el caso normal: no es un
+    # contenedor descartable, es el mismo donde ya vive la instancia), ese
+    # proceso ya tiene 8069/8072 tomados, y el intento de bind falla.
+    #
+    # En Odoo 17.0, ese bind ocurre dentro del thread de background
+    # (http_thread), asi que si falla el proceso sigue vivo -- solo se
+    # imprime un traceback y se pierde el servidor HTTP, que ademas no hace
+    # falta para tests. Pero en Odoo 19.0, http_spawn() construye el
+    # WSGIServer (donde ocurre el bind) en el thread PRINCIPAL antes de
+    # mandar el serve_forever() a background, asi que el fallo pasa ahi
+    # mismo; y Werkzeug 3.x atrapa el EADDRINUSE y llama sys.exit(1) --
+    # matando TODO el proceso antes de llegar a cargar un solo modulo. El
+    # sintoma es un log casi vacio (unas pocas lineas de arranque) y un
+    # "Address already in use" sin ninguna relacion con los modulos que se
+    # querian probar.
+    http_port = random_high_port()
+    gevent_port = random_high_port()
     odoo_cmd = (
         f"odoo --test-tags {test_tags} -d {db_name} -i {modules_str} "
         "--without-demo=True --stop-after-init --workers 0 --no-http "
+        f"--http-port={http_port} --gevent-port={gevent_port} "
         "-c /home/odoo/.config/odoo.conf"
     )
     container_json_path = f"/tmp/coverage_{db_name}.json"
@@ -1031,6 +1137,7 @@ def run_command():
     inner_cmd = (
         f"{hook_env}"
         "pip3 install --quiet coverage && python3 -m coverage erase && "
+        "CICD_TEST_HOOK_ROLE=main "
         f"python3 -m coverage run --rcfile=/home/odoo/.coveragerc --source={source_paths} "
         f"/usr/bin/{odoo_cmd}; "
         f"test_rc=$?; python3 -m coverage report -m; {json_step}exit $test_rc"
@@ -1043,6 +1150,7 @@ def run_command():
     print(f"    export CICD_TEST_REPORT_PATH={container_test_report_path};")
     print(f"    pip3 install --quiet coverage &&")
     print(f"    python3 -m coverage erase &&")
+    print(f"    CICD_TEST_HOOK_ROLE=main \\")
     print(f"    python3 -m coverage run --rcfile=/home/odoo/.coveragerc \\")
     print(f"      --source={source_paths} \\")
     print(f"      /usr/bin/{odoo_cmd};")
@@ -1087,7 +1195,7 @@ def run_command():
         if coverage_json_dest:
             export_container_file(container, container_json_path, coverage_json_dest, "Reporte JSON de cobertura")
         if test_json_dest:
-            export_test_json(test_report, closure, module_states, test_json_dest)
+            export_test_json(test_report, exit_code, closure, module_states, test_json_dest)
         if logs_dest:
             if args.container_log_path:
                 export_container_file(container, args.container_log_path, logs_dest, "Log de la corrida")
