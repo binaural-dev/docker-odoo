@@ -26,6 +26,74 @@ finalizar. Falla si la cobertura no alcanza el threshold.
 
 ---
 
+## `coverage-status` — Escaneo de qué clientes tienen tests (sin Docker)
+
+Recorre `src/custom/*/` buscando `__manifest__.py` + carpeta `tests/`, sin
+levantar Docker (excluye los submódulos compartidos `integra-addons`,
+`third-party-addons`, `odoo-venezuela`). Por cada cliente con al menos un
+módulo testeado, imprime el comando exacto de `coverage-run-all` para medir
+el % real. Es un escaneo de presencia (¿hay tests o no?), no mide cobertura.
+
+```sh
+./scripts/coverage-status \
+  [--pull] [--json] [--only-with-tests] [--help]
+```
+
+- `--pull`: antes de escanear, hace `git pull --ff-only` en cada repo (si
+  está limpio; si tiene cambios sin commitear, lo salta y lo marca "dirty").
+- `--json`: salida en JSON en vez de tabla, para consumir desde otro script.
+- También disponible como `./odoo coverage-status`.
+
+---
+
+## `coverage-run-all` — Ciclo completo de coverage real, automatizado
+
+Corre `coverage.py` real (no un proxy) para uno, varios o todos los clientes
+que `coverage-status` reporta con tests. Por cada instancia:
+
+1. Si tiene `"enabled": false` en `instances.json` (la norma — ver nota
+   abajo), lo activa **temporalmente** y regenera `docker-compose.generated.yml`.
+2. Buildea **solo** esa imagen (`docker compose build odoo-<instancia>`,
+   nunca `./odoo build` sin argumentos, que reconstruye TODAS las instancias).
+3. `./odoo start <instancia>` y espera a que el entrypoint termine de
+   instalar dependencias y el servidor Odoo esté realmente arriba (no basta
+   con que Postgres esté lista — ver "Aprendizajes" abajo).
+4. Corre `scripts/coverage` real y parsea el % de la línea `TOTAL`.
+5. Para el contenedor, borra la imagen **solo si la creó él mismo** (nunca
+   toca imágenes que ya existían antes de esta corrida), y restaura
+   `"enabled": false`.
+6. Al final del lote, `docker builder prune -f` para no acumular cache.
+7. Deja un CSV en `coverage_data/` con el resultado de todos los proyectos.
+
+```sh
+./scripts/coverage-run-all [proyecto ...] \
+  [--pull] [--threshold=70] [--dry-run] \
+  [--keep-running] [--keep-images] [--no-regen] \
+  [--out=reporte.csv] [--help]
+```
+
+- Sin proyectos: corre sobre todos los que tienen tests.
+- `--dry-run`: muestra el plan completo (qué activaría, buildearía, y
+  restauraría) sin tocar nada.
+- `--keep-running`: no para el contenedor al terminar (útil para debug).
+- También disponible como `./odoo coverage [proyecto ...] [flags]`.
+
+**Antes de tocar nada**, hace un backup de `instances.json` en
+`instances.json.bak` — el archivo no está en git, así que esa es la única
+red de seguridad manual si algo falla a mitad de camino (aunque el
+`try/finally` interno ya garantiza restaurar `enabled` incluso ante errores).
+
+**Aprendizajes / por qué existen los `wait_for_*`:** `./odoo start` (docker
+compose up -d) devuelve el control apenas el contenedor arranca, **no**
+cuando el entrypoint interno termina de instalar dependencias y generar el
+`odoo.conf` final con el `addons_path` correcto. Correr coverage antes de
+eso hace que Odoo sólo vea los addons por defecto e instale `base` — 0% de
+cobertura falso, no por falta de tests sino porque nunca se instaló el
+módulo. Por eso se espera explícitamente a la línea `HTTP service ...
+running` en los logs del contenedor antes de correr `scripts/coverage`.
+
+---
+
 ## `migrate-module` — Migración de módulo con vistas (OCA views_migration)
 
 Instala un módulo cargando el helper de migración de vistas de OCA.

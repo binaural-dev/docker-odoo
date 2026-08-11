@@ -27,7 +27,7 @@ KEEP_DB=false
 THRESHOLD=70
 
 show_help() {
-  sed -n '2,17p' "$0"
+  sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -88,8 +88,9 @@ SOURCE_PATHS=${SOURCE_PATHS%,}
 MODULE_NAMES=${MODULE_NAMES%,}
 
 COVERAGERC_PATH="/home/odoo/.coveragerc"
-ODOO_CONTAINER_ID=$(docker compose -f "$COMPOSE_FILE" ps -q "$ODOO_CONTAINER" 2>/dev/null || true)
-DB_CONTAINER=$(docker inspect "$ODOO_CONTAINER_ID" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || echo "host.docker.internal")
+# El contenedor Odoo ya trae PGHOST=db-<db_name> seteado como variable de
+# entorno (ver compose_generator.py) porque así es como el propio Odoo se
+# conecta a su base — psql la toma automáticamente, no hace falta -h.
 
 echo ""
 echo "  ┌─────────────────────────────────────────┐"
@@ -104,7 +105,7 @@ echo ""
 # ── Create temp database ─────────────────────────────────────────────────────
 echo "📦 Creando base de datos temporal '$DB_NAME'..."
 docker_exec bash -c "
-  PGPASSWORD=odoo psql -h $DB_CONTAINER -U odoo -d postgres -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER odoo;\"
+  PGPASSWORD=odoo psql -U odoo -d postgres -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER odoo;\"
 " || {
   echo "❌ No se pudo crear la base de datos '$DB_NAME'."
   exit 1
@@ -117,7 +118,7 @@ cleanup() {
     echo ""
     echo "🧹 Eliminando base de datos temporal '$DB_NAME'..."
     docker_exec bash -c "
-      PGPASSWORD=odoo psql -h $DB_CONTAINER -U odoo -d postgres -c \"DROP DATABASE IF EXISTS \\\"$DB_NAME\\\";\" 2>/dev/null
+      PGPASSWORD=odoo psql -U odoo -d postgres -c \"DROP DATABASE IF EXISTS \\\"$DB_NAME\\\";\" 2>/dev/null
     " || true
     echo "   ✅ DB '$DB_NAME' eliminada."
   fi

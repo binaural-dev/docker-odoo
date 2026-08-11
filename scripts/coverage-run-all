@@ -1,0 +1,459 @@
+#!/usr/bin/env python3
+"""Automated coverage runner: regenera compose (seguro), buildea SOLO las
+instancias pedidas (nunca `./odoo build` sin argumentos), start -> coverage
+real (coverage.py) -> stop, para uno, varios o todos los clientes con tests.
+
+Usage:
+  ./scripts/coverage-run-all                        # todos los que tienen tests/
+  ./scripts/coverage-run-all oxicar contiflex        # sólo esos
+  ./scripts/coverage-run-all --dry-run               # muestra el plan sin tocar nada
+  ./scripts/coverage-run-all --pull                  # git pull --ff-only antes de cada uno
+  ./scripts/coverage-run-all --keep-running          # no para el contenedor al terminar
+  ./scripts/coverage-run-all --threshold=60
+  ./scripts/coverage-run-all --out=reporte.csv
+  ./scripts/coverage-run-all --no-regen              # no regenerar docker-compose.generated.yml
+  ./scripts/coverage-run-all --keep-images           # no borrar las imágenes que este script buildeó
+
+Qué hace por cada proyecto:
+  1. (una sola vez, salvo --no-regen) regenera docker-compose.generated.yml
+     y los Dockerfiles/nginx a partir de instances.json. Esto NO construye
+     imágenes, sólo escribe config — es seguro y rápido.
+  2. `docker compose build odoo-<proyecto>` — SOLO esa imagen (scoped).
+  3. `./odoo start <proyecto>` — scoped, sólo esa instancia + su DB.
+  4. `scripts/coverage --odoo_container=odoo-<proyecto> --modules=... --test_tags=...`
+     y parsea el % real de la línea TOTAL del reporte de coverage.py.
+  5. `./odoo stop <proyecto>` (salvo --keep-running).
+  6. Limpieza: si la imagen de esa instancia NO existía antes de que este
+     script la buildeara, la borra (container + imagen) para no dejar
+     basura acumulándose. Si ya la tenías buildeada de antes (uso normal de
+     desarrollo), la deja intacta — nunca toca algo que no creó él mismo.
+  7. Al final del lote completo, `docker builder prune -f` para limpiar
+     cache de build intermedio (no toca imágenes finales ni volúmenes).
+  8. Guarda un CSV con el resultado de todos los proyectos corridos.
+
+La mayoría de las instancias en instances.json tienen "enabled": false (es el
+mecanismo que evita que `./odoo build` sin argumentos reconstruya las ~54 de
+una). Para poder medir esos proyectos, este script:
+  - activa "enabled": true SOLO para la instancia que está corriendo en ese
+    momento (edición mínima del archivo, preserva todo lo demás byte a byte),
+  - regenera el compose para que aparezca,
+  - hace todo el ciclo build/start/coverage/stop,
+  - y SIEMPRE restaura "enabled": false al terminar (try/finally, así
+    quede como estaba incluso si algo falla a mitad de camino).
+Antes de tocar nada guarda instances.json.bak como red de seguridad manual.
+"""
+
+import argparse
+import csv
+import re
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent.parent
+ODOO = BASE / "odoo"
+COVERAGE_STATUS = BASE / "scripts" / "coverage-status"
+COVERAGE = BASE / "scripts" / "coverage"
+COMPOSE_FILE = BASE / "docker-compose.generated.yml"
+INSTANCES_JSON = BASE / "instances.json"
+
+TOTAL_RE = re.compile(r"^TOTAL(?:\s+\d+)+\s+(\d+)%", re.MULTILINE)
+
+
+def _instance_block_span(text, name):
+    """Byte offsets of the `"<name>": { ... }` block inside the top-level
+    "instances" section, found by brace counting (not a full JSON parse, to
+    avoid reformatting/losing the // comments instances.json allows)."""
+    inst_section = re.search(r'"instances"\s*:\s*\{', text)
+    search_start = inst_section.end() - 1 if inst_section else 0
+    m = re.search(r'"' + re.escape(name) + r'"\s*:\s*\{', text[search_start:])
+    if not m:
+        return None
+    start = search_start + m.end() - 1
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return start, i + 1
+    return None
+
+
+def get_enabled(name):
+    span = _instance_block_span(INSTANCES_JSON.read_text(), name)
+    if not span:
+        return True
+    text = INSTANCES_JSON.read_text()
+    m = re.search(r'"enabled"\s*:\s*(true|false)', text[span[0]:span[1]])
+    return True if not m else m.group(1) == "true"
+
+
+def set_enabled(name, value):
+    text = INSTANCES_JSON.read_text()
+    span = _instance_block_span(text, name)
+    if not span:
+        return False
+    start, end = span
+    new_block, n = re.subn(
+        r'("enabled"\s*:\s*)(true|false)',
+        lambda mo: mo.group(1) + ("true" if value else "false"),
+        text[start:end], count=1,
+    )
+    if n == 0:
+        return False
+    INSTANCES_JSON.write_text(text[:start] + new_block + text[end:])
+    return True
+
+
+def backup_instances_json():
+    bak = BASE / "instances.json.bak"
+    bak.write_text(INSTANCES_JSON.read_text())
+    return bak
+
+
+def discover_candidates():
+    out = subprocess.run(
+        [str(COVERAGE_STATUS), "--json", "--only-with-tests"],
+        cwd=BASE, capture_output=True, text=True, check=True,
+    )
+    import json
+    return json.loads(out.stdout)
+
+
+def build_module_args(entry):
+    name = entry["project"]
+    mods = entry["tested_modules"]
+    modules_arg = ",".join(f"custom/{name}/{m}" for m in mods)
+    tags_arg = ",".join(f"/{Path(m).name}" for m in mods)
+    return modules_arg, tags_arg
+
+
+def regen_compose():
+    """Regenera docker-compose.generated.yml / Dockerfiles / nginx a partir de
+    instances.json. NO construye imágenes -- sólo escribe archivos de config.
+    Mismo primer paso que `./odoo build`, sin el `docker compose build` final.
+    """
+    sys.path.insert(0, str(BASE / ".resources"))
+    from generators.config_loader import load_config, get_unique_odoo_versions
+    from generators.dockerfile_generator import generate_dockerfiles
+    from generators.compose_generator import generate_compose
+    from generators.nginx_generator import generate_nginx_config
+
+    config = load_config(str(BASE))
+    unique_versions = get_unique_odoo_versions(config)
+    dockerfile_map = generate_dockerfiles(str(BASE), unique_versions)
+    generate_compose(str(BASE), config, dockerfile_map)
+    generate_nginx_config(str(BASE), config)
+    return config
+
+
+def service_exists(project):
+    if not COMPOSE_FILE.exists():
+        return False
+    return f"odoo-{project}:" in COMPOSE_FILE.read_text()
+
+
+def image_tag_for(project):
+    """Extract the `image:` tag declared for service odoo-<project> in the
+    generated compose file, by walking its indented block (no YAML lib
+    dependency needed for this — the generator's indentation is fixed)."""
+    lines = COMPOSE_FILE.read_text().splitlines()
+    marker = f"  odoo-{project}:"
+    try:
+        start = lines.index(marker)
+    except ValueError:
+        return None
+    for line in lines[start + 1:]:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= 2:
+            break
+        if line.strip().startswith("image:"):
+            return line.split("image:", 1)[1].strip()
+    return None
+
+
+def image_exists(tag):
+    if not tag:
+        return False
+    out = subprocess.run(["docker", "images", "-q", tag], capture_output=True, text=True)
+    return bool(out.stdout.strip())
+
+
+def db_host_for(project):
+    """Lee el PGHOST que el generador ya le puso al servicio odoo-<project>
+    (así es como el propio Odoo se conecta a su DB — service name de Docker,
+    nunca una IP inspeccionada a mano)."""
+    lines = COMPOSE_FILE.read_text().splitlines()
+    marker = f"  odoo-{project}:"
+    try:
+        start = lines.index(marker)
+    except ValueError:
+        return None
+    for line in lines[start + 1:]:
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= 2:
+            break
+        if line.strip().startswith("PGHOST:"):
+            return line.split("PGHOST:", 1)[1].strip()
+    return None
+
+
+def wait_for_odoo_ready(name, timeout=240):
+    """`./odoo start` vuelve el control apenas el contenedor arranca, pero
+    adentro el entrypoint todavía puede estar instalando dependencias
+    (pip install, git clone) antes de generar el odoo.conf final con el
+    addons_path correcto. Si scripts/coverage corre antes de que eso
+    termine, Odoo lee una config a medio generar y sólo ve los addons
+    default -- exactamente lo que causaba el 0% falso. Esperamos a que el
+    servidor principal del contenedor confirme que ya está escuchando."""
+    print(f"⏳ Esperando a que el entrypoint de odoo-{name} termine (instala deps, genera config)...")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        out = subprocess.run(
+            ["docker", "compose", "-f", COMPOSE_FILE.name, "logs", f"odoo-{name}"],
+            cwd=BASE, capture_output=True, text=True,
+        ).stdout
+        if "HTTP service" in out and "running on" in out:
+            print(f"   ✅ odoo-{name} listo (entrypoint terminado, servidor arriba).")
+            return True
+        time.sleep(3)
+    print(f"   ⚠️  odoo-{name} no confirmó estar listo tras {timeout}s, sigo igual...")
+    return False
+
+
+def wait_for_db(db_host, timeout=90):
+    """Poll pg_isready en el servicio de DB antes de correr coverage --
+    `./odoo start` devuelve el control apenas lanza los contenedores, no
+    cuando Postgres ya acepta conexiones."""
+    print(f"⏳ Esperando a que {db_host} acepte conexiones (hasta {timeout}s)...")
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        rc = subprocess.run(
+            ["docker", "compose", "-f", COMPOSE_FILE.name, "exec", "-T", db_host, "pg_isready", "-U", "odoo"],
+            cwd=BASE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode
+        if rc == 0:
+            print(f"   ✅ {db_host} lista.")
+            return True
+        time.sleep(2)
+    print(f"   ⚠️  {db_host} no respondió pg_isready tras {timeout}s, sigo igual...")
+    return False
+
+
+def stream_run(cmd, cwd):
+    """Run a subprocess, print its output live, and return (returncode, full_stdout)."""
+    proc = subprocess.Popen(
+        cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    lines = []
+    for line in proc.stdout:
+        print(line, end="")
+        lines.append(line)
+    proc.wait()
+    return proc.returncode, "".join(lines)
+
+
+def run_project(entry, threshold, do_pull, keep_running, keep_images, dry_run):
+    name = entry["project"]
+    result = {
+        "project": name, "modules_tested": entry["modules_with_tests"],
+        "coverage_pct": "", "status": "", "detail": "", "cleanup": "",
+    }
+
+    if do_pull:
+        repo = BASE / "src" / "custom" / name
+        dirty = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        if dirty:
+            print(f"  ⚠️  {name}: dirty, no se hace pull")
+        else:
+            subprocess.run(["git", "-C", str(repo), "pull", "--ff-only"], capture_output=True, text=True)
+
+    modules_arg, tags_arg = build_module_args(entry)
+    coverage_cmd = [
+        str(COVERAGE), f"--odoo_container=odoo-{name}",
+        f"--modules={modules_arg}", f"--test_tags={tags_arg}",
+        f"--threshold={threshold}",
+    ]
+
+    was_enabled = get_enabled(name)
+
+    if dry_run:
+        print(f"\n[DRY-RUN] {name}")
+        if not was_enabled:
+            print(f"  🔓 activar temporalmente \"enabled\": true para {name} en instances.json + regenerar compose")
+        print(f"  docker compose -f {COMPOSE_FILE.name} build odoo-{name}")
+        print(f"  {ODOO} start {name}")
+        print("  " + " ".join(coverage_cmd))
+        if not keep_running:
+            print(f"  {ODOO} stop {name}")
+            print("  (borra la imagen si es nueva de este run, salvo --keep-images)")
+        if not was_enabled:
+            print(f"  🔒 restaurar \"enabled\": false para {name} en instances.json + regenerar compose")
+        result["status"] = "DRY-RUN"
+        return result
+
+    print(f"\n{'=' * 70}\n▶️  {name}\n{'=' * 70}")
+
+    toggled = False
+    if not was_enabled:
+        print(f"🔓 Activando temporalmente \"enabled\": true para {name}...")
+        set_enabled(name, True)
+        toggled = True
+        regen_compose()
+
+    try:
+        if not service_exists(name):
+            result["status"] = "SKIP"
+            result["detail"] = f"odoo-{name} no aparece en compose ni tras habilitarlo (revisar instances.json a mano)"
+            return result
+
+        image_tag = image_tag_for(name)
+        pre_existed = image_exists(image_tag)
+
+        print(f"\n🛠️  Buildeando SOLO odoo-{name}...")
+        rc, _ = stream_run(
+            ["docker", "compose", "-f", COMPOSE_FILE.name, "build", f"odoo-{name}"], cwd=BASE,
+        )
+        if rc != 0:
+            result["status"] = "ERROR"
+            result["detail"] = "fallo el build scoped"
+            return result
+
+        print(f"\n▶️  Iniciando {name}...")
+        start_rc = subprocess.run([str(ODOO), "start", name], cwd=BASE).returncode
+        if start_rc != 0:
+            result["status"] = "ERROR"
+            result["detail"] = "fallo ./odoo start"
+            return result
+
+        wait_for_odoo_ready(name)
+
+        db_host = db_host_for(name)
+        if db_host:
+            wait_for_db(db_host)
+
+        try:
+            print(f"\n🧪 Corriendo coverage real en {name}...")
+            rc, stdout = stream_run(coverage_cmd, cwd=BASE)
+            m = TOTAL_RE.search(stdout)
+            if m:
+                result["coverage_pct"] = m.group(1)
+                result["status"] = "OK" if rc == 0 else "BELOW_THRESHOLD_OR_TEST_FAIL"
+            else:
+                result["status"] = "ERROR"
+                result["detail"] = "no se pudo parsear el % de cobertura del output"
+        finally:
+            if not keep_running:
+                print(f"\n⏹️  Deteniendo {name}...")
+                subprocess.run([str(ODOO), "stop", name], cwd=BASE)
+
+                if pre_existed:
+                    result["cleanup"] = "imagen preexistente, no tocada"
+                elif keep_images:
+                    result["cleanup"] = "imagen nueva, conservada (--keep-images)"
+                elif image_tag:
+                    print(f"🧹 Limpiando imagen recién buildeada de {name}...")
+                    subprocess.run(
+                        ["docker", "compose", "-f", COMPOSE_FILE.name, "rm", "-f", "-s", f"odoo-{name}"],
+                        cwd=BASE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    )
+                    rmi_rc = subprocess.run(
+                        ["docker", "rmi", image_tag], cwd=BASE,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    ).returncode
+                    result["cleanup"] = "imagen borrada" if rmi_rc == 0 else "no se pudo borrar la imagen"
+            else:
+                result["cleanup"] = "contenedor sigue corriendo (--keep-running)"
+    finally:
+        if toggled:
+            print(f"🔒 Restaurando \"enabled\": false para {name} en instances.json...")
+            set_enabled(name, False)
+            regen_compose()
+
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Corre coverage.py real, automatizado, para uno, varios o todos los clientes con tests.",
+    )
+    parser.add_argument("projects", nargs="*", help="Proyectos específicos (default: todos los que tienen tests)")
+    parser.add_argument("--pull", action="store_true")
+    parser.add_argument("--keep-running", action="store_true")
+    parser.add_argument("--threshold", default="70")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-regen", action="store_true", help="No regenerar docker-compose.generated.yml")
+    parser.add_argument("--keep-images", action="store_true", help="No borrar las imágenes que este script buildeó")
+    parser.add_argument("--out", default=None)
+    args = parser.parse_args()
+
+    candidates = discover_candidates()
+    by_name = {c["project"]: c for c in candidates}
+
+    if args.projects:
+        missing = [p for p in args.projects if p not in by_name]
+        if missing:
+            print(f"❌ No encontrados (o sin tests) en el scan: {', '.join(missing)}")
+            print(f"   Disponibles: {', '.join(sorted(by_name))}")
+            sys.exit(1)
+        targets = [by_name[p] for p in args.projects]
+    else:
+        targets = candidates
+
+    print(f"🎯 {len(targets)} proyecto(s) a correr: {', '.join(t['project'] for t in targets)}\n")
+
+    if not args.dry_run:
+        bak = backup_instances_json()
+        print(f"💾 Backup de instances.json guardado en {bak} (red de seguridad manual)\n")
+
+    if not args.no_regen and not args.dry_run:
+        print("🔄 Regenerando docker-compose.generated.yml / Dockerfiles / nginx (sin buildear imágenes)...")
+        regen_compose()
+        print("   ✅ Listo.\n")
+
+    results = [
+        run_project(entry, args.threshold, args.pull, args.keep_running, args.keep_images, args.dry_run)
+        for entry in targets
+    ]
+
+    print(f"\n{'=' * 70}\n📊 REPORTE FINAL\n{'=' * 70}")
+    print(f"{'PROYECTO':<28} {'MODULOS':>8} {'COBERTURA':>10} {'ESTADO':<28} {'LIMPIEZA':<32} DETALLE")
+    for r in results:
+        pct = f"{r['coverage_pct']}%" if r["coverage_pct"] else "-"
+        print(f"{r['project']:<28} {r['modules_tested']:>8} {pct:>10} {r['status']:<28} {r['cleanup']:<32} {r['detail']}")
+
+    if args.dry_run:
+        return
+
+    if not args.keep_running:
+        print("\n🧹 Limpiando cache de build intermedio (docker builder prune)...")
+        prune_out = subprocess.run(
+            ["docker", "builder", "prune", "-f"], cwd=BASE, capture_output=True, text=True,
+        )
+        reclaimed = re.search(r"Total reclaimed space:\s*(.+)", prune_out.stdout)
+        print(f"   ✅ Espacio liberado: {reclaimed.group(1).strip() if reclaimed else 'ver output'}")
+    else:
+        print("\n(--keep-running activo: se salteó la limpieza de build cache)")
+
+    out_path = Path(args.out) if args.out else BASE / "coverage_data" / f"coverage-report-{datetime.now():%Y%m%d_%H%M%S}.csv"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["project", "modules_tested", "coverage_pct", "status", "cleanup", "detail"])
+        w.writeheader()
+        w.writerows(results)
+    print(f"\n💾 Reporte guardado en {out_path}")
+
+
+if __name__ == "__main__":
+    main()

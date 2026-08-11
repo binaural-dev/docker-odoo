@@ -1,5 +1,7 @@
 .env
 instances.json
+instances.json.bak
+coverage_data/
 src
 !mcp-server/src
 .resources/Dockerfile

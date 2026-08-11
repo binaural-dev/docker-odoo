@@ -37,6 +37,7 @@ batch.
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -66,7 +67,33 @@ def _build_parser() -> argparse.ArgumentParser:
     Textual TUI if it ever wants to introspect the CLI.
     """
     parser = argparse.ArgumentParser(
-        description="Multi-instance Odoo Docker management CLI."
+        prog="odoo",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "CLI de gestión de instancias Odoo multi-cliente sobre Docker.\n\n"
+            "Cada cliente vive en src/custom/<nombre>/ y tiene su entrada en\n"
+            "instances.json (config + base de datos + puerto). Usa\n"
+            "'./odoo <comando> --help' para ver las opciones de cada comando."
+        ),
+        epilog=(
+            "Comandos por categoría:\n"
+            "  Ciclo de vida       build, start, stop, restart, remove, fix-files\n"
+            "  Acceso / debug      bash, logs, list, psql, pw\n"
+            "  Módulos             update, init\n"
+            "  Git / submódulos    sync, update-tags, submodule-status\n"
+            "  Cobertura de tests  coverage-status, coverage\n"
+            "  Config / infra      new, hosts, validate-instances, tui\n"
+            "\n"
+            "Ejemplos:\n"
+            "  ./odoo start contiflex               levanta sólo esa instancia\n"
+            "  ./odoo bash contiflex                shell root en el contenedor\n"
+            "  ./odoo sync contiflex staging        stash+checkout+pull+submodules\n"
+            "  ./odoo coverage-status               qué clientes tienen tests (sin Docker)\n"
+            "  ./odoo coverage contiflex --dry-run  ve el plan de coverage sin ejecutar nada\n"
+            "\n"
+            "La mayoría de los comandos con instancia opcional preguntan de forma\n"
+            "interactiva cuál usar si no la pasás como argumento."
+        ),
     )
     subparsers = parser.add_subparsers(
         dest="action", help="Comandos disponibles"
@@ -74,7 +101,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # build
     p = subparsers.add_parser(
-        "build", help="Genera configs y construye imágenes Docker"
+        "build",
+        help="Genera configs y construye imágenes Docker",
+        description=(
+            "Genera Dockerfiles/compose/nginx para TODAS las instancias y "
+            "corre 'docker compose build' sin acotar a ninguna. Puede tardar "
+            "mucho y usar mucho disco si hay muchas instancias — para "
+            "buildear una sola imagen puntual, usa "
+            "'docker compose -f docker-compose.generated.yml build odoo-<instancia>' "
+            "en su lugar."
+        ),
     )
     p.add_argument(
         "--no-cache", action="store_true", help="Construir sin caché"
@@ -199,7 +235,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # init
     p = subparsers.add_parser(
-        "init", help="Inicializar addons/repositorios"
+        "init",
+        help="Reporta qué addons faltan clonar (solo lectura, no clona)",
+        description=(
+            "Inspecciona los addon paths de la instancia (o de todas) y "
+            "reporta cuáles ya existen localmente y cuáles faltan clonar. "
+            "No clona nada — es un reporte, no una acción."
+        ),
     )
     p.add_argument(
         "instance", nargs="?", default=None,
@@ -281,6 +323,39 @@ def _build_parser() -> argparse.ArgumentParser:
         help="status (default) | show | apply | dry-run",
     )
 
+    # coverage-status / coverage — sólo aparecen acá para que se listen en
+    # --help; main() intercepta estos dos verbos ANTES de parsear (ver más
+    # abajo) y reenvía sys.argv tal cual a los scripts reales. Un
+    # subparser con nargs=REMAINDER no reenvía bien flags como primer
+    # argumento (p.ej. "--json"), así que evitamos ese camino.
+    subparsers.add_parser(
+        "coverage-status",
+        help="Escaneo rápido (sin Docker) de qué clientes tienen módulos con tests/",
+        description=(
+            "Recorre src/custom/*/ buscando __manifest__.py + carpeta tests/ "
+            "(sin contar submódulos compartidos). No usa Docker, es gratis y "
+            "rápido. Para cada cliente con tests, imprime el comando exacto "
+            "de 'coverage-run-all' para medir el % real.\n\n"
+            "Flags útiles: --json, --pull, --only-with-tests, --help "
+            "(ver 'scripts/coverage-status --help' para el detalle)."
+        ),
+    )
+    subparsers.add_parser(
+        "coverage",
+        help="Corre coverage.py real para una, varias o todas las instancias con tests",
+        description=(
+            "Automatiza el ciclo completo por instancia: activa 'enabled' "
+            "temporalmente si está en false, regenera el compose, buildea "
+            "SOLO esa imagen, levanta el contenedor, espera a que Odoo y la "
+            "DB estén listos, corre coverage.py real, para el contenedor, "
+            "borra la imagen si la creó él mismo, y restaura 'enabled'. "
+            "Sin argumentos corre sobre todos los clientes con tests.\n\n"
+            "Ejemplos: './odoo coverage' (todos) | './odoo coverage contiflex' "
+            "(uno) | './odoo coverage contiflex --dry-run' (solo mostrar el plan).\n"
+            "Ver 'scripts/coverage-run-all --help' para todos los flags."
+        ),
+    )
+
     # new
     p = subparsers.add_parser(
         "new",
@@ -307,6 +382,14 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     """CLI entry point. Returns the process exit code."""
     os.chdir(BASE_PATH)
+
+    # coverage / coverage-status: reenvía todo tal cual a los scripts reales,
+    # sin pasar por argparse (ver el comentario en _build_parser).
+    if len(sys.argv) > 1 and sys.argv[1] in ("coverage", "coverage-status"):
+        script = "coverage-run-all" if sys.argv[1] == "coverage" else "coverage-status"
+        return subprocess.run(
+            [os.path.join(BASE_PATH, "scripts", script), *sys.argv[2:]]
+        ).returncode
 
     parser = _build_parser()
     args = parser.parse_args()
