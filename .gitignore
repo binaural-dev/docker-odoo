@@ -19,6 +19,7 @@ __pycache__
 .DS_Store
 .codegraph
 .tmp_ignored/
+.claude/
 
 # Stray generated files
 click

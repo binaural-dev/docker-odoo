@@ -167,7 +167,7 @@ Los addons de cada instancia se especifican en el campo `addons` de su configura
 
 Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si no se especifica nombre. El subcomando `tui` (ver [TUI interactiva](#tui-interactiva-odoo-tui--odoo-tui)) es un entry point alternativo a `./odoo-tui`.
 
-El script `./odoo` es un shim liviano (323 LOC) que delega a `odoo_cli/core/`, el package que implementa la lógica. Las acciones viven en `odoo_cli/core/actions/` y se invocan vía `odoo_cli/core/dispatch.py`, que mapea `argparse` a acción. El contrato de I/O con el usuario está abstraído en `odoo_cli.core.runner.Runner` (un `typing.Protocol` con `info`/`warn`/`confirm`/`run_streamed`), lo que permite testear las acciones con un `FakeRunner` y deja la puerta abierta a un futuro `TextualRunner` que reutilice las mismas acciones desde la TUI.
+El script `./odoo` es un shim liviano (331 LOC) que delega a `odoo_cli/core/`, el package que implementa la lógica. Las acciones viven en `odoo_cli/core/actions/` y se invocan vía `odoo_cli/core/dispatch.py`, que mapea `argparse` a acción. El contrato de I/O con el usuario está abstraído en `odoo_cli.core.runner.Runner` (un `typing.Protocol` con `info`/`warn`/`confirm`/`run_streamed`), lo que permite testear las acciones con un `FakeRunner` y deja la puerta abierta a un futuro `TextualRunner` que reutilice las mismas acciones desde la TUI.
 
 | Ruta | Responsabilidad |
 |------|-----------------|
@@ -475,10 +475,10 @@ cada uno sea legible y testeable en isolation:
 
 | Ruta | Contenido |
 |------|-----------|
-| `tui/app.py` | `DockerOdooApp` — composición, ciclo de vida, eventos de la app (455 LOC) |
+| `tui/app.py` | `DockerOdooApp` — composición, ciclo de vida, eventos de la app (558 LOC) |
 | `tui/dispatch.py` | `DispatchMixin` — mapea acciones a comandos y orquesta modales (553 LOC) |
 | `tui/runner.py` | Runner async (`stream_command`) — streamea stdout sin bloquear el event loop (218 LOC) |
-| `tui/keybindings.py` | Handlers de atajos (`r`, `Space`, `Esc`, `Tab`, `1`-`4`, etc.) (288 LOC) |
+| `tui/keybindings.py` | Handlers de atajos (`r`, `Space`, `Esc`, `Tab`, `1`-`4`, etc.) (306 LOC) |
 | `tui/models.py` | `Action`, constantes, tipos |
 | `tui/actions.py` | Constructores de comandos (`_odoo_cli_args`, `_script_args`) |
 | `tui/parser.py` | Parseo de progreso `(N/M)` y clasificación de niveles de log |

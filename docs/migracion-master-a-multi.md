@@ -27,7 +27,7 @@ configuración y de mental model.
 | Dockerfile | `.resources/Dockerfile.template` + `.env` | igual, pero **uno por versión de Odoo usada**, compartido entre instancias de esa versión |
 | Postgres | 1 contenedor, 1 perfil de tuning fijo (`postgresql.4gb.2cpu.conf`) | contenedor por `database` definida, tuning por perfil (`small`/`medium`/`large`/`xlarge`), desacoplado de la versión de Odoo |
 | Puerto DB al host | expuesto siempre (`EXTERNAL_PORT_POSTGRES`) | **no expuesto por default** — red interna de Docker; opt-in con `expose_host_port: true` |
-| CLI | `./odoo` (script bash monolítico) | `./odoo` (Python, shim de 323 LOC → delega a `odoo_cli/core/`) |
+| CLI | `./odoo` (script bash monolítico) | `./odoo` (Python, shim de 331 LOC → delega a `odoo_cli/core/`) |
 | Interfaz | solo CLI | CLI + TUI (`./odoo tui` / `./odoo-tui`, Textual) |
 | Clonado de addons | `./odoo init` clona repos según `ENV_TYPE` (`binaural`/`external`) | `./odoo init` es **solo reporte** (qué falta), el clonado es manual o vía `./odoo sync` sobre submódulos existentes |
 | Gestión de submódulos | manual | `./odoo sync`, `./odoo update-tags`, `./odoo submodule-status` |
@@ -52,7 +52,8 @@ configuración y de mental model.
   monolíticas. Se extrajo a un paquete con un `Runner` (`typing.Protocol` con
   `info`/`warn`/`confirm`/`run_streamed`) para que la misma lógica de negocio
   la puedan invocar el CLI (`CliRunner`) y la TUI, sin duplicar código. Quedó
-  en 276 LOC el shim.
+  reducido a un shim delgado (331 LOC hoy, verificado con `wc -l odoo`) que
+  solo arma argparse y delega.
 - **TUI (Textual)**: pensada como capa aditiva — nunca reemplaza al CLI, solo
   arma los comandos y muestra el output en pantalla. Pasó por varias rondas de
   fixes de performance (streaming bloqueante con `Popen`, freezes al togglear
@@ -61,14 +62,25 @@ configuración y de mental model.
 ## 4. Limitación conocida, todavía sin resolver
 
 **No podés tener dos clones de este repo corriendo en paralelo en la misma
-máquina.** `container_name`, la red `odoo-multi` y los puertos están fijos —
-un segundo clone choca con "name already in use" o bind errors. Está
-diagnosticado en [`openspec/pending/multi-environment.md`](../openspec/pending/multi-environment.md)
+máquina.** La red `odoo-multi` (nombre fijo, sin prefijo por proyecto) y los
+puertos de `instances.json` siguen bloqueando esto — un segundo clone choca
+con "name already in use" o bind errors. Está diagnosticado en
+[`openspec/pending/multi-environment.md`](../openspec/pending/multi-environment.md)
 con 3 opciones evaluadas (quitar `container_name` fijo / agregar
 `project_prefix` configurable / documentar `COMPOSE_PROJECT_NAME` como
-workaround) pero **ninguna implementada aún**. Si en la reunión surge la
-pregunta de "¿puedo tener un ambiente de prueba aparte?", la respuesta hoy es
-no sin tocar código.
+workaround). **Corrección (2026-08-11): la primera opción, "quitar
+`container_name` fijo", ya está implementada** — el commit `fd98866`
+(2026-07-22) removió las líneas `container_name:` del generador para otro
+bug (DBs compartidas entre deployments), y `.resources/generators/compose_generator.py`
+así como `docker-compose.generated.yml` ya no fijan `container_name` en
+ningún servicio (verificado con `grep -n "container_name:"`, sin resultados).
+Eso NO alcanza para correr dos clones en paralelo — la red fija y los
+puertos de `instances.json` siguen chocando —, pero la lista de "ninguna
+implementada aún" ya no es exacta para ese ítem puntual. Si en la reunión
+surge la pregunta de "¿puedo tener un ambiente de prueba aparte?", la
+respuesta hoy sigue siendo no sin tocar código (falta namespacear la red y
+los puertos), pero por menos motivos de los que este documento listaba
+originalmente.
 
 ## 5. Guía de migración paso a paso
 
