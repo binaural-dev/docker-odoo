@@ -21,16 +21,18 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
     ├── custom/                        ← Personalizaciones por instancia
     ├── stub_modules/                  ← Stubs enterprise para tests
     ├── scripts/                       ← Scripts de la instancia
+    │   └── run_tests.sh               ← Tests con coverage
     ├── reports/coverage/              ← Reportes de coverage
     └── .opencode/                     ← OpenCode config
         ├── agents/                    ← Agentes SDD (7 agentes)
-        ├── skills/                    ← Skills del proyecto Odoo 19 base (14 skills)
-        ├── commands/                  ← Comandos del proyecto (6 commands)
+        ├── skills/                    ← Skills del proyecto (58 dirs)
+        ├── commands/                  ← Comandos del proyecto (7 commands)
         ├── docs/                      ← Documentación Odoo 19 (654 .md)
         ├── plans/                     ← Planes de migración
         ├── goals/                     ← Goal tracking
-        ├── 17.0/                      ← Skills y docs Odoo 17.0 (80 skills)
-         ├── 19.0/                      ← Skills Odoo 19.0 (104 skills base + 20 nuevos = 124)
+        ├── 17.0/skills/               ← Skills Odoo 17.0 (326 dirs)
+        ├── 19.0/skills/               ← Skills Odoo 19.0 (161 dirs)
+        ├── 16.0/skills/               ← Skills Odoo 16.0 (100 dirs)
         ├── opencode.json              ← Config workspace (override global)
         └── package.json               ← Plugin dependencies (@opencode-ai/plugin)
 ```
@@ -43,14 +45,15 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 
 | Categoría | Cantidad |
 |-----------|----------|
-| skills/19.0/skills/ (99 skills base + 20 nuevos) | **119** |
-| skills/.opencode/skills/ (19.0 base + OpenRAG) | 44 |
-| **Total skills 19.0** | **163** |
-| skills/17.0/skills/ (160 skills + 20 PostgreSQL/BD = 180) | **180** |
-| skills/global (~/.config/opencode/skills/) | ~116 |
-| **TOTAL WORKSPACE** | **379** |
-| Archivos documentación (.opencode/docs/) | 647 |
-| Chunks indexados en OpenSearch | ~2,211 |
+| skills/19.0/skills/ (161 dirs) | **161** |
+| skills/.opencode/skills/ (project: 58 dirs) | **58** |
+| skills/17.0/skills/ (326 dirs) | **326** |
+| skills/16.0/skills/ (100 dirs) | **100** |
+| skills/global (~/.config/opencode/skills/, 155 dirs) | **155** |
+| **TOTAL WORKSPACE (unique)** | **~800** |
+| Claude symlinks (~/.claude/skills/) | **798** |
+| Archivos documentación (.opencode/docs/) | 654 |
+| Chunks indexados en OpenSearch | ~23,658 |
 
 ## Skills del Proyecto
 
@@ -74,6 +77,9 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `odoo-compute-group-visibility` | **NUEVO** — `depends_context('uid')` + `has_group()` pattern, 4 anti-patterns, Odoo core reference |
 | `odoo-button-xpath-patterns` | **NUEVO** — 6 safe patterns for `//header/button` xpath, 4 anti-patterns, decision tree |
 | `odoo-payment-transaction-architecture` | **NUEVO** — M2M table `account_invoice_transaction_rel`, ORM vs raw SQL, payment flow diagrams |
+| `skill-sync-daemon` | **NUEVO** — Daemon systemd user service: sync OpenCode→Claude vía symlinks, polling 30s, 5 fuentes, name-collision protection |
+| `agents-md-maintenance` | **NUEVO** — Protocolo de mantenimiento de AGENTS.md: cuándo actualizar, qué secciones, formato de reglas |
+| `skills-inventory-protocol` | **NUEVO** — Inventario maestro de skills: ubicaciones, conteos, naming conventions, estructura de directorios |
 
 ### Módulos Binaural (`.opencode/skills/`)
 
@@ -86,6 +92,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `binaural-website-sale-delivery` | Métodos de envío, OWL patching |
 | `binaural-website-sale-transit` | Stock en tránsito, mail templates |
 | `l10n-ve-accountant` | Localización contable venezolana |
+| `l10n-ve-currency-rate-live` | Sincronización BCV en vivo, multi-moneda (USD/EUR/CNY/TRY/RUB), retry programado vía `ir.cron.trigger`, TLS hardening, aislamiento de fallos por compañía, logging, cron window, tests. Incluye lecciones de merge conflicts (SyntaxError, pérdida silenciosa de retry logic) del PR #1060. Vive en `src/.opencode/skills/` + ingerida en `openrag` (no en `~/.claude/skills`) |
 | `odoo-combo-product-validation-19.0` | **NUEVO** — Bug recurrente: validaciones custom de "impuesto único" (taxes_id/supplier_taxes_id) que no exceptúan `type='combo'`. 2 módulos afectados (`l10n_ve_accountant`, `binaural_purchase`), checklist de code review, constraints CORE relacionadas (combo_ids/combo_item_ids) |
 | `cadipa-sale-suscription-payment` | **NUEVO** — Portal payment flow + VES conversion + l10n_ve bug fix para cadipa_sale_suscription |
 | `binaural-stock-barcode` | Barcode picking con fake lines |
@@ -96,10 +103,12 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 |-------|-------------|
 | `coverage-workflow` | Ejecutar, analizar y mejorar cobertura. Incluye SDD validation cycle, anti-patterns C1-C14 |
 | `sdd-workflow` | Spec-Driven Development: spec → plan → tasks. Incluye post-implementation validation cycle |
-| `odoo-testing-workflow` | Flujo de tests Odoo. Incluye coverage validation post-implementation |
+| `odoo-testing-workflow` | Flujo de tests Odoo. Incluye coverage validation post-implementation, anti-patterns C1-C14, pytz mock, time-window guards, parent_id immutability |
 | `workspace-structure` | Estructura del workspace, pre-commit, instancias. Incluye container↔instance mapping |
 | `guia_precommit_odoo` | Guía completa del sistema pre-commit: script, hooks, warnings catalog, troubleshooting |
 | `openrag` | OpenRAG RAG: ingestión, búsqueda semántica, chat MCP |
+| `gh-pr-workflow` | **NUEVO** — GitHub CLI (`gh`) para PRs: crear, ver, listar, checkout, leer y responder comentarios de review (`gh api .../pulls/{n}/comments`), safety protocol (nunca merge/approve/force-push sin confirmación del usuario). Disponible en Claude Code (symlink) y OpenCode. |
+| `l10n-ve-website-sale` | Patrones de moneda alterna y tasa BCV en checkout venezolano (`binaural_website_sale`, `binaural_website_sale_delivery`): mixin `ForeignRateCommon`, detección pricelist-aware de moneda alterna, AJAX de delivery, template inline con `t-set`. |
 
 ### Globales (`~/.config/opencode/skills/`)
 
@@ -118,9 +127,50 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `sdd-pm-agent` | PM | Crear tasks.md con trazabilidad EARS |
 | `sdd-builder-agent` | Builder | Implementar código con TDD + worktree |
 | `sdd-qc-agent` | QC | Verificar calidad, qc-report.md, FAIL→BUG loop |
+| `sdd-opencode-delegate-agent` | (Claude, sdd-opencode-runner) | **NUEVO** — Protocolo de delegación del pipeline SDD completo a `opencode run --agent sdd-lead --auto`, para ahorrar tokens de Sonnet |
+| `sdd-opencode-guardrails` | — | **NUEVO** — Guardrails técnicos (permission `deny` por glob en `src/.opencode/agents/*.md`) para que OpenCode corra headless con `--auto` sin poder tocar `odoo-*.0/`/`enterprise-*.0/` ni autocommitear |
+| `sdd-judge-agent` | (Claude, sdd-judge) | **NUEVO** — Verificación final independiente (Haiku) del resultado de OpenCode; no confía en el auto-reporte de `qc-report.md`, veredicto PASS/FAIL con hasta 3 reintentos (R5) |
+| `sdd-openspec-bridge` | — | **NUEVO** — Puente hacia adelante entre el motor SDD y OpenSpec (`Fission-AI/openspec`, adoptado por el plugin de empresa `binaural-dev/IA-stack`); mapea spec.md/plan.md/tasks.md/QC ↔ proposal.md/Requirements-Scenarios/tasks.md/`/opsx:archive`. No migra las ~60 specs existentes en `src/specs/` |
 
-**Flujo**: Lead → Explore → Spec → Architect → Explore → PM → Builder → Explore → QC → Lead (cierre)
+**Plugin de empresa instalado**: `binaural-rol-programador-impl@binaural` (marketplace `binaural-dev/IA-stack`,
+arrastra `binaural-depto-implementacion` + `core`). Trae `flujo-programador`/`docker-odoo`/`odoo-testing` y los
+subagentes `senior-dev`/`code-reviewer` — un flujo ligero humano-en-el-loop, independiente del SDD (no lo
+reemplaza). `binaural-depto-producto` no existe todavía en ese repo (pendiente de su propio roadmap).
+Colisión de nombres a tener presente: `core` trae skills `odoo-base`/`odoo-security`/`odoo-repo-routing`/
+`odoo-localization-flow` — usar con prefijo `core:` para convenciones organizacionales/Onyx/Odoo-vivo; las
+skills sueltas del mismo nombre (sin prefijo) son la profundidad técnica Odoo 17.0/19.0 de este repo.
+OpenSpec (`openspec init --tools claude`) ya corre en los 5 repos de addons con git propio
+(`integra-addons-{17.0,19.0}`, `odoo-venezuela-{17.0,19.0}`, `integra-addons-l10nve_17.0`); vertical `nomina`
+ya tenía historial real, vertical `website` se configuró apuntando a `integra-addons-19.0`.
+
+**Plugins oficiales instalados** (`claude-plugins-official`, 7 de 12 evaluados): `playwright` (MCP e2e,
+complementario para el vertical `website`), `code-review` y `pr-review-toolkit` (revisión genérica — para
+Odoo mandan `odoo-code-review-17.0/19.0` + `binaural-rol-programador-impl:code-reviewer`; ojo con la
+colisión de nombre `code-reviewer` entre `pr-review-toolkit` e IA-stack), `code-simplifier` (segunda opinión
+tras `/simplify`), `claude-md-management` (**usar solo manualmente** — no conoce el diseño deliberado de
+"Skills: where to look" de este `CLAUDE.md`, verificar que esa sección quede intacta tras usarlo),
+`frontend-design` (complementario a las skills OWL Odoo-específicas), `claude-code-setup` (asesor, sin
+fricción). **Descartados a propósito**: `explanatory-output-style`, `learning-output-style`,
+`security-guidance`, `commit-commands` (sin Gate 6 ni formato de commit en español), `feature-dev`
+(compite con `sdd-lead`). Detalle completo en `src/Agents.md`.
+
+**Flujo Modo Manual**: Lead → Explore → Spec → Architect → Explore → PM → Builder → Explore → QC → Lead (cierre)
+**Flujo Modo Delegación (default)**: `sdd-lead` (Sonnet) → `Task(sdd-opencode-runner, dispatch)` → `scripts/sdd_opencode_run.sh` lanza `opencode run --agent sdd-lead --auto` (pipeline completo) dentro de una **sesión tmux detached** y retorna de inmediato (`status:"running"`, no bloquea) → `sdd-lead` repite `Task(sdd-opencode-runner, status-check)` con el `job_id` hasta estado terminal (`done`/`failed`/`orphaned`, vía `scripts/sdd_opencode_status.sh`) → `sdd-judge` (Haiku) → PASS/reintento/escalación. `scripts/sdd_opencode_cleanup.sh` reapea jobs/sesiones tmux con TTL (default 6h).
 **Versiones**: 19.0 (principal) + 17.0 (secundario) — detectado de `__manifest__.py`
+**Plugin instalado**: `swarm-code@swarm-code` (marketplace `apoapps/swarm-code-plugin`) — provee el patrón relay Haiku→CLI (dispatch bloqueante) del que partió `sdd-opencode-runner`; `scripts/sdd_opencode_run.sh` es un wrapper propio, ya no basado en el pipe foreground de `oc-run.sh` del plugin.
+
+**tmux + handoffs tipados (adaptado de `unclebob/swarm-forge`, 2026-08-06/07)**: el pipe foreground original
+(`opencode | while read ... > $OUT`, sin `&`/`nohup`/tmux) moría cuando el pipeline SDD completo excedía el
+timeout del tool Bash — el harness mataba el proceso a mitad de camino, sin checkpoint. swarm-forge resuelve
+esto en su propio dominio (agentes CLI persistentes por rol en tmux, con un daemon `handoffd.bb` que entrega
+mensajes vía outbox/inbox) — se adaptó solo la pieza necesaria: `sdd_opencode_run.sh` ahora lanza `opencode`
+dentro de una sesión tmux detached (`/tmp/sdd-tmux/sdd.sock`, una sesión por `job_id`) que sobrevive tanto a la
+llamada Bash que la creó como al subagente Haiku completo que la disparó — validado experimentalmente con dos
+subagentes independientes sin contexto compartido. Cada job vive en `/tmp/sdd-jobs/<job_id>/` con
+`dispatch.handoff`/`result.handoff` (mensajes tipados con headers `type/from/to/job/status/exit_code`, estilo
+swarm-forge) + `status`/`exit_code`/`output.log`. **No** se adoptó el daemon de swarm-forge ni su topología de
+git-worktree-por-rol: el polling lo hace `sdd-lead` mismo, repitiendo `Task(sdd-opencode-runner, status-check)`
+— no hay tty interactivo que despertar ni múltiples roles concurrentes escribiéndose entre sí.
 
 ### Odoo 17.0 Skills (`.opencode/17.0/skills/`)
 
@@ -472,6 +522,22 @@ OpenRAG usa stack externo que **no se despliega con docker-multi**:
 95. **`binaural_tax`/`binaural_accountant` exigen `company.currency_foreign_id` configurado, y `account.move.currency_id` no puede diferir de la moneda de la compañía**: cualquier `account.move` creado en una compañía con `binaural_tax` instalado dispara `_prepare_tax_totals` → `ValidationError("No foreign currency configured in the company")` si `currency_foreign_id` no está seteado, incluso en tests que no prueban nada de moneda extranjera — todo `setUpClass` que cree facturas debe configurarlo primero. Además, `binaural_accountant._check_currency_id` prohíbe que `move.currency_id` difiera de la moneda base de la compañía — el patrón multi-moneda de este proyecto es `company.currency_foreign_id` + columnas `foreign_*` computadas, nunca cambiar `currency_id` del propio documento. Referencia: Skill `odoo-lve-to-binaural-migration-17.0`.
 96. **Ciclo SDD: NUNCA commitear automáticamente al terminar Build/QC**: el cierre técnico del flujo SDD (tests + QC en verde) no implica autorización para commitear — el usuario decide cuándo y cómo se agrupa el commit en el historial. Tras un caso donde el flujo generó 5 commits intermedios que hubo que rehacer a mano en uno solo (ticket 14303), `sdd-builder-agent` y `sdd-lead-agent` (nuevo Gate 6: Commit Authorization) documentan explícitamente que ningún agente del flujo SDD ejecuta `git commit`/`git merge`/`git push` por su cuenta — el commit final sigue el formato de `crear-texto-conventional-commit.md` y solo se ejecuta cuando el usuario lo autoriza de forma explícita. Referencia: Skill `sdd-builder-agent`, `sdd-lead-agent`.
 
+### Migración `l10n_ve_*` → `binaural_*`: gap real vs funcionalidad nueva, wizard tests y config de anticipos (2026-08-07, ticket 14303 Fase 3)
+
+109. **Antes de asumir que algo es un gap de migración pendiente, verificar contra el PR/commit de origen que introdujo la feature relacionada — no solo contra el estado actual del checkout**: cuando el usuario describe un comportamiento que "debería" existir tras una migración `l10n_ve_*` → `binaural_*` (o cualquier migración entre módulos hermanos), el código destino puede no tenerlo simplemente porque el ORIGEN tampoco lo tuvo nunca — no es un gap de migración, es una funcionalidad nueva a construir en ambos lados. Verificar con `gh pr view <n> --repo <org>/<repo> --json body,commits,files` + `gh pr diff <n> --repo <org>/<repo>` contra el PR que introdujo la feature relacionada en origen, antes de planificar la implementación como "portar código existente". Caso real: se pidió excluir del libro de compras las líneas marcadas `international_purchase_exempt_product=True`; ni el destino (`binaural_invoice`) ni el origen (`l10n_ve_invoice`, confirmado contra el diff completo de `binaural-dev/odoo-venezuela#812`) tuvieron jamás esa lógica — era funcionalidad nueva, cambiando el spec (EARS nuevos) y el plan (sin código de referencia que portar). Referencia: Skill `odoo-lve-to-binaural-migration-17.0` §"Cómo diferenciar un gap de migración real de una funcionalidad nueva".
+110. **`wizard.accounting.reports.currency_system` default `False` en compañías no-VEF hace que los tests que comparan montos absolutos lean el grupo de moneda equivocado**: `_determinate_amount_taxeds()` decide entre `tax_totals["groups_by_subtotal"]` (compañía) y `["groups_by_foreign_subtotal"]` (VEF) según `self.currency_system`, cuyo default (`_default_check_currency_system()`) es `True` solo si `company.currency_id.name == "VEF"`. Un test en una compañía USD que cree el wizard sin forzar `currency_system=True` y compare un `assertEqual` contra `price_unit`/`price_subtotal` de la línea falla con un valor incorrecto (ej. `-500.0` en vez de `0.0`), porque lee el grupo "foreign" (vacío/sin tasa en el fixture), no el de la compañía. Cualquier test nuevo que compare montos absolutos del wizard (no solo el wizard contra sí mismo) DEBE pasar `currency_system=True` explícitamente al crearlo. Referencia: Skill `odoo-lve-to-binaural-migration-17.0` §3, FIX-043 `odoo-code-review-17.0`.
+111. **`binaural_advance_payment`: `res.company.advance_customer_account_id`/`advance_supplier_account_id` exigen tipos de cuenta (`liability_current`/`asset_current`) que un chart of accounts de QA puede no tener**: si al postear una factura/pago con anticipos aparece `UserError: "You must configure the advance customer account and the advance supplier account in the company settings"`, verificar primero si existe algún `account.account` del tipo requerido (`env['account.account'].search([('account_type','=','liability_current')])`) antes de intentar configurar el campo — el chart of accounts venezolano de una BD de QA puede no tener ningún `liability_current`, y hay que crear una cuenta nueva de ese tipo explícitamente. El dominio del campo es solo de vista (un `write()` directo no lo valida), pero no reutilizar por comodidad una cuenta de tipo incorrecto (ej. `asset_current` para el campo de cliente) — invierte la semántica contable del anticipo. Referencia: Skill `odoo-lve-to-binaural-migration-17.0` §4 "Gotcha: advance_customer_account_id/advance_supplier_account_id".
+
+### Code Review de PR #2461: DRY entre módulos dependientes, override de hook con `None` semántico y `addons_path` anidado (2026-08-07)
+
+112. **DRY entre módulos dependientes: si B depende de A, mixear/heredar la lógica de A — nunca reimplementarla**: cuando un módulo B (`binaural_website_sale_delivery`) ya depende de un módulo A (`binaural_website_sale`) y necesita lógica que A ya expone como mixin (`ForeignRateCommon._get_foreign_display_values()`), el controller de B DEBE mixear ese mixin y llamar al helper — nunca copiar el bloque de cálculo "porque son solo unas líneas". Caso real: `_order_summary_values()` en `binaural_website_sale_delivery/controllers/website_sale.py` reimplementaba manualmente la detección de `is_pricelist_foreign`/`alternate_currency`/`alternate_total`, duplicando byte a byte el bloque de `common.py` — detectado en review de PR #2461 (`manuelgc1201`) como riesgo de divergencia silenciosa entre el render de página y el AJAX de delivery sobre la misma orden. Fix: `class BinauralWebsiteSaleDelivery(ForeignRateCommon, Delivery)` + `self._get_foreign_display_values(order)`. Referencia: Skill `l10n-ve-website-sale` §8.6, spec `binaural_website_sale/specs/pricelist-aware-multicurrency/`.
+113. **Override de un método core con parámetro `=None` semánticamente válido (no "ausente") debe manejar explícitamente el caso `None`**: si el método padre documenta que `param=None` dispara un comportamiento propio (ej. "resetear"), un override que solo actúa `if param:` dentro de la rama truthy deja sin ejecutar ese comportamiento en el caso `None` — viola el contrato LSP del método que sobrescribe. Caso real: `WebsiteSale._apply_pricelist(pricelist=None)` (Odoo core) usa `None` para resetear el pricelist a su default (ruta `/shop/pricelist` sin código promo, llamada real en `website_sale/controllers/main.py:964`); el override de `BinauralWebsiteSale._apply_pricelist()` solo llamaba `self._compute_foreign_rate(order)` `if pricelist and (order := request.cart)`, dejando la tasa/total alterno stale tras un reset. Fix: quitar la condición sobre `pricelist`, recalcular siempre que exista `request.cart`. Referencia: Skill `odoo-solid-lsp-isp-dip-19.0` (LSP: honrar todo el contrato del padre), spec `binaural_website_sale/specs/pricelist-aware-multicurrency/`.
+114. **`addons_path`/`INSTANCE_ADDONS` no recorre subcarpetas anidadas — cada entrada debe apuntar directamente a la carpeta que contiene los módulos**: si `INSTANCE_ADDONS` lista `src/custom/<X>` pero los módulos corregidos viven en `src/custom/<X>/<subcarpeta>/<modulo>`, Odoo NUNCA los encuentra — `.resources/entrypoint.d/400-auto-detect-addons` agrega cada entrada de `INSTANCE_ADDONS` tal cual como una única carpeta de addons_path, sin recursión. Síntoma combinado: si el módulo compartido "de respaldo" (encontrado en otra entrada de `addons_path`, ej. `src/odoo-venezuela-19.0/l10n_ve_sale`) tiene un manifest con `version` de una serie Odoo distinta (ej. `"17.0.x"` en un stack 19.0), Odoo lo marca `installable=False` ("incompatible version") — bloqueando la instalación de cualquier módulo que dependa de él, aunque el código en sí esté correcto. Antes de asumir un bug de dependencias, verificar: (1) qué copia del módulo realmente resuelve `addons_path` (`docker exec <container> env | grep INSTANCE_ADDONS`), (2) si hay una copia corregida en una subcarpeta no alcanzada, (3) el `version` del manifest de la copia que sí se carga. Caso real: instancia `odoo-binaural-consultoria-migr-sitio-web-v19-tests`, PR #2461 — el override 19.0 correcto de `l10n_ve_sale`/`l10n_ve_stock` vivía en `src/custom/MIGR-SITIO-WEB-V19/odoo-venezuela/`, inalcanzable porque `INSTANCE_ADDONS` solo listaba `src/custom/MIGR-SITIO-WEB-V19`. **Chequeo adicional antes de bumpear versiones a mano**: si la copia "de respaldo" que resuelve el `addons_path` tiene manifests con versión de otra serie, verificar primero `git branch --show-current` (y `git status`) dentro del repo de addon-pool compartido (ej. `src/odoo-venezuela-19.0`) — el repo completo puede estar checked-out en la rama git equivocada (ej. `17.0` en un directorio nombrado `-19.0`), lo que explica que TODOS sus manifests tengan versión de la serie vieja. En ese caso el fix es `git checkout <serie> && git pull` en ese repo, **nunca** editar manifests a mano uno por uno — es un síntoma de checkout, no un typo de versión. Caso real: `src/odoo-venezuela-19.0` (PR #2435, `binaural_website_sale`) estaba en rama `17.0`; 11 módulos `l10n_ve_*`/`od_journal_sequence` marcaban `installable=False` en cascada, bloqueando `binaural_website_sale` (depende de `l10n_ve_sale`/`l10n_ve_stock`). Referencia: Skill `docker-odoo` (plugin `binaural-rol-programador-impl`).
+
+115. **Al hacer override de un método heredado decorado con `@http.route`, redeclarar TODOS los kwargs del padre — no solo los que cambian**: Odoo NO combina los kwargs del decorador entre la ruta del padre y la del override; cada `@http.route` en la subclase reemplaza la definición completa. Omitir un kwarg del padre no lo "hereda" con su valor por defecto real — cae al default genérico del decorador, que puede ser peligroso: `sitemap=False` (default) borra la URL de `sitemap.xml` para TODOS los websites que instalen el módulo (regresión de SEO silenciosa, nadie la nota hasta que cae el tráfico orgánico), y sin `handle_params_access_error` un producto/registro sin acceso o borrado devuelve 403/500 en vez de un redirect/404 limpio. Antes de escribir un override de una ruta core, leer el decorador COMPLETO del método padre (`grep -n "@route\|@http.route" -A15` en el archivo del core) y copiar cada kwarg que no se esté cambiando intencionalmente. Nota adicional para `website_sale.controllers.main`: helpers como `sitemap_products`/`sitemap_shop` están definidos DENTRO del cuerpo de la clase `WebsiteSale` (no a nivel de módulo) — se referencian como `WebsiteSale.sitemap_products`, `from ... import sitemap_products` da `ImportError`; y existe la constante `SHOP_PATH` en `odoo.addons.website_sale.const` para no hardcodear `/shop` en las rutas del override. Caso real: PR #2435 (`binaural_website_sale.controllers.website_sale.BinauralWebsiteSale.product()`), review de `manuelgc1201`. Referencia: Skill `binaural-website-sale` §2.x "Herencia de decorador `@http.route`".
+
+116. **`scripts/odoo-test` (y por lo tanto `./odoo test <instancia> <modulo>`) no pasa `--http-port` — falla en instancias con servidor Odoo ya corriendo en 8069**: a diferencia de `scripts/run_tests.sh` (que sí usa `--http-port=19999` explícito en todas sus invocaciones), el comando interno de `scripts/odoo-test` corre con `--workers 0 --no-http` pero SIN override de puerto. En una instancia cuyo contenedor ya tiene su propio servidor Odoo escuchando en 8069 (el caso normal de cualquier instancia levantada con `./odoo start`), el subproceso de test choca con "Address already in use / Port 8069 is in use" y nunca llega a instalar ni correr ningún test — el síntoma es engañoso: reporta 0% de cobertura y "no data was collected" en vez de un error de tests, como si el módulo no tuviera código ejecutado. Para instancias con servidor vivo, usar `scripts/run_tests.sh` (o `scripts/coverage`) en vez de `./odoo test`, o verificar primero que la instancia esté detenida. Referencia: Skill `docker-odoo` (plugin `binaural-rol-programador-impl`).
+
 ### Testing Infrastructure & Scripts (2026-08-05)
 
 97. **Ciclo de validación SDD: pre-commit → tests no-cov → tests con coverage → comparar**: después de completar implementación SDD, ejecutar en orden: (1) `scripts/precommit` para validar código, (2) tests sin coverage con `--no-cov --keep-db` para confirmar que pasan, (3) tests con coverage sobre la misma DB con `python3 -m coverage run` manual, (4) `scripts/coverage` o equivalente para obtener reporte. **NUNCA saltarse un paso** — cada paso valida un aspecto diferente. Referencia: Skill `coverage-workflow`, validación `binaural-mig-international-purchase` (2026-08-05).
@@ -482,7 +548,61 @@ OpenRAG usa stack externo que **no se despliega con docker-multi**:
 
 100. **Interpretación de coverage: SDD-specific vs total**: el coverage total de un módulo incluye código pre-existente NO modificado por la migración SDD. Ejemplo: `binaural_invoice` tiene 65% total, pero los archivos tocados por SDD (`res_company.py`, `account_journal.py`) tienen 100%. **Al reportar coverage SDD, desglosar**: (1) archivos modificados por SDD, (2) código pre-existente no cubierto. El SDD-specific coverage suele ser 95%+ aunque el total sea bajo por código legacy. Referencia: validación `binaural-mig-international-purchase` (2026-08-05).
 
-101. **`run_tests.sh` Pass 2 grep filter oculta fallos de coverage**: el script pasa la salida por `grep -E "(Starting|FAILED|ERROR|passed|failed|error\(s\)|TOTAL|Name|Stmts|Miss)"`. Si el paso de coverage falla antes de imprimir el reporte (ej: `pip3 install coverage` falla, o `coverage run` aborta), el grep no muestra ningún error visible — el log simplemente termina sin sección de coverage. **Verificar manualmente**: `docker exec -u root <container> python3 -m coverage report -m --include='*/<module>/*'`. Si dice "No data to report", el `coverage run` no llegó a ejecutarse. Referencia: Skill `coverage-workflow` Anti-Pattern C11.
+ 101. **`run_tests.sh` Pass 2 grep filter oculta fallos de coverage**: el script pasa la salida por `grep -E "(Starting|FAILED|ERROR|passed|failed|error\(s\)|TOTAL|Name|Stmts|Miss)"`. Si el paso de coverage falla antes de imprimir el reporte (ej: `pip3 install coverage` falla, o `coverage run` aborta), el grep no muestra ningún error visible — el log simplemente termina sin sección de coverage. **Verificar manualmente**: `docker exec -u root <container> python3 -m coverage report -m --include='*/<module>/*'`. Si dice "No data to report", el `coverage run` no llegó a ejecutarse. Referencia: Skill `coverage-workflow` Anti-Pattern C11.
+
+102. **Vals mutation en write()**: NUNCA mutar el dict `vals` dentro de un override de `write()` o de un helper llamado desde `write()` si ese mismo `vals` se reutiliza en `super().write(vals)`. La mutación se aplica a TODOS los registros del recordset, incluyendo los que fueron excluidos de la validación. Usar `dict(vals)` (copia superficial) al pasar vals a helpers que puedan inyectar valores por defecto. Si el helper inyecta un default, aplicarlo solo al subconjunto via `records_to_validate.write(injection)`. Referencia: FIX-060, skill `odoo-vals-mutation-safety-19.0`, PR #14405.
+
+103. **Trigger de validación incompleto en write()**: Cuando un override de `write()` ejecute validación condicional basándose en la presencia de campos en `vals`, incluir TODOS los campos que alteren el estado de validación en la condición. Si la validación depende de `type`, agregar `'type' in vals` a la condición `if`. El filtro de records debe usar `vals.get('type', r.type)` para detectar cambios de type en vals, no solo `r.type`. Referencia: FIX-061, skill `odoo-write-trigger-completeness-19.0`, PR #14405.
+
+104. **Context `skip_*` propagado desde create()**: NUNCA retornar un recordset de `create()` con un flag de contexto `skip_*_on_write=True` activo — limpiar el contexto antes de retornar: `super().create(vals_list).with_context(skip_*=False)`. El recordset hereda el contexto y cualquier `write()` posterior sobre ese objeto en memoria se salta la validación silenciosamente. En tests, si se necesita hacer `product.with_context(skip_*=False)` después de `create()`, es code smell del create(). Referencia: FIX-062, PR #14405.
+
+105. **TLS hardening en HTTP requests**: NUNCA usar `requests.get(url, verify=False)` directamente en código de negocio. Crear un helper que intente TLSVerification=True primero y haga fallback a `verify=False` solo en `SSLError`. El `disable_warnings(InsecureRequestWarning)` SIEMPRE debe estar dentro del helper, no en el call-site. Referencia: T17, skill `l10n-ve-currency-rate-live` §5, FIX-064.
+
+106. **Logging en omisiones silenciosas (empty if/else)**: TODOS los `if`/`else` que determinen si un rate/proceso se ejecuta DEBEN tener `else` branch con `_logger.warning()` al menos. Nunca fallar silenciosamente — un `if` sin `else` que no loggea oculta bugs reales. Aplica a rates, conversiones, validaciones de datos externos. Referencia: T18, skill `l10n-ve-currency-rate-live` §6, FIX-063.
+
+107. **Aislamiento de fallos en loops de entidades**: Cuando un loop itera entidades independientes (compañías, registros, transacciones), CADA iteración DEBE estar envuelta en `try/except` + `self.env.cr.savepoint()` para aislar fallos. Un error en una entidad NO debe detener el procesamiento de las demás. Aplica a crons, `_process_job`, métodos batch. Referencia: T19, skill `l10n-ve-currency-rate-live` §7, FIX-065.
+
+108. **`parent_id` immutability en `res.company.write()`**: Odoo 17+ lanza `UserError("The company hierarchy cannot be changed.")` si se intenta cambiar `parent_id` después de la creación. En tests, NUNCA hacer `company.parent_id = False` después de `create()` — crear sin `parent_id` desde el inicio (el default es `False`). Referencia: T19, skill `l10n-ve-currency-rate-live` §8.1.
+
+### Code Review: Merge Conflicts, Retry Logic & CI Stale (l10n_ve_currency_rate_live, 2026-08-10)
+
+Lecciones del PR #1060 (backport multi-moneda BCV a 17.0): un merge conflict mal resuelto dejó el
+módulo sin compilar y borró silenciosamente lógica de retry, sin que la descripción del PR lo
+mencionara ni un reporte de CI desactualizado lo detectara. Reglas 117-122 son genéricas (aplican
+a cualquier módulo/versión); revisar `l10n-ve-currency-rate-live` §8.5-8.9 para el detalle
+completo del caso.
+
+117. **Verificar `py_compile` tras resolver un conflicto de merge**: Odoo no valida sintaxis hasta que intenta importar el módulo en runtime — un merge mal resuelto puede dejar un `SyntaxError` (ej. un `try:` sin `except`/`finally`, un `continue` fuera de cualquier loop) sin que ningún linter local lo detecte de inmediato. SIEMPRE correr `python3 -m py_compile <archivo>` sobre archivos `.py` tocados por un merge antes de dar la resolución por buena o reportar tests en verde. Referencia: FIX-044 (17.0)/FIX-066 (19.0), skill `l10n-ve-currency-rate-live` §8.5.
+
+118. **Diff contra ambas ramas padre al resolver un merge que combina dos features**: Cuando un conflicto ocurre en un método que dos ramas modificaron por razones distintas (ej. aislamiento por `savepoint()` + retry programado), tomar "el lado que compila" sin verificar el otro puede descartar lógica de negocio completa de forma silenciosa. Diffear explícitamente contra ambas ramas padre (`git diff <base>...<rama>`) y confirmar con `grep` que cualquier helper tocado sigue teniendo caller real tras la resolución. Referencia: FIX-045 (17.0)/FIX-067 (19.0), skill `l10n-ve-currency-rate-live` §8.6.
+
+119. **Cambiar el contrato de un método privado exige auditar TODOS los call-sites**: Cambiar el tipo esperado de un parámetro (ej. lista plana → recordset, agregando `.mapped(...)`) rompe silenciosamente cualquier caller con la convención vieja, incluidos tests preexistentes fuera del diff que introdujo el cambio. `grep` TODOS los call-sites (producción y tests) antes de mergear — no asumir que "ya se migraron todos". Referencia: FIX-046 (17.0)/FIX-068 (19.0), skill `l10n-ve-currency-rate-live` §8.7.
+
+120. **Ubicación de un guard/early-return debe ceñirse al bloque que pretende saltar**: Un early-return para optimizar/saltar un caso especial (ej. "no scrapear en fin de semana") debe envolver ÚNICAMENTE el bloque específico al que aplica esa justificación — ubicarlo antes de un cálculo principal no relacionado puede saltárselo también, rompiendo comportamiento existente. Correr la suite COMPLETA de la función (no solo tests nuevos) tras agregar un guard. Referencia: FIX-047 (17.0)/FIX-069 (19.0), skill `l10n-ve-currency-rate-live` §8.8.
+
+121. **No confiar en un reporte de CI sin verificar contra qué commit corrió**: Un comentario de bot/CI de "tests exitosos" solo es válido para el commit contra el que corrió. Si el PR recibió commits nuevos después (fixes, merges) sin que el bot vuelva a correr, ese reporte no dice nada del HEAD actual — comparar el commit/fecha evaluado contra el HEAD antes de asumir que la suite pasa, especialmente si el HEAD más reciente pudiera no compilar (regla 117). Referencia: FIX-048 (17.0)/FIX-070 (19.0), skill `l10n-ve-currency-rate-live` §8.9.
+
+122. **Gap de migración conocido: `l10n_ve_currency_rate_live` 19.0 va detrás de 17.0**: El módulo en `odoo-venezuela-19.0` es una versión mínima (~104 líneas, solo `_parse_bcv_data`) sin retry programado, aislamiento por `savepoint()`, TLS hardening ni soporte multi-moneda (EUR/CNY/TRY/RUB). Al portar esta funcionalidad a 19.0, aplican los mismos riesgos de merge de las reglas 117-121. Referencia: skill `l10n-ve-currency-rate-live` (nota de paridad 19.0), skill `odoo-lve-to-binaural-migration-17.0` (patrón general de gaps de migración).
+
+### Skills Infrastructure & Sharing (2026-08-10)
+
+Reglas para la infraestructura de skills, sharing entre herramientas, y mantenimiento de AGENTS.md.
+
+123. **Skill Naming Convention**: Patrón: `{domain}-{topic}-{scope}-{version}`. Ej: `odoo-context-fundamentals-17.0`, `binaural-stock-barcode`, `sdd-builder-agent`. Para skills SDD: `sdd-{role}-agent`. Para skills Binaural: `binaural-{module}`. Para skills OCA: `oca-{phase}-{topic}`. Referencia: skill `skills-inventory-protocol`.
+
+124. **Skill Directory Structure**: Cada skill = 1 directorio con `SKILL.md` dentro. Max 500 líneas archivo principal, referencias externas para más contenido. Front-matter: Trigger, Descripción, Contenido principal, Referencias. Referencia: skill `skills-inventory-protocol`.
+
+125. **Skills Sharing Protocol**: OpenCode sources → Claude symlinks (unidireccional vía daemon). 5 fuentes: project (58), 17.0 (326), 19.0 (161), 16.0 (100), global (155). Primera fuente gana en caso de nombre duplicate. Daemon: `src/scripts/skill-sync-daemon.sh`. Service: `~/.config/systemd/user/skill-sync.service`. Referencia: skill `skill-sync-daemon`.
+
+126. **OpenRAG Ingestion Policy**: Skills del proyecto, versionadas (16.0/17.0/19.0), y documentación se ingieren a OpenRAG. Chunking: max 2048 tokens (~3600 chars) por chunk. Re-ingestion: post-cambio de skill, post-V-cycle. Credenciales: admin/OpenRag2026!Secure, index documents. Referencia: skill `openrag`.
+
+127. **AGENTS.md Maintenance Protocol**: Quién: lead dev o SDD lead. Cuándo: post V-cycle, post cambio de infra. Qué: actualizar inventarios (conteos reales), agregar reglas (numeración secuencial), actualizar secciones de skills. NO incluir contenido completo de skills — solo referencias. Referencia: skill `agents-md-maintenance`.
+
+128. **16.0 Skills Scope**: Odoo 16.0 tiene 100 skills en `src/.opencode/16.0/skills/`: Core ORM (10), GoF Patterns (10), SOLID+Architecture (10), OWASP (10), TDD (10), Performance (10), XML Views (10), Controllers/Mixins (10), Context/DRY (10), Translations/Tools (5), Migration/Best Practices (5). Total: ~5,500 líneas, 100+ anti-patrones. Referencia: `src/.opencode/16.0/PLAN-MASTER-100-LOOPS.md`.
+
+129. **skill-sync Daemon Lifecycle**: Iniciar: `systemctl --user start skill-sync.service`. Verificar: `systemctl --user status skill-sync.service`. Logs: `journalctl --user -u skill-sync.service -f`. One-shot: `src/scripts/skill-sync-daemon.sh --once`. Intervalo: 30s default (configurable vía `SKILL_SYNC_INTERVAL`). Referencia: skill `skill-sync-daemon`.
+
+130. **Version Detection Protocol**: SIEMPRE detectar versión Odoo antes de crear/modificar skills o código. Revisar `__manifest__.py` → campo `version`. Formato: `16.0.x.x.x`, `17.0.x.x.x`, `19.0.x.x.x`. Para skills: incluir versión en nombre si es version-specific. Referencia: skill `skills-inventory-protocol`.
 
 ## Plugins (opencode.jsonc)
 
@@ -1121,3 +1241,120 @@ Ciclo de 20 loops de automejoramiento para DB/PostgreSQL skills de Odoo 19.0. Cu
 **Total: 20 skills, ~5,500+ líneas, 100+ anti-patterns, 30+ source files analyzed**
 
 <!-- END V38: odoo-db-skills-19.0 (20/20 loops — COMPLETED ✅) -->
+
+### Odoo 16.0 Skills (`.opencode/16.0/skills/`)
+
+| Skill | Descripción |
+|-------|-------------|
+| `odoo-core-orm-16.0` | Core ORM: BaseModel, fields, CRUD, cache, prefetch |
+| `odoo-core-fields-16.0` | Field system: 18 types, descriptors, triggers, compute |
+| `odoo-core-api-16.0` | API decorators: @api, depends, constrains, onchange |
+| `odoo-core-http-16.0` | HTTP layer: WSGI, controllers, dispatchers, routing |
+| `odoo-core-db-16.0` | Database: cursors, transactions, SQL class, pooling |
+| `odoo-core-modules-16.0` | Module system: registry, loading, graph, lifecycle |
+| `odoo-core-security-16.0` | Security: ACL, record rules, access control |
+| `odoo-core-cache-16.0` | Cache system: ormcache, invalidation, prefetch |
+| `odoo-core-views-16.0` | Views engine: QWeb, inheritance, xpath, validation |
+| `odoo-gof-creational-16.0` | GoF Creational: Singleton, Factory, Builder, Prototype |
+| `odoo-gof-structural-16.0` | GoF Structural: Adapter, Decorator, Composite, Proxy |
+| `odoo-gof-behavioral-16.0` | GoF Behavioral: Observer, Command, Strategy, State |
+| `odoo-solid-srp-ocp-16.0` | SOLID: SRP mixins, OCP _inherit, xpath |
+| `odoo-solid-lsp-isp-dip-16.0` | SOLID: LSP super(), ISP mixins, DIP env[] |
+| `odoo-arch-layered-16.0` | Layered architecture: 5 capas, Bridge, Pipeline |
+| `odoo-arch-event-16.0` | Event-driven: bus.bus, mail, webhooks, hooks |
+| `odoo-owasp-injection-16.0` | OWASP: SQL injection, XSS, command injection |
+| `odoo-owasp-auth-16.0` | OWASP: Auth, session, MFA, OAuth, CSRF |
+| `odoo-owasp-crypto-16.0` | OWASP: Cryptography, password hashing |
+| `odoo-owasp-hardening-16.0` | OWASP: Security hardening checklist |
+| `odoo-tdd-python-16.0` | TDD Python: TransactionCase, assertions, mocking |
+| `odoo-tdd-owl-16.0` | TDD OWL: QUnit, tours, patch, helpers |
+| `odoo-tdd-unit-16.0` | Unit testing: error boundary, float precision |
+| `odoo-tdd-regression-16.0` | Regression: @tagged, fixtures, CI |
+| `odoo-tdd-performance-16.0` | Performance: assertQueryCount, profiling |
+| `odoo-perf-n1-16.0` | Performance: N+1 prevention, batch-first |
+| `odoo-perf-batch-16.0` | Performance: batch processing, queue_job |
+| `odoo-perf-index-16.0` | Performance: PostgreSQL indexes, trigram |
+| `odoo-perf-cache-16.0` | Performance: cache optimization, ormcache |
+| `odoo-perf-query-16.0` | Performance: query optimization, EXPLAIN |
+| `odoo-perf-cron-16.0` | Performance: cron jobs, batch scheduling |
+| `odoo-xml-basic-16.0` | XML Views: form, tree, kanban, search |
+| `odoo-xml-advanced-16.0` | XML Views: inheritance, xpath, positions |
+| `odoo-xml-kanban-16.0` | XML Views: kanban, progressbar, QWeb |
+| `odoo-xml-qweb-16.0` | XML Views: QWeb templates, directives |
+| `odoo-xml-portal-16.0` | XML Views: portal templates, website |
+| `odoo-xml-graph-16.0` | XML Views: graph, pivot, calendar |
+| `odoo-xml-search-16.0` | XML Views: search filters, group by |
+| `odoo-xml-invisible-16.0` | XML Views: invisible, attrs, modifiers |
+| `odoo-xml-widgets-16.0` | XML Views: field widgets, options |
+| `odoo-ctrl-http-16.0` | Controllers: @http.route, routing |
+| `odoo-ctrl-portal-16.0` | Controllers: portal, website |
+| `odoo-ctrl-middleware-16.0` | Middlewares: WSGI, session, auth |
+| `odoo-mixin-mail-16.0` | Mixins: mail.thread, chatter, tracking |
+| `odoo-mixin-portal-16.0` | Mixins: portal.mixin, website |
+| `odoo-mixin-image-16.0` | Mixins: image mixin, binary |
+| `odoo-ctx-fundamentals-16.0` | Context: Environment, frozendict, with_context |
+| `odoo-ctx-views-16.0` | Context: XML views, default_*, search_default_* |
+| `odoo-ctx-python-16.0` | Context: @api.depends_context, default_get |
+| `odoo-dry-models-16.0` | DRY: AbstractModel, _inherit, mixins |
+| `odoo-dry-views-16.0` | DRY: View inheritance, xpath, reuse |
+| `odoo-dry-python-16.0` | DRY: Decorators, utilities, template method |
+| `odoo-dry-js-16.0` | DRY: JS utilities, patch, registry |
+| `odoo-util-core-16.0` | Utilities: odoo.tools (misc, sql, safe_eval) |
+| `odoo-util-orm-16.0` | Utilities: ORM helpers (search, browse, read) |
+| `odoo-util-views-16.0` | Utilities: view validation, inheritance |
+| `odoo-util-js-16.0` | Utilities: JS core (arrays, strings, objects) |
+| `odoo-util-testing-16.0` | Utilities: Test helpers, Form(), mock |
+| `odoo-i18n-16.0` | Translations: _(), _t(), PO files, i18n |
+| `odoo-sequences-16.0` | Sequences: ir.sequence, sequence.mixin |
+| `odoo-devtools-16.0` | Dev tools: CLI, debugger, logging, profiling |
+| `odoo-testing-tools-16.0` | Testing tools: base classes, decorators |
+| `odoo-migration-15-16-16.0` | Migration 15→16: breaking changes, upgrade scripts |
+| `odoo-migration-16-17-16.0` | Migration 16→17: breaking changes, upgrade scripts |
+| `odoo-migration-16-19-16.0` | Migration 16→19: breaking changes, upgrade scripts |
+| `odoo-testing-best-16.0` | Testing best practices: checklist, anti-patterns |
+| `odoo-master-reference-16.0` | Master reference: cross-reference all 100 skills |
+
+<!-- END Odoo 16.0 Skills (100 skills — COMPLETED ✅) -->
+
+## Skill Sharing Infrastructure
+
+### Daemon: skill-sync
+
+Sincroniza skills de OpenCode → Claude vía symlinks (unidireccional).
+
+```bash
+# One-shot sync
+src/scripts/skill-sync-daemon.sh --once
+
+# Daemon (loop cada 30s)
+src/scripts/skill-sync-daemon.sh
+
+# Estado del servicio
+systemctl --user status skill-sync.service
+
+# Logs
+journalctl --user -u skill-sync.service -f
+```
+
+Ver skill `skill-sync-daemon` para documentación completa.
+
+### Fuentes de Skills (5 directorios)
+
+| # | Fuente | Count | Prioridad |
+|---|--------|-------|-----------|
+| 1 | `src/.opencode/skills/` | 58 | 1 (primera fuente) |
+| 2 | `src/.opencode/17.0/skills/` | 326 | 2 |
+| 3 | `src/.opencode/19.0/skills/` | 161 | 3 |
+| 4 | `src/.opencode/16.0/skills/` | 100 | 4 |
+| 5 | `~/.config/opencode/skills/` | 155 | 5 |
+
+### Target Claude
+
+`~/.claude/skills/` — 798 dirs (795 symlinks + 3 real dirs)
+
+### OpenRAG
+
+Skills, versionadas y documentación se ingieren a OpenRAG para búsqueda semántica.
+Ver skill `openrag` para política de ingestion y credenciales.
+
+<!-- END Skill Sharing Infrastructure -->

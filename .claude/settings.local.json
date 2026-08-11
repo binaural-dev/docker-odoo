@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//home/binlp011/sources/docker-multi/.resources/generators/**)",
+      "Bash(find / -maxdepth 3 -iname \".mcp.json\")",
+      "Read(//home/binlp011/sources/docker-multi/**)",
+      "Read(//home/binlp011/sources/docker-multi/scripts/mcp_servers/**)",
+      "Read(//home/binlp011/**)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 *)",
+      "Bash(shuf -n 8 --random-source=/dev/zero)",
+      "mcp__openrag__openrag_search",
+      "Bash(curl -sk -u admin:'OpenRag2026!Secure' \"https://localhost:9200/documents/_count?q=filename:odoo-skills\\\\/odoo-db*\")",
+      "Bash(curl -sk -u admin:'OpenRag2026!Secure' \"https://localhost:9200/documents/_search?q=filename:odoo-skills\\\\/odoo-db-schema-ddl-19.0.md&size=1&_source_excludes=chunk_embedding_nomic_embed_text_latest\")",
+      "mcp__openrag__openrag_update_knowledge_filter",
+      "Bash(chmod +x ~/.claude/skills/claude-dcp/hooks/pre-compact.sh)",
+      "Bash(bash ~/.claude/skills/claude-dcp/hooks/pre-compact.sh)",
+      "Bash(bash -n ~/.claude/skills/claude-dcp/hooks/pre-compact.sh)",
+      "Bash(bash -n ~/.claude/skills/claude-dcp/hooks/session-start.sh)",
+      "Bash(bash -n ~/.claude/skills/claude-dcp/hooks/track-usage.sh)",
+      "mcp__postgres-db__list_databases",
+      "Bash(docker exec *)",
+      "Bash(docker cp *)"
+    ]
+  }
+}
