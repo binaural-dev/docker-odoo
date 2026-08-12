@@ -410,6 +410,35 @@ def prompt_for_modules(
     return ",".join(selected)
 
 
+def prompt_for_test_modules(
+    runner: "Runner", config: dict, instance: str
+) -> str:
+    """Ask the user which modules to test.
+
+    Unlike :func:`prompt_for_modules`, there's no valid "all" fallback
+    for testing — if nothing gets selected, this exits with an error.
+    """
+    modules = get_custom_modules(config, instance)
+    if not modules:
+        runner.error(
+            f"\nNo se encontraron módulos custom en los addons de '{instance}'."
+        )
+        sys.exit(1)
+
+    options = [(mod, mod) for mod in modules]
+    selected = prompt_selection(
+        runner,
+        options,
+        f"Selecciona modulo(s) a testear para '{instance}' "
+        "(Espacio para marcar, Enter para confirmar)",
+        multi=True,
+    )
+    if not selected:
+        runner.error("Debes seleccionar al menos un módulo.")
+        sys.exit(1)
+    return ",".join(selected)
+
+
 def prompt_for_user(
     runner: "Runner", config: dict, instance: str, dbname: str
 ) -> str:

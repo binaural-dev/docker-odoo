@@ -64,6 +64,7 @@ from odoo_cli.core.actions.maintenance import (
     update_tags,
 )
 from odoo_cli.core.actions.modules import reset_password, update
+from odoo_cli.core.actions.testing import run_tests
 from odoo_cli.core.prompts import (
     prompt_for_branch,
     prompt_for_database,
@@ -71,6 +72,7 @@ from odoo_cli.core.prompts import (
     prompt_for_modules,
     prompt_for_project,
     prompt_for_repos,
+    prompt_for_test_modules,
     prompt_for_user,
 )
 
@@ -86,7 +88,7 @@ from odoo_cli.core.prompts import (
 # calling the action.
 _INSTANCE_AWARE_ACTIONS = {
     "start", "stop", "restart", "logs", "remove",
-    "fix-files", "init", "bash", "psql", "pw", "update",
+    "fix-files", "init", "bash", "psql", "pw", "update", "test",
 }
 
 
@@ -227,6 +229,11 @@ def dispatch(
 
     elif args.action == "init":
         init_addons(runner, config, args.instance)
+
+    elif args.action == "test":
+        if getattr(args, "module", None) is None:
+            args.module = prompt_for_test_modules(runner, config, args.instance)
+        run_tests(runner, config, base_path, args.instance, args)
 
     elif args.action == "sync":
         if getattr(args, "r", None) is None:

@@ -4,6 +4,7 @@ instances.json.bak
 coverage_data/
 src
 !mcp-server/src
+logs/
 .resources/Dockerfile
 .resources/Dockerfile.*
 !.resources/Dockerfile.template

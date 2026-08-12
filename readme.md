@@ -200,10 +200,13 @@ El script `./odoo` es un shim liviano (331 LOC) que delega a `odoo_cli/core/`, e
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `new [nombre] [repo] [branch] [version]` | Wizard: clona el repo del cliente y da de alta la instancia en `instances.json`. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
+| `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
 | `update-tags [proyecto] [branch_origin] [submodulo] [tag] [--v]` | Bumpea uno o más submódulos a un tag específico, en una rama nueva para PR. Todo argumento faltante se pregunta interactivamente (proyecto, rama base, submódulo, tag — con menú de tags filtrable, ej: `19, alpha`). Push y `gh pr create` se ofrecen al final, cada uno con su propia confirmación. |
 | `submodule-status [proyecto]` | Muestra en qué tag/rama/hash está parado cada submódulo (y el repo del proyecto en sí) — de solo lectura, no toca git. Sin proyecto, corre sobre todos los de `src/custom/`. |
 | `validate-instances` | Valida `instances.json` de forma explícita (ya corre implícitamente antes de cualquier comando). |
 | `hosts [status\|show\|apply\|dry-run]` | Sincroniza `/etc/hosts` con los subdominios de las instances. Ver [Subdominios locales por instance](#subdominios-locales-por-instance). |
+| `coverage-status [--json] [--pull] [--only-with-tests]` | Escaneo rápido (sin Docker) de qué clientes tienen módulos con `tests/`. |
+| `coverage [proyecto...] [opciones]` | Corre `coverage.py` real (build scoped + start + coverage + stop + limpieza, automatizado) para uno, varios o todos los clientes con tests. |
 | `tui` | Lanza la TUI interactiva (equivalente a `./odoo-tui`). |
 
 Referencia detallada de cada comando (comportamiento interno, validaciones,
@@ -238,6 +241,15 @@ gotchas): [`docs/comandos-odoo.md`](docs/comandos-odoo.md).
 
 # Actualizar todas las bases de datos de una instancia
 ./odoo update bananera -d all
+
+# Correr tests con cobertura de un modulo
+./odoo test bananera sale_extension
+
+# Correr tests de varios modulos juntos
+./odoo test bananera sale_extension,purchase_extension
+
+# Correr tests de un modulo y todo su arbol de dependencias
+./odoo test bananera sale_extension --recursive
 
 # Reiniciar todo
 ./odoo restart
