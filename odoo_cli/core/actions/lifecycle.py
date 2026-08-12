@@ -18,6 +18,7 @@ take over the TTY (bash, psql) — those live in
 from __future__ import annotations
 
 import subprocess
+import sys
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -208,7 +209,36 @@ def remove_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
     Asks the user for confirmation first. If the user agrees, removes
     the requested instance (or everything, when ``instance`` is None)
     and offers to bring the environment back up blank.
+
+    Hard-blocked (no confirm, no override) against any instance flagged
+    ``"production": true`` in instances.json — this is the only lifecycle
+    action that deletes volumes (real data loss), so it's the one that
+    gets a real gate instead of just a confirmation prompt. To remove a
+    production instance for real, the flag has to be edited out of
+    instances.json by hand first.
     """
+    from generators.config_loader import is_production_instance
+
+    if instance:
+        if is_production_instance(config["instances"][instance]):
+            runner.error(
+                f"\n⛔ '{instance}' está marcada como \"production\": true. "
+                "'./odoo remove' está bloqueado para instancias de producción "
+                "(sacá el flag a mano en instances.json si de verdad necesitás correrlo)."
+            )
+            sys.exit(1)
+    else:
+        prod_instances = sorted(
+            n for n, c in config["instances"].items() if is_production_instance(c)
+        )
+        if prod_instances:
+            runner.error(
+                f"\n⛔ Bloqueado: hay instancia(s) de producción en la configuración "
+                f"({', '.join(prod_instances)}). './odoo remove' sin instancia "
+                "específica no puede ejecutarse mientras existan instancias de producción."
+            )
+            sys.exit(1)
+
     if instance:
         target = f"instancia '\033[91m{instance}\033[0m'"
     else:

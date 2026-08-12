@@ -264,8 +264,8 @@ usuario por stdout y termina el proceso sin pasar por ningún `Runner` —
 justo lo que el módulo dice no hacer. En la práctica esto es relevante
 porque `get_instance_services` la llaman `odoo_cli/core/actions/access.py`
 (`show_logs`, línea 72) y varias funciones de `lifecycle.py` (`start_odoo`
-línea 112, `stop_odoo` línea 162, `remove_odoo` línea 228, `fix_filestore`
-línea 263) — `dispatch.py` **no** es un llamador: `grep -n
+línea 113, `stop_odoo` línea 163, `remove_odoo` línea 258, `fix_filestore`
+línea 293) — `dispatch.py` **no** es un llamador: `grep -n
 "get_instance_services" odoo_cli/core/dispatch.py` no devuelve ningún
 resultado —, así que ese `sys.exit(1)` puede dispararse en medio de un flujo
 que, por lo demás, reporta todo a través del `runner`.
@@ -444,7 +444,7 @@ for svc in odoo_services:
         pass
 ```
 
-(`lifecycle.py:126-134`, chown del filestore) y, más abajo, antes de levantar
+(`lifecycle.py:127-135`, chown del filestore) y, más abajo, antes de levantar
 nginx:
 
 ```python
@@ -454,7 +454,7 @@ subprocess.run(
 )
 ```
 
-(`lifecycle.py:142-145`, force-recreate de nginx). Ninguna de las dos pasa
+(`lifecycle.py:143-146`, force-recreate de nginx). Ninguna de las dos pasa
 por `runner.run_streamed`/`run_interactive`; ninguna reporta nada al usuario
 a través del `runner` (los `try/except Exception: pass` tragan cualquier
 error en silencio, incluso más allá de lo que ya descarta `stderr=DEVNULL`).
@@ -462,10 +462,10 @@ error en silencio, incluso más allá de lo que ya descarta `stderr=DEVNULL`).
 El mismo patrón se repite en otras dos funciones de este mismo archivo:
 `remove_odoo` tiene un `subprocess.run(["docker", "compose", "-f",
 COMPOSE_FILE, "rm", "-s", "-v", "-f", svc])` directo en
-`lifecycle.py:230-235` (cuando `instance` viene con valor), y `fix_filestore`
-repite el mismo chown directo en `lifecycle.py:267-273`. En total,
+`lifecycle.py:260-265` (cuando `instance` viene con valor), y `fix_filestore`
+repite el mismo chown directo en `lifecycle.py:297-303`. En total,
 `lifecycle.py` tiene 4 llamadas a `subprocess.run(` fuera del `Runner`
-(líneas 126, 142, 230 y 267) — y el patrón no es exclusivo de este archivo:
+(líneas 127, 143, 260 y 297) — y el patrón no es exclusivo de este archivo:
 `grep -rn "subprocess.run(" odoo_cli/core/actions/*.py` devuelve 44
 ocurrencias en total en `actions/`, repartidas también en `access.py`,
 `hosts.py`, `validate.py`, `modules.py` y `maintenance.py`.
@@ -481,7 +481,7 @@ ningún docstring, es una inferencia a partir del código, no una regla
 escrita.
 
 Un segundo ejemplo, con `confirm()` en el camino destructivo
-(`odoo_cli/core/actions/lifecycle.py:205-225`):
+(`odoo_cli/core/actions/lifecycle.py:247-255`):
 
 ```python
 def remove_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
@@ -499,8 +499,16 @@ def remove_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
 
 Este fragmento sí es fiel al `Runner` — el `confirm()` real está ahí. Pero,
 como se muestra arriba, unas líneas más abajo en la misma función
-(`lifecycle.py:230-235`) aparece el `subprocess.run` directo que el
+(`lifecycle.py:260-265`) aparece el `subprocess.run` directo que el
 documento no debe omitir.
+
+Desde 2026-08, `remove_odoo` además tiene un gate previo al `confirm()`:
+si la instancia (o, en el caso de `remove` sin argumento, cualquier
+instancia de la config) tiene `"production": true` en `instances.json`
+(`config_loader.is_production_instance`), la función corta con
+`runner.error(...)` + `sys.exit(1)` **antes** de llegar al `runner.warn`/
+`confirm` de arriba — ni siquiera se muestra el prompt. Ver
+`lifecycle.py:220-241`.
 
 ## 8. El plan hacia `TextualRunner`
 

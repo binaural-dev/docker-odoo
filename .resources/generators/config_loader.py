@@ -126,6 +126,16 @@ def is_instance_enabled(inst_conf) -> bool:
     return inst_conf.get("enabled", True)
 
 
+def is_production_instance(inst_conf) -> bool:
+    """Return whether an instance is flagged as production.
+
+    Defaults to ``False`` (non-production) when the flag is missing.
+    Used to gate destructive CLI actions (see ``remove_odoo``) and to
+    forbid ``dev_mode`` from ever reaching a production container.
+    """
+    return bool(inst_conf.get("production", False))
+
+
 def _validate_config(config):
     """Validate the configuration structure."""
     required_sections = ["odoo_configs", "databases", "instances"]
@@ -181,6 +191,23 @@ def _validate_instance(inst_name, inst_conf, config):
         raise ValueError(
             f"Instancia '{inst_name}': odoo_config '{inst_conf['odoo_config']}' "
             f"no existe en la sección odoo_configs"
+        )
+
+    # Validate 'production' flag type and its interaction with 'dev_mode'.
+    # A typo'd non-bool value here would silently defeat the remove_odoo
+    # safety gate (is_production_instance), so reject it outright rather
+    # than coercing it.
+    if "production" in inst_conf and not isinstance(inst_conf["production"], bool):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'production' debe ser true/false, "
+            f"no {inst_conf['production']!r}"
+        )
+
+    odoo_conf = resolve_instance_config(inst_conf, config)
+    if odoo_conf.get("dev_mode", False) and is_production_instance(inst_conf):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'dev_mode' no puede estar activo junto a "
+            f"'production': true (usá './odoo update' en su lugar)."
         )
 
     # Validate unique external_port

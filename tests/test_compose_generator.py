@@ -111,6 +111,52 @@ class ComposeGeneratorIsolationTest(unittest.TestCase):
         )
 
 
+class DevModeCommandFlagTest(unittest.TestCase):
+    """`dev_mode` -> `--dev=all` on the command line, never on production."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_compose_devmode_")
+        self.dockerfile_map = {"17.0": ".resources/17.Dockerfile"}
+
+    def _generate(self, config):
+        path = generate_compose(self.tmpdir, config, self.dockerfile_map)
+        with open(path) as f:
+            return f.read()
+
+    def _command_line_for(self, content, service="odoo-acme"):
+        lines = content.splitlines()
+        idx = lines.index(f"  {service}:")
+        for line in lines[idx + 1:]:
+            if line.strip().startswith("command:"):
+                return line.strip()
+            if not line.startswith("    "):
+                break
+        raise AssertionError(f"no command: line found under {service}:")
+
+    def test_dev_mode_off_by_default(self):
+        config = _sample_config()
+        content = self._generate(config)
+        self.assertEqual(self._command_line_for(content), "command: odoo")
+
+    def test_dev_mode_on_appends_flag(self):
+        config = _sample_config()
+        config["odoo_configs"]["base"]["dev_mode"] = True
+        content = self._generate(config)
+        self.assertEqual(self._command_line_for(content), "command: odoo --dev=all")
+
+    def test_dev_mode_suppressed_on_production_instance(self):
+        config = _sample_config()
+        config["odoo_configs"]["base"]["dev_mode"] = True
+        config["instances"]["acme"]["production"] = True
+        content = self._generate(config)
+        self.assertEqual(
+            self._command_line_for(content),
+            "command: odoo",
+            "dev_mode must never reach a production instance's command line, "
+            "even if validation is bypassed (e.g. via load_full_config)",
+        )
+
+
 class NginxGeneratorServiceNameTest(unittest.TestCase):
     """nginx must proxy to service names, not the removed container_name."""
 

@@ -97,6 +97,10 @@ Si necesitas conectarte a la base de datos desde el host (por ejemplo con un cli
 
 Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`. El flag opcional `"enabled"` (default `true`) controla si la instancia aparece en `./odoo build/start/stop/...` y en la TUI; podés togglerlo desde la TUI con `Space` y el cambio se persiste en `instances.json`.
 
+El flag opcional `"production"` (default `false`) marca una instancia como productiva. Hoy lo único que hace es **bloquear duro `./odoo remove`** contra esa instancia (y contra `./odoo remove` sin argumento, si *alguna* instancia de la config es productiva) — no hay confirmación que lo salve ni override por flag: para borrarla de verdad hay que sacar `"production": true` a mano en `instances.json` primero. Pensado para hosts on-premise donde conviven una instancia de prueba y una de producción en el mismo Docker.
+
+El flag `"dev_mode"` (default `false`, dentro de `overwrite_odoo_config` o del `odoo_config` base, igual que `workers`/`without_demo`) agrega `--dev=all` al comando de arranque de Odoo (autoreload de código/assets — útil en desarrollo). **No se puede combinar con `"production": true`**: `instances.json` se rechaza al cargar (`ValueError`) si una instancia productiva tiene `dev_mode` activo — en producción corresponde `./odoo update`, no dev mode.
+
 ```json
 {
   "instances": {
@@ -105,6 +109,7 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
       "external_port": 8070,
       "database": "pg16",
       "odoo_config": "19.0_default",
+      "production": true,
       "overwrite_odoo_config": {
         "workers": 4,
         "addons": ["src/enterprise", "src/custom/bananera"],
@@ -117,7 +122,8 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
       "database": "external_pg16",
       "odoo_config": "17.0_default",
       "overwrite_odoo_config": {
-        "addons": ["src/enterprise", "src/custom/client-b"]
+        "addons": ["src/enterprise", "src/custom/client-b"],
+        "dev_mode": true
       }
     },
     "client-paused": {

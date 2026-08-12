@@ -19,6 +19,7 @@
       "db_filter": "",                         // Filtro regex para restringir bases de datos visibles
       "db_name": "False",                      // Base de datos por defecto ("False" para deshabilitar)
       "server_mode": "test",                   // Modo del servidor: "test", "development", "production"
+      "dev_mode": false,                       // true agrega --dev=all (autoreload). No puede ir junto a "production": true en la instancia
       "aeroo_docs_host": "aeroo",              // Host del servicio Aeroo Docs para reportes
       "custom_config": "[options]",            // Configuracion Odoo personalizada inyectada en odoo.conf
       "addons": [                              // Rutas de directorios de addons adicionales (relativos a la raiz)
@@ -94,6 +95,7 @@
       "external_port": 8070,                   // Puerto en el host
       "database": "v19",                       // Referencia a la base de datos
       "odoo_config": "19.0_full",              // Referencia a la configuracion base
+      "production": true,                      // Bloquea "./odoo remove" contra esta instancia (y contra "./odoo remove" sin argumento)
       "overwrite_odoo_config": {
         "addons": [
           "src/enterprise_v19",
@@ -112,7 +114,8 @@
         "addons": [
           "src/enterprise_v17",
           "src/custom/client-b"
-        ]
+        ],
+        "dev_mode": true                       // Agrega --dev=all. Prohibido si esta instancia tuviera "production": true
       }
     },
     "client-paused": {

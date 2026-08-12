@@ -87,6 +87,14 @@ confirmación explícita (default `No`), y al terminar pregunta si querés
 levantar el entorno de nuevo en blanco (default `Sí`). Sin instancia,
 apunta a "TODAS las instancias y bases de datos".
 
+**Bloqueado para producción**: si la instancia objetivo tiene
+`"production": true` en `instances.json`, el comando se rechaza directo
+(exit code 1) — ni siquiera se llega a mostrar la confirmación. Lo mismo
+pasa con `remove` sin argumento si *cualquier* instancia de la config está
+marcada como producción, ya que borraría todo por igual. No hay flag ni
+confirmación que lo salve: la única forma de desbloquearlo es editar
+`instances.json` a mano y sacar el flag.
+
 ### `fix-files [instancia]`
 
 `chown -R odoo:odoo /home/odoo/data` dentro del/los contenedor(es). Útil

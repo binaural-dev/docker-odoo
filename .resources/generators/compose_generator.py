@@ -13,6 +13,7 @@ from .config_loader import (
     get_db_internal_port,
     get_managed_databases,
     get_odoo_minor,
+    is_production_instance,
 )
 
 # Internal ports used by Odoo (never exposed directly; nginx proxies them)
@@ -181,9 +182,17 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
     if db_conf.get("create_container", True):
         depends.append(f"db-{db_name}")
 
+    # --dev=all (Odoo's autoreload/dev mode) is opt-in via odoo_conf's
+    # "dev_mode", but must never reach a production instance. _validate_instance
+    # already rejects that combination at config-load time; the extra check
+    # here is belt-and-suspenders so a future validation bug can't silently
+    # turn dev mode on in production.
+    dev_mode = odoo_conf.get("dev_mode", False) and not is_production_instance(inst_conf)
+    command = "odoo --dev=all" if dev_mode else "odoo"
+
     lines = [
         f"  {container_name}:",
-        "    command: odoo",
+        f"    command: {command}",
         "    restart: always",
         "    build:",
         "      context: .",
