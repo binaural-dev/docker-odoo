@@ -60,6 +60,19 @@ COMPOSE_FILE = BASE / "docker-compose.generated.yml"
 INSTANCES_JSON = BASE / "instances.json"
 
 TOTAL_RE = re.compile(r"^TOTAL(?:\s+\d+)+\s+(\d+)%", re.MULTILINE)
+# Below are two INDEPENDENT signals in scripts/coverage's output -- a test
+# can fail while coverage is still measured fine (a broken test doesn't stop
+# lines from being counted as executed), and coverage can be below threshold
+# with every test passing. They must never be collapsed into one ambiguous
+# status: whoever reads the report needs to know WHICH of the two happened,
+# and if it's test failures, WHICH tests.
+THRESHOLD_FAIL_RE = re.compile(r"Coverage failure: total of \d+ is less than fail-under=\d+")
+# Scoped to lines from Odoo's own test logger (odoo.<dotted.path>: FAIL/ERROR: ...)
+# rather than a bare "^(?:FAIL|ERROR): " -- that looser pattern also matches
+# unrelated noise earlier in the same captured stdout, e.g. pip's
+# "ERROR: pip's dependency resolver does not currently take into account...".
+FAILING_TEST_RE = re.compile(r"odoo\.[\w.]+: (?:FAIL|ERROR): (.+)$", re.MULTILINE)
+TEST_SUMMARY_RE = re.compile(r"(\d+) failed, (\d+) error\(s\) of (\d+) tests")
 
 
 def _instance_block_span(text, name):
@@ -349,7 +362,35 @@ def run_project(entry, threshold, do_pull, keep_running, keep_images, dry_run):
             m = TOTAL_RE.search(stdout)
             if m:
                 result["coverage_pct"] = m.group(1)
-                result["status"] = "OK" if rc == 0 else "BELOW_THRESHOLD_OR_TEST_FAIL"
+                if rc == 0:
+                    result["status"] = "OK"
+                else:
+                    # Cobertura y tests son señales independientes -- nunca
+                    # se informan como una sola cosa ambigua (ver comentario
+                    # junto a los regex, arriba del archivo).
+                    below_threshold = bool(THRESHOLD_FAIL_RE.search(stdout))
+                    failing_tests = list(dict.fromkeys(
+                        t.strip() for t in FAILING_TEST_RE.findall(stdout)
+                    ))
+                    tags = []
+                    if failing_tests:
+                        tags.append("TEST_FAILURES")
+                    if below_threshold:
+                        tags.append("BELOW_THRESHOLD")
+                    result["status"] = "+".join(tags) if tags else "ERROR"
+
+                    details = []
+                    summary_m = TEST_SUMMARY_RE.search(stdout)
+                    if summary_m:
+                        details.append(
+                            f"{summary_m.group(1)} failed, {summary_m.group(2)} error(s) "
+                            f"de {summary_m.group(3)} tests"
+                        )
+                    if failing_tests:
+                        shown = failing_tests[:8]
+                        extra = f" (+{len(failing_tests) - 8} más)" if len(failing_tests) > 8 else ""
+                        details.append("Tests: " + "; ".join(shown) + extra)
+                    result["detail"] = " | ".join(details)
             else:
                 result["status"] = "ERROR"
                 result["detail"] = "no se pudo parsear el % de cobertura del output"
@@ -408,6 +449,34 @@ def main():
             print(f"   Disponibles: {', '.join(sorted(by_name))}")
             sys.exit(1)
         targets = [by_name[p] for p in args.projects]
+    elif sys.stdin.isatty():
+        # Sin proyecto explícito y hay terminal interactiva: dejar elegir
+        # en vez de asumir "todos" en silencio (que dispara un build+coverage
+        # por cada cliente con tests, uno detrás de otro). Mismo menú/mismo
+        # atajo "A: todos" que ya usan ./odoo test, update, sync, etc. --
+        # ver odoo_cli/core/prompts.py. Si no hay TTY (cron/CI/pipe) se
+        # mantiene el default de siempre: correr sobre todos los candidatos.
+        try:
+            sys.path.insert(0, str(BASE))
+            from odoo_cli.core.cli_runner import CliRunner
+            from odoo_cli.core.prompts import prompt_selection
+
+            options = [
+                (f"{c['project']} ({c['modules_with_tests']} módulo(s) con tests)", c["project"])
+                for c in candidates
+            ]
+            selected = prompt_selection(
+                CliRunner(), options,
+                "Selecciona proyecto(s) para correr coverage "
+                "(Espacio: marcar, A: todos, Enter: confirmar)",
+                multi=True,
+            )
+            if not selected:
+                print("No se seleccionó ningún proyecto.")
+                sys.exit(0)
+            targets = [by_name[p] for p in selected]
+        except ImportError:
+            targets = candidates
     else:
         targets = candidates
 

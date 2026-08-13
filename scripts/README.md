@@ -8,8 +8,10 @@ La mayoría obtiene la configuración de `instances.json` a través de
 
 ## `coverage` — Test runner con cobertura y DB temporal automática
 
-Ejecuta tests de Odoo con `coverage`, crea una DB temporal y la elimina al
-finalizar. Falla si la cobertura no alcanza el threshold.
+Ejecuta tests de Odoo con `coverage.py` **real** (no un proxy propio):
+`coverage run` mide líneas/ramas de código realmente ejecutadas mientras
+corre `odoo --test-tags=...` sobre una DB temporal (`cov_YYYYMMDD_HHMMSS`
+por defecto), que se borra al terminar salvo `--keep-db`.
 
 ```sh
 ./scripts/coverage \
@@ -23,6 +25,39 @@ finalizar. Falla si la cobertura no alcanza el threshold.
   --threshold=<pct>    # mínimo de cobertura (default: 70)
   --help
 ```
+
+### Cómo se aplica el coverage (metodología)
+
+1. **Scope**: `--source` de `coverage.py` se limita a los paths de
+   `--modules` (los módulos custom que se están midiendo) — no mide Odoo
+   core ni otros módulos instalados como dependencia, sólo el código propio
+   del/los módulo(s) indicados.
+2. **Medición**: `coverage run` envuelve al proceso Odoo completo (boot +
+   instalación de los módulos + corrida de `--test-tags`). Cualquier línea
+   ejecutada durante ese proceso cuenta, incluidos los `setUp`/`tearDown` de
+   los tests.
+3. **Umbral**: al final, `coverage report --fail-under=<threshold>` calcula
+   el % real (línea `TOTAL` del reporte) y falla (`exit 1`) si queda por
+   debajo del umbral (default 70%, configurable con `--threshold`).
+4. **Resultado de los tests en sí** (¿pasaron o fallaron?) es una señal
+   **completamente independiente** del % de cobertura — un test roto no
+   deja de ejecutar líneas de código, así que la cobertura se sigue
+   calculando igual. Por eso este script **siempre** muestra el % de
+   cobertura, haya o no tests fallidos, y reporta ambas cosas por separado
+   sin mezclarlas en un solo mensaje ambiguo:
+   - `✅/❌ Cobertura >= /< umbral` — sólo sobre el %, nunca menciona tests.
+   - `⚠️ Hubo errores en los tests` — sólo si algún test falló o tiró
+     excepción, con el resumen (`X failed, Y error(s) of Z tests`) y el
+     **nombre de cada test que falló**, extraído del log real de la
+     corrida (guardado en `coverage_data/last_test_run.log` para inspección
+     posterior — no hay que scrollear el boot completo de Odoo a mano).
+   - El exit code es `1` si CUALQUIERA de los dos falla (cobertura baja
+     y/o tests rotos), pero el mensaje impreso siempre distingue cuál.
+5. **`coverage-run-all`** (más abajo) hereda esta misma distinción en su
+   columna `ESTADO` del reporte final: nunca vas a ver un status ambiguo
+   tipo "puede ser una cosa o la otra" — va a decir explícitamente
+   `TEST_FAILURES`, `BELOW_THRESHOLD`, o ambos combinados, y en `DETALLE`
+   lista los nombres de los tests que fallaron.
 
 ---
 
@@ -58,7 +93,15 @@ que `coverage-status` reporta con tests. Por cada instancia:
 3. `./odoo start <instancia>` y espera a que el entrypoint termine de
    instalar dependencias y el servidor Odoo esté realmente arriba (no basta
    con que Postgres esté lista — ver "Aprendizajes" abajo).
-4. Corre `scripts/coverage` real y parsea el % de la línea `TOTAL`.
+4. Corre `scripts/coverage` real y parsea el % de la línea `TOTAL` **y**,
+   si el exit code no fue 0, distingue por qué: parsea el output en busca
+   del mensaje de umbral (`Coverage failure: total of...`) y de las líneas
+   de test fallido/con error del logger de Odoo, por separado. El `ESTADO`
+   final es uno de: `OK`, `BELOW_THRESHOLD` (cobertura baja, tests OK),
+   `TEST_FAILURES` (algún test falló, cobertura puede estar bien igual),
+   `TEST_FAILURES+BELOW_THRESHOLD` (ambos a la vez), o `ERROR` (no se pudo
+   ni parsear el % de cobertura — algo se rompió antes de llegar ahí). La
+   columna `DETALLE` lista los tests puntuales que fallaron por nombre.
 5. Para el contenedor, borra la imagen **solo si la creó él mismo** (nunca
    toca imágenes que ya existían antes de esta corrida), y restaura
    `"enabled": false`.
@@ -72,7 +115,11 @@ que `coverage-status` reporta con tests. Por cada instancia:
   [--out=reporte.csv] [--help]
 ```
 
-- Sin proyectos: corre sobre todos los que tienen tests.
+- Sin proyectos **y corriendo en una terminal interactiva**: muestra un
+  checklist para elegir uno o varios (Espacio para marcar, `A` para
+  todos, Enter para confirmar) — mismo menú que usan `./odoo test`,
+  `update`, `sync`, etc. Sin proyectos y sin TTY (cron/CI/pipe): corre
+  sobre todos los que tienen tests, como siempre.
 - `--dry-run`: muestra el plan completo (qué activaría, buildearía, y
   restauraría) sin tocar nada.
 - `--keep-running`: no para el contenedor al terminar (útil para debug).

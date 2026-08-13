@@ -130,6 +130,9 @@ echo ""
 echo "🚀 Ejecutando tests con coverage..."
 echo ""
 
+mkdir -p coverage_data
+TEST_LOG="coverage_data/last_test_run.log"
+
 docker_exec bash -c "
   pip3 show coverage >/dev/null 2>&1 || pip3 install coverage >/dev/null 2>&1
   python3 -m coverage erase
@@ -144,7 +147,7 @@ docker_exec bash -c "
     --workers 0 \
     --http-port 9999
   echo \$? > /tmp/coverage_exit
-"
+" 2>&1 | tee "$TEST_LOG"
 
 EXIT_CODE=$(docker_exec cat /tmp/coverage_exit 2>/dev/null || echo 1)
 
@@ -162,14 +165,29 @@ docker compose -f "$COMPOSE_FILE" cp "$ODOO_CONTAINER":/home/odoo/.coverage ./co
   echo "   ⚠️  No se pudo exportar .coverage"
 echo ""
 
+# Estos dos chequeos son independientes a propósito: la cobertura puede
+# estar completa con tests que igual fallan (un test roto no deja de medir
+# líneas ejecutadas), y viceversa (todos los tests pasan pero cubren poco
+# código). Nunca se combinan en un solo mensaje -- cada uno se informa por
+# separado para que quede claro CUÁL de los dos pasó.
 if [[ "$COV_EXIT" -ne 0 ]]; then
   echo "❌ Cobertura por debajo del umbral de ${THRESHOLD}%."
-  exit 1
 else
   echo "✅ Cobertura >= ${THRESHOLD}%. Todo OK."
 fi
 
 if [[ "$EXIT_CODE" != "0" ]]; then
   echo "⚠️  Hubo errores en los tests (exit code: $EXIT_CODE)."
+  SUMMARY=$(grep -oE "[0-9]+ failed, [0-9]+ error\(s\) of [0-9]+ tests.*" "$TEST_LOG" | tail -1)
+  [[ -n "$SUMMARY" ]] && echo "   $SUMMARY"
+  FAILED_TESTS=$(grep -oE "odoo\.[][:alnum:]_.]+: (FAIL|ERROR): .+" "$TEST_LOG" | sed -E 's/^.*: ((FAIL|ERROR): )/\1/' | sort -u)
+  if [[ -n "$FAILED_TESTS" ]]; then
+    echo "   Tests con error/falla:"
+    echo "$FAILED_TESTS" | sed 's/^/     - /'
+  fi
+  echo "   Log completo: $TEST_LOG"
+fi
+
+if [[ "$COV_EXIT" -ne 0 || "$EXIT_CODE" != "0" ]]; then
   exit 1
 fi
