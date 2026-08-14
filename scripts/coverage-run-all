@@ -12,7 +12,7 @@ Usage:
   ./scripts/coverage-run-all --threshold=60
   ./scripts/coverage-run-all --out=reporte.csv
   ./scripts/coverage-run-all --no-regen              # no regenerar docker-compose.generated.yml
-  ./scripts/coverage-run-all --keep-images           # no borrar las imágenes que este script buildeó
+  ./scripts/coverage-run-all --clean-images          # borrar la imagen al terminar (comportamiento viejo)
 
 Qué hace por cada proyecto:
   1. (una sola vez, salvo --no-regen) regenera docker-compose.generated.yml
@@ -23,12 +23,18 @@ Qué hace por cada proyecto:
   4. `scripts/coverage --odoo_container=odoo-<proyecto> --modules=... --test_tags=...`
      y parsea el % real de la línea TOTAL del reporte de coverage.py.
   5. `./odoo stop <proyecto>` (salvo --keep-running).
-  6. Limpieza: si la imagen de esa instancia NO existía antes de que este
-     script la buildeara, la borra (container + imagen) para no dejar
-     basura acumulándose. Si ya la tenías buildeada de antes (uso normal de
-     desarrollo), la deja intacta — nunca toca algo que no creó él mismo.
+  6. Limpieza: por defecto CONSERVA la imagen que este script buildeó (si ya
+     existía antes de esta corrida, tampoco la toca — nunca borra algo que no
+     creó él mismo). Conservarla es intencional: borrarla dejaba su build
+     cache "dangling" y el `docker builder prune -f` del paso 7 se lo llevaba
+     puesto, obligando a reinstalar todo desde cero (apt-get, node, Chromium,
+     el .deb de Odoo, pip...) en la SIGUIENTE corrida del mismo proyecto, aun
+     sin cambios en el Dockerfile. Con `--clean-images` se recupera el
+     comportamiento viejo (borra la imagen nueva al terminar, container
+     incluido) para no acumular espacio en disco.
   7. Al final del lote completo, `docker builder prune -f` para limpiar
-     cache de build intermedio (no toca imágenes finales ni volúmenes).
+     cache de build intermedio que haya quedado sin referenciar (no toca
+     imágenes finales ni volúmenes).
   8. Guarda un CSV con el resultado de todos los proyectos corridos.
 
 La mayoría de las instancias en instances.json tienen "enabled": false (es el
@@ -274,7 +280,7 @@ def stream_run(cmd, cwd):
     return proc.returncode, "".join(lines)
 
 
-def run_project(entry, threshold, do_pull, keep_running, keep_images, dry_run):
+def run_project(entry, threshold, do_pull, keep_running, clean_images, dry_run):
     name = entry["project"]
     result = {
         "project": name, "modules_tested": entry["modules_with_tests"],
@@ -310,7 +316,10 @@ def run_project(entry, threshold, do_pull, keep_running, keep_images, dry_run):
         print("  " + " ".join(coverage_cmd))
         if not keep_running:
             print(f"  {ODOO} stop {name}")
-            print("  (borra la imagen si es nueva de este run, salvo --keep-images)")
+            if clean_images:
+                print("  (borra la imagen si es nueva de este run, por --clean-images)")
+            else:
+                print("  (conserva la imagen si es nueva de este run, para acelerar la próxima corrida)")
         if not was_enabled:
             print(f"  🔒 restaurar \"enabled\": false para {name} en instances.json + regenerar compose")
         result["status"] = "DRY-RUN"
@@ -401,8 +410,19 @@ def run_project(entry, threshold, do_pull, keep_running, keep_images, dry_run):
 
                 if pre_existed:
                     result["cleanup"] = "imagen preexistente, no tocada"
-                elif keep_images:
-                    result["cleanup"] = "imagen nueva, conservada (--keep-images)"
+                elif not clean_images:
+                    # Default desde ahora: CONSERVAR la imagen nueva. Borrarla
+                    # dejaba su build cache "dangling" (sin ninguna imagen que
+                    # lo referencie), y el `docker builder prune -f` del final
+                    # del lote se lo llevaba puesto -- la próxima corrida del
+                    # mismo proyecto tenía que reinstalar todo desde cero
+                    # (apt-get, node, Chromium, el .deb de Odoo, pip...), lo
+                    # que en la práctica volvía cada corrida individual tan
+                    # lenta como la primera vez (~5-8 min mínimo, a veces más
+                    # con la red floja). Conservar la imagen deja ese cache
+                    # referenciado, así que sobrevive al prune y la próxima
+                    # corrida del mismo proyecto reusa las capas.
+                    result["cleanup"] = "imagen conservada (cache para la próxima corrida)"
                 elif image_tag:
                     print(f"🧹 Limpiando imagen recién buildeada de {name}...")
                     subprocess.run(
@@ -413,7 +433,7 @@ def run_project(entry, threshold, do_pull, keep_running, keep_images, dry_run):
                         ["docker", "rmi", image_tag], cwd=BASE,
                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                     ).returncode
-                    result["cleanup"] = "imagen borrada" if rmi_rc == 0 else "no se pudo borrar la imagen"
+                    result["cleanup"] = "imagen borrada (--clean-images)" if rmi_rc == 0 else "no se pudo borrar la imagen"
             else:
                 result["cleanup"] = "contenedor sigue corriendo (--keep-running)"
     finally:
@@ -435,7 +455,18 @@ def main():
     parser.add_argument("--threshold", default="70")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--no-regen", action="store_true", help="No regenerar docker-compose.generated.yml")
-    parser.add_argument("--keep-images", action="store_true", help="No borrar las imágenes que este script buildeó")
+    parser.add_argument(
+        "--clean-images", action="store_true",
+        help="Borrar la imagen que este script buildeó al terminar cada proyecto "
+             "(comportamiento viejo). Por defecto ahora se CONSERVA -- la próxima "
+             "corrida del mismo proyecto reusa el cache de build en vez de "
+             "reinstalar todo desde cero, a costa de más espacio en disco.",
+    )
+    parser.add_argument(
+        "--keep-images", action="store_true",
+        help="Ya es el comportamiento por defecto -- se mantiene como no-op "
+             "por compatibilidad con invocaciones existentes.",
+    )
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
@@ -492,7 +523,7 @@ def main():
         print("   ✅ Listo.\n")
 
     results = [
-        run_project(entry, args.threshold, args.pull, args.keep_running, args.keep_images, args.dry_run)
+        run_project(entry, args.threshold, args.pull, args.keep_running, args.clean_images, args.dry_run)
         for entry in targets
     ]
 

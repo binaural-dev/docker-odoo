@@ -102,16 +102,23 @@ que `coverage-status` reporta con tests. Por cada instancia:
    `TEST_FAILURES+BELOW_THRESHOLD` (ambos a la vez), o `ERROR` (no se pudo
    ni parsear el % de cobertura — algo se rompió antes de llegar ahí). La
    columna `DETALLE` lista los tests puntuales que fallaron por nombre.
-5. Para el contenedor, borra la imagen **solo si la creó él mismo** (nunca
-   toca imágenes que ya existían antes de esta corrida), y restaura
-   `"enabled": false`.
-6. Al final del lote, `docker builder prune -f` para no acumular cache.
+5. Para el contenedor, **conserva la imagen** que buildeó (si ya existía
+   antes de esta corrida, tampoco la toca). Es intencional: borrarla dejaba
+   su build cache "dangling", y el `docker builder prune -f` del paso 6 se
+   lo llevaba puesto — la SIGUIENTE corrida del mismo proyecto (aunque el
+   Dockerfile no hubiera cambiado) tenía que reinstalar todo desde cero
+   (apt-get, node, Chromium, el `.deb` de Odoo, pip...), volviendo cada
+   corrida individual tan lenta como la primera. Con `--clean-images` se
+   recupera el comportamiento viejo (borra la imagen nueva al terminar) si
+   preferís no acumular espacio en disco, y restaura `"enabled": false`.
+6. Al final del lote, `docker builder prune -f` para limpiar cache que haya
+   quedado sin referenciar por ninguna imagen.
 7. Deja un CSV en `coverage_data/` con el resultado de todos los proyectos.
 
 ```sh
 ./scripts/coverage-run-all [proyecto ...] \
   [--pull] [--threshold=70] [--dry-run] \
-  [--keep-running] [--keep-images] [--no-regen] \
+  [--keep-running] [--clean-images] [--no-regen] \
   [--out=reporte.csv] [--help]
 ```
 
@@ -123,6 +130,10 @@ que `coverage-status` reporta con tests. Por cada instancia:
 - `--dry-run`: muestra el plan completo (qué activaría, buildearía, y
   restauraría) sin tocar nada.
 - `--keep-running`: no para el contenedor al terminar (útil para debug).
+- `--clean-images`: borra la imagen nueva al terminar (comportamiento
+  anterior a este cambio) — usalo si el espacio en disco es más urgente que
+  la velocidad de la próxima corrida. `--keep-images` sigue aceptado pero ya
+  no hace nada (es el default ahora).
 - También disponible como `./odoo coverage [proyecto ...] [flags]`.
 
 **Antes de tocar nada**, hace un backup de `instances.json` en
