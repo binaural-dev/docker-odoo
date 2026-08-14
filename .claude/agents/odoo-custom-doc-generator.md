@@ -1,17 +1,11 @@
-# Generate Custom Module Documentation
+---
+name: odoo-custom-doc-generator
+description: Genera un informe estructurado de todas las personalizaciones (modulos custom) de un proyecto/cliente Odoo, detallando que flujos de negocio modifica cada modulo, que hace y como validarlo. El informe esta pensado para entregarlo a un consultor funcional, no a un desarrollador. Auto-detecta el proyecto y su prefijo de modulos desde el working directory. Usar cuando el usuario pida un informe o documentacion de personalizaciones/modulos custom de un proyecto, pregunte que flujos tocan los custom, pida una guia de validacion para el consultor, o quiera saber como validar los modulos de un cliente.
+---
+
+# odoo-custom-doc-generator
 
 Genera un informe estructurado de todas las personalizaciones Odoo de un proyecto, detallando qué flujos de negocio modifican, qué hace cada módulo y cómo validarlo. El informe está pensado para entregárselo a un consultor funcional, no a un desarrollador.
-
-## Trigger
-
-Cargar esta skill cuando el usuario pida:
-- "genera un informe de personalizaciones"
-- "genera un informe de personalizaciones para [proyecto]"
-- "qué flujos tocan los custom"
-- "guía para el consultor" + contexto de módulos
-- "documentación de módulos custom"
-- "cómo validar los módulos"
-- "informe de customizaciones"
 
 **Si el usuario NO especifica el proyecto**, auto-detectarlo usando la Fase 1 (buscar prefijo desde el working directory). Solo preguntar si no se puede detectar automáticamente.
 
@@ -19,7 +13,7 @@ Cargar esta skill cuando el usuario pida:
 
 ### 1.1 Encontrar la raíz del workspace
 
-El usuario puede estar en cualquier profundidad del proyecto. Buscar hacia arriba desde el working directory actual hasta encontrar una carpeta que contenga subdirectorios con `__manifest__.py`. Esa es la raíz de módulos custom.
+El usuario puede estar en cualquier profundidad del proyecto (dentro del repo cliente directamente, o bajo `src/custom/<cliente>` de docker-odoo). Buscar hacia arriba desde el working directory actual, con la tool Bash (`find`/`ls`), hasta encontrar una carpeta que contenga subdirectorios con `__manifest__.py`. Esa es la raíz de módulos custom.
 
 Si no se encuentra automáticamente, preguntar al usuario: "¿En qué directorio están los módulos custom?"
 
@@ -41,7 +35,7 @@ Excluir carpetas que NO sean módulos custom del proyecto:
 - `enterprise/`
 - `design-themes/`
 - Cualquier carpeta que no empiece con el prefijo detectado
-- Carpetas que empiezan con `.` (`.git`, `.opencode`)
+- Carpetas que empiezan con `.` (`.git`, `.claude`, `.opencode`)
 - `__pycache__/`
 
 De las restantes, conservar solo las que tengan `__manifest__.py` **y** `installable: True` (o sin ese key, que por defecto es True).
@@ -52,7 +46,7 @@ Usar el prefijo detectado. Si el prefijo es `bambary`, el nombre del proyecto es
 
 ## Fase 2 — Analizar cada módulo
 
-Para cada módulo, inspeccionar en orden:
+Para cada módulo, inspeccionar en orden (con las tools Read/Glob/Grep):
 
 ### 2.1 `__manifest__.py`
 
