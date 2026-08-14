@@ -1,11 +1,6 @@
 ---
 name: mig-customs-to-homo
-description: Detecta referencias a modulos integra-addons (binaural_*) en modulos custom y las migra a odoo-venezuela (l10n_ve_*) cuando existe un equivalente. Funciona en cualquier proyecto (higea, pcshop, inversiones2050, etc.) detectando automaticamente la estructura. Usar SOLO cuando el usuario pida homologar/migrar customs a odoo-venezuela o cuando modulos custom fallen por depender de modulos integra-addons ya migrados.
-license: MIT
-compatibility: opencode
-metadata:
-  audience: developers
-  workflow: migration
+description: Detecta referencias a modulos integra-addons (binaural_*) en modulos custom y las migra a odoo-venezuela (l10n_ve_*) cuando existe un equivalente. Funciona en cualquier proyecto detectando automaticamente la estructura via .gitmodules. Usar cuando el usuario pida homologar/migrar customs a odoo-venezuela o cuando modulos custom fallen por depender de modulos integra-addons ya migrados.
 ---
 
 # mig-customs-to-homo
@@ -14,7 +9,7 @@ Migra modulos custom del cliente que referencian vistas, templates, records o mo
 
 ## Deteccion automatica de estructura
 
-El agente detecta automaticamente la estructura del proyecto donde se ejecuta.
+Detectar automaticamente la estructura del proyecto donde se ejecuta usando la tool Bash.
 
 ### Submodulos (detectados via .gitmodules)
 - `integra-addons/` — Modulos legacy (fuente de referencias `binaural_*`)

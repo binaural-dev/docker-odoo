@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>{{TITULO}}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 2cm 1.8cm;
+    background: #ffffff;
+    @bottom-center {
+      content: "Página " counter(page) " de " counter(pages);
+      font-size: 9px;
+      color: #888;
+    }
+  }
+  html {
+    background: #ffffff;
+  }
+  body {
+    background: #ffffff;
+    font-family: "Helvetica Neue", Arial, sans-serif;
+    color: #1a1a1a;
+    font-size: 10.5px;
+    line-height: 1.5;
+  }
+  h1 {
+    font-size: 19px;
+    margin-bottom: 2px;
+    color: #0f3d5c;
+  }
+  .subtitle {
+    font-size: 11px;
+    color: #555;
+    margin-bottom: 18px;
+  }
+  table.summary {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 22px;
+    font-size: 9.5px;
+  }
+  table.summary th {
+    background: #0f3d5c;
+    color: #fff;
+    text-align: left;
+    padding: 6px 8px;
+  }
+  table.summary td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #ddd;
+    vertical-align: top;
+  }
+  table.summary tr:nth-child(even) td {
+    background: #f4f7f9;
+  }
+  .incident {
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    border: 1px solid #d8dfe3;
+    border-left: 4px solid #0f3d5c;
+    border-radius: 3px;
+    page-break-inside: avoid;
+  }
+  .incident h2 {
+    font-size: 12.5px;
+    margin: 0 0 6px 0;
+    color: #0f3d5c;
+  }
+  .incident .meta {
+    font-size: 9px;
+    color: #666;
+    margin-bottom: 8px;
+  }
+  .incident .meta span {
+    background: #eef3f6;
+    padding: 2px 6px;
+    border-radius: 3px;
+    margin-right: 6px;
+  }
+  .field {
+    margin-bottom: 5px;
+  }
+  .field .label {
+    font-weight: bold;
+    color: #0f3d5c;
+    display: inline;
+  }
+  code {
+    background: #eef3f6;
+    padding: 1px 4px;
+    border-radius: 2px;
+    font-size: 9.5px;
+  }
+  .footer-note {
+    margin-top: 20px;
+    font-size: 8.5px;
+    color: #888;
+    border-top: 1px solid #ddd;
+    padding-top: 8px;
+  }
+</style>
+</head>
+<body>
+
+<h1>{{TITULO}}</h1>
+<div class="subtitle">Período: {{PERIODO}} &nbsp;|&nbsp; Generado: {{FECHA_GENERACION}} &nbsp;|&nbsp; Fuente: {{FUENTE}}</div>
+
+<table class="summary">
+  <tr>
+    <th>#</th><th>Fecha</th><th>Módulo</th><th>Resumen</th><th>Ticket</th>
+  </tr>
+  {{FILAS_RESUMEN}}
+</table>
+
+{{INCIDENCIAS_DETALLE}}
+
+<div class="footer-note">{{NOTA_PIE}}</div>
+
+</body>
+</html>
