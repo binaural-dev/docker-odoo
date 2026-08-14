@@ -276,11 +276,14 @@ def get_unique_odoo_versions(config):
 
 
 def get_managed_databases(config):
-    """Get databases that need a container (create_container=true or default)."""
+    """Get databases that need a container (create_container=true or default),
+    restricted to those actually referenced by an active (enabled) instance.
+    """
+    used_db_names = {inst["database"] for inst in config["instances"].values()}
     return {
         name: conf
         for name, conf in config["databases"].items()
-        if conf.get("create_container", True)
+        if conf.get("create_container", True) and name in used_db_names
     }
 
 
