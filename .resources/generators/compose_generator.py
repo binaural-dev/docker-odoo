@@ -126,6 +126,7 @@ def _db_service(db_name, db_conf, project):
 
     lines += [
         "    restart: always",
+        "    shm_size: 512m",
         "    build:",
         "      context: .",
         "      dockerfile: ./.resources/db.Dockerfile",
