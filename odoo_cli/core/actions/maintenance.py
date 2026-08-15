@@ -874,22 +874,32 @@ def update_tags_bulk(
     branch_origin: str | None,
     show: bool = False,
 ) -> None:
-    """Bump one submodule to one tag, across every project in ``projects``.
+    """Bump one or more (submodulo, tag) pairs, across every project in ``projects``.
 
-    Unlike :func:`update_tags` (one project, any number of bumps,
-    confirmed step by step), this bumps exactly **one** ``(submodulo,
-    tag)`` pair across **many** projects — the submodule and tag are
-    resolved interactively only once (against the first project in
-    ``projects``, used as a reference), and push/PR/merge are each
-    confirmed once for the whole batch instead of once per project.
-    To bump a different submodule too, run this again.
+    Unlike :func:`update_tags` (one project, confirmed step by step),
+    this applies the **same set** of bumps across **many** projects at
+    once — every ``(submodulo, tag)`` pair is resolved interactively
+    only once (against the first project in ``projects``, used as a
+    reference, via the same "¿otro submódulo?" loop
+    :func:`update_tags` uses), and push/PR/merge are each confirmed
+    once for the whole batch instead of once per project. Each project
+    ends up with a **single** branch and a **single** PR bundling every
+    bump — not one PR per submodule.
 
-    A project missing the target submodule, or whose submodule doesn't
-    have the target tag, is skipped (reported, not fatal) — not every
-    project on a given Odoo version necessarily carries every shared
-    submodule. Likewise, any per-project git/gh failure is caught and
-    reported without aborting the rest of the batch (same
-    continue-on-error pattern as :func:`sync`/:func:`submodule_status`).
+    Before touching any project, the full set of resolved bumps is
+    printed and the user is asked to confirm applying them — the
+    resolution loop only mutates the reference project (needed to list
+    tags/checkout), so nothing happens to the *other* N-1 projects
+    until this explicit go-ahead.
+
+    A project missing one of the target submodules, or whose submodule
+    doesn't have the target tag, has just that bump skipped (not the
+    whole project) — not every project on a given Odoo version
+    necessarily carries every shared submodule. A project left with
+    zero applicable bumps is skipped entirely. Likewise, any
+    per-project git/gh failure is caught and reported without aborting
+    the rest of the batch (same continue-on-error pattern as
+    :func:`sync`/:func:`submodule_status`).
     """
     import shutil
 
@@ -920,39 +930,61 @@ def update_tags_bulk(
         f"{odoo_version}: {', '.join(valid_projects)}"
     )
 
-    # 1) Resolve submodulo + tag ONCE, against the first project as a
-    # reference — prepared the same way every project will be prepared
-    # in the loop below, so the tags it lists are the ones that'll
-    # actually be checked against every other project.
+    # 1) Resolve every (submodulo, tag) bump for this batch, against
+    # the first project as a reference — same "¿otro submódulo en esta
+    # misma rama?" loop update_tags() uses for one project, just run
+    # once here instead of once per project. Nothing but the reference
+    # project is touched during this loop.
     ref_project = valid_projects[0]
     ref_path = os.path.join(base_path, "src", "custom", ref_project)
     os.chdir(ref_path)
     try:
         runner.info(f"\n--- Preparando {ref_project} (referencia) ---")
         _prepare_bulk_project(runner, ref_path, branch_origin, stdout)
+
+        bumps: list[tuple[str, str]] = []
+        next_submodulo, next_tag = submodulo, tag
+        while True:
+            resolved = _resolve_bump_checkout(
+                runner, ref_path, next_submodulo, next_tag, stdout
+            )
+            if resolved:
+                bumps.append(resolved)
+
+            again = runner.confirm(
+                "\n¿Agregar otro submódulo al mismo lote (se aplicará "
+                "también a los demás proyectos seleccionados)?",
+                default=False,
+            )
+            if not again:
+                break
+            next_submodulo, next_tag = None, None
     finally:
         os.chdir(base_path)
 
-    if submodulo is None:
-        submodulo = prompt_for_submodule(runner, ref_path)
-    if not submodulo:
-        runner.error("No se seleccionó ningún submódulo.")
+    if not bumps:
+        runner.error("❌ No se seleccionó ningún bump — no hay nada para aplicar.")
         return
 
-    if tag is None:
-        submodule_path = os.path.join(ref_path, submodulo)
-        if not os.path.isdir(submodule_path):
-            runner.error(
-                f"Error: Submódulo '{submodulo}' no encontrado en "
-                f"'{ref_project}' (proyecto de referencia)."
-            )
-            return
-        tag = prompt_for_tag(runner, submodule_path)
-    if not tag:
-        runner.error("No se seleccionó ningún tag.")
+    resumen = ", ".join(f"{s}@{t}" for s, t in bumps)
+    runner.info(
+        f"\nPlan: aplicar {len(bumps)} bump(s) — {resumen} — a "
+        f"{len(valid_projects)} proyecto(s): {', '.join(valid_projects)}"
+    )
+
+    # 2) Explicit go-ahead BEFORE touching any project other than the
+    # reference one — this is the one moment to bail out with zero
+    # side effects on the rest of the batch.
+    proceed = runner.confirm(
+        "¿Aplicar este plan ahora? (hace stash + checkout + commit "
+        "local en cada proyecto)",
+        default=True,
+    )
+    if not proceed:
+        runner.info("Cancelado — no se tocó ningún proyecto además de la referencia.")
         return
 
-    # 2) Batch-level confirmations — asked once, applied to every
+    # 3) Batch-level confirmations — asked once, applied to every
     # project. Nested the same way update_tags nests them per-project:
     # no point asking about PRs if push was declined, etc.
     do_push = runner.confirm(
@@ -978,47 +1010,38 @@ def update_tags_bulk(
         )
         do_pr = do_merge = do_admin_retry = False
 
-    # 3) Loop over every project — one project's failure never aborts
+    # 4) Loop over every project — one project's failure never aborts
     # the batch (same continue-on-error pattern as sync/submodule_status).
+    # Every project (including the reference one) is prepared fresh
+    # here: re-running stash/checkout/submodule-refresh on the
+    # reference project is redundant but harmless, and keeps this loop
+    # uniform instead of special-casing one project out of N.
     results: list[tuple[str, str]] = []
     for project in valid_projects:
         project_path = os.path.join(base_path, "src", "custom", project)
         os.chdir(project_path)
         try:
             runner.info(f"\n--- {project} ---")
-            if project == ref_project:
-                # Already prepared above (as the reference project) —
-                # re-preparing here would just redo the same stash/
-                # checkout/pull/submodule-refresh for no benefit.
-                effective_branch_origin = (
-                    branch_origin
-                    if branch_origin is not None
-                    else subprocess.run(
-                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                        cwd=project_path,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.DEVNULL,
-                        text=True,
-                    ).stdout.strip()
-                    or "HEAD"
-                )
-            else:
-                effective_branch_origin = _prepare_bulk_project(
-                    runner, project_path, branch_origin, stdout
-                )
-
-            resolved = _resolve_bump_checkout(
-                runner, project_path, submodulo, tag, stdout
+            effective_branch_origin = _prepare_bulk_project(
+                runner, project_path, branch_origin, stdout
             )
-            if not resolved:
+
+            project_bumps: list[tuple[str, str]] = []
+            for bump_submodulo, bump_tag in bumps:
+                resolved = _resolve_bump_checkout(
+                    runner, project_path, bump_submodulo, bump_tag, stdout
+                )
+                if resolved:
+                    project_bumps.append(resolved)
+
+            if not project_bumps:
                 results.append(
-                    (project, "sin ese submódulo/tag — salteado")
+                    (project, "ninguno de los bumps aplica — salteado")
                 )
                 continue
-            bump_submodulo, bump_tag = resolved
 
             suggested_branch = _suggest_branch_name(
-                [(bump_submodulo, bump_tag)], effective_branch_origin
+                project_bumps, effective_branch_origin
             )
             new_branch = suggested_branch
             suffix = 2
@@ -1039,7 +1062,10 @@ def update_tags_bulk(
                 results.append((project, "error creando rama nueva"))
                 continue
 
-            _commit_bump(runner, bump_submodulo, bump_tag, stdout)
+            for bump_submodulo, bump_tag in project_bumps:
+                _commit_bump(runner, bump_submodulo, bump_tag, stdout)
+
+            project_resumen = ", ".join(f"{s}@{t}" for s, t in project_bumps)
 
             rev_count = subprocess.run(
                 ["git", "rev-list", "--count",
@@ -1048,7 +1074,7 @@ def update_tags_bulk(
             ).stdout.strip()
             if rev_count == "0":
                 results.append(
-                    (project, f"sin cambios — ya estaba en {bump_tag}")
+                    (project, f"sin cambios — ya estaba en {project_resumen}")
                 )
                 continue
 
@@ -1073,8 +1099,8 @@ def update_tags_bulk(
                 continue
 
             repo_slug = _gh_repo_slug()
-            title = f"Update {bump_submodulo} to {bump_tag}"
-            body = f"- {bump_submodulo} → {bump_tag}"
+            title = f"Update {project_resumen}"
+            body = "\n".join(f"- {s} → {t}" for s, t in project_bumps)
             gh_pr_cmd = [
                 "gh", "pr", "create",
                 "--base", effective_branch_origin,
@@ -1129,7 +1155,7 @@ def update_tags_bulk(
         finally:
             os.chdir(base_path)
 
-    # 4) Final summary — one line per project, so the outcome of all
+    # 5) Final summary — one line per project, so the outcome of all
     # N projects is visible at a glance.
     runner.info("\n=== 📋 RESUMEN update-tags-bulk ===")
     for project, outcome in results:

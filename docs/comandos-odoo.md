@@ -224,26 +224,40 @@ abrir PR. Todo argumento faltante se pregunta:
 
 ### `update-tags-bulk [odoo_version] [submódulo] [tag] [--branch-origin BRANCH] [--projects p1,p2,...] [--v]`
 
-Igual que `update-tags`, pero para **un** `(submódulo, tag)` aplicado a
-**varios** proyectos de la misma versión de Odoo de una sola vez —
-pensado para no repetir `update-tags` a mano proyecto por proyecto
-cuando hay que bumpear el mismo submódulo en 10+ clientes que comparten
-versión.
+Igual que `update-tags`, pero para **uno o más** `(submódulo, tag)`
+aplicados a **varios** proyectos de la misma versión de Odoo de una
+sola vez — pensado para no repetir `update-tags` a mano proyecto por
+proyecto cuando hay que bumpear los mismos submódulos en 10+ clientes
+que comparten versión.
 
 - **odoo_version**: se busca entre los valores únicos de `odoo_version`
-  en `instances.json`.
+  en `instances.json` — **todas** las instancias del archivo, estén
+  `enabled` o no (a diferencia de `start`/`build`/etc., el flag
+  `enabled` solo controla si el contenedor Docker corre localmente, no
+  si su repo en `src/custom/` es válido para bumpear).
 - **proyectos**: por defecto se preguntan con selección múltiple (con
   atajo "Todos"), filtrados a los que están en esa versión **y** ya
   tienen su carpeta en `src/custom/`. También se pueden pasar directo
   con `--projects p1,p2,p3`.
-- **submódulo/tag**: se resuelven **una sola vez** (contra el primer
-  proyecto del lote, como referencia) — no se vuelve a preguntar por
-  cada proyecto. Un proyecto que no tenga ese submódulo, o cuyo
-  submódulo no tenga ese tag, se saltea (se reporta, no frena al resto
-  del lote).
+- **submódulo/tag**: se resuelven contra el primer proyecto del lote
+  (usado como referencia), con el mismo loop "¿Agregar otro submódulo
+  al mismo lote?" que usa `update-tags` para sumar varios bumps a la
+  misma corrida — no se vuelve a preguntar por cada proyecto, solo una
+  vez para todo el lote.
+- **plan antes de tocar nada**: apenas se termina de elegir los bumps,
+  se imprime el plan completo (`submódulo@tag, submódulo2@tag2 → N
+  proyectos`) y se pide una confirmación explícita antes de tocar
+  cualquier proyecto que no sea el de referencia — cancelar acá no deja
+  ningún cambio en el resto del lote.
+- **un solo PR por proyecto**: todos los bumps indicados se commitean
+  en la **misma** rama nueva de cada proyecto (uno por submódulo, igual
+  que `update-tags`), y se abre **un solo PR** por proyecto con todos
+  los bumps juntos — nunca un PR por submódulo. Un proyecto al que le
+  falte alguno de los submódulos/tags pedidos se saltea solo ese bump
+  puntual (no el proyecto entero, salvo que no le aplique ninguno).
 - **rama base**: sin `--branch-origin`, cada proyecto se queda parado en
   la rama en la que ya estaba (nunca se le hace `checkout`) — solo se
-  actualizan y refrescan sus submódulos antes de chequear el tag. Con
+  actualizan y refrescan sus submódulos antes de chequear los tags. Con
   `--branch-origin <rama>`, CADA proyecto hace `checkout <rama>` +
   `pull origin <rama>` + refresco de submódulos (`submodule update
   --init --checkout --recursive` + `submodule foreach fetch --prune`)

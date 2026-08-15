@@ -546,6 +546,28 @@ def prompt_for_bulk_projects(
     return selected
 
 
+def prompt_for_bulk_branch_origin(runner: "Runner") -> str | None:
+    """Ask which base branch to move every project onto for a bulk update.
+
+    Unlike :func:`prompt_for_branch_origin` (used by the single-project
+    ``update-tags``, which always resolves to *some* branch and treats
+    an empty answer as an error), an empty answer here is a valid,
+    deliberate choice: it means every project keeps whatever branch
+    it's already on instead of all being forced onto the same one —
+    the N projects in a bulk batch may not even share a common branch
+    name across different clients. Always asked explicitly (never
+    silently defaulted) so leaving it blank is something the user
+    chose, not something that happened without them noticing.
+    """
+    branch = runner.prompt_text(
+        "\n¿Rama base para mover CADA proyecto antes de ramificar "
+        "(checkout + pull)? Dejá vacío para que cada proyecto se quede "
+        "en la rama en la que ya está (no se lo mueve)",
+        default="",
+    ).strip()
+    return branch or None
+
+
 def prompt_for_project(runner: "Runner") -> str:
     """Ask the user which project (``src/custom/<proyecto>``) to target.
 
@@ -688,4 +710,5 @@ __all__ = [
     "prompt_for_tag",
     "prompt_for_odoo_version",
     "prompt_for_bulk_projects",
+    "prompt_for_bulk_branch_origin",
 ]

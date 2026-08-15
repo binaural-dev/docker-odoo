@@ -392,8 +392,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--branch-origin", dest="branch_origin", default=None,
         help=(
             "Rama base para pull y para crear la rama nueva en CADA proyecto. "
-            "Sin esto, cada proyecto se queda en la rama en la que ya está "
-            "parado (no se hace ningún checkout de rama base)."
+            "Sin esto, se pregunta interactivamente; dejarlo vacío ahí deja "
+            "cada proyecto en la rama en la que ya está parado (no se hace "
+            "ningún checkout de rama base)."
         ),
     )
     p.add_argument(

@@ -1321,7 +1321,14 @@ class GetProjectsForVersionTest(unittest.TestCase):
 
 
 class UpdateTagsBulkTest(unittest.TestCase):
-    """``update_tags_bulk`` — one (submodulo, tag) bump fanned out over N projects."""
+    """``update_tags_bulk`` — one or more (submodulo, tag) bumps fanned out over N projects.
+
+    Every scenario here that only cares about a single bump answers the
+    "¿agregar otro submódulo?" loop confirm with ``False`` (stop after
+    one) and the "¿aplicar el plan?" gate with ``True`` (proceed) as
+    the first two queued confirm answers, before whatever push/PR/merge
+    answers the test itself cares about.
+    """
 
     def _make_project(self, base, project, submodulos=("integra-addons",)):
         project_path = os.path.join(base, "src", "custom", project)
@@ -1364,7 +1371,8 @@ class UpdateTagsBulkTest(unittest.TestCase):
             self.addCleanup(os.chdir, orig_cwd)
 
             calls = []
-            runner = FakeRunner(confirm_answers=[False])  # push declined
+            # "¿otro submódulo?" -> No, "¿aplicar el plan?" -> Sí, "¿push?" -> No.
+            runner = FakeRunner(confirm_answers=[False, True, False])
             with patch(
                 "subprocess.run", side_effect=self._base_fake_run(calls)
             ), patch(
@@ -1385,10 +1393,83 @@ class UpdateTagsBulkTest(unittest.TestCase):
 
             self.assertEqual(mock_submodulo.call_count, 1)
             self.assertEqual(mock_tag.call_count, 1)
+            # proj1 (the reference) is checked out twice — once while
+            # resolving the bump against it, once more when the main
+            # loop re-applies every bump uniformly to every project
+            # (itself included) — and proj2 once, for 3 total.
             tag_checkouts = [
                 c for c in calls if c == ["git", "checkout", "17.0.2.0.0-beta.1"]
             ]
-            self.assertEqual(len(tag_checkouts), 2, f"Llamadas: {calls}")
+            self.assertEqual(len(tag_checkouts), 3, f"Llamadas: {calls}")
+
+    def test_multiple_bumps_land_on_one_branch_and_one_pr_per_project(self):
+        # The core complaint this addresses: selecting more than one
+        # submodule for the same batch must NOT create a separate
+        # branch/PR per submodule — every bump lands on the SAME new
+        # branch per project, committed individually but pushed/PR'd
+        # together, exactly like update_tags() already does for one
+        # project with several bumps.
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(
+                base, "proj1", submodulos=("integra-addons", "third-party-addons")
+            )
+            self._make_project(
+                base, "proj2", submodulos=("integra-addons", "third-party-addons")
+            )
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "tag", "--list"]:
+                    tag = cmd[3]
+                    return subprocess.CompletedProcess(cmd, 0, stdout=f"{tag}\n", stderr="")
+                if cmd[:2] == ["git", "show-ref"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:4] == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="feature-x\n", stderr="")
+                if cmd[:3] == ["git", "rev-list", "--count"]:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            # "¿otro submódulo?" -> Sí (agrega el 2do), -> No (corta el
+            # loop), "¿aplicar el plan?" -> Sí, "¿push?" -> No.
+            runner = FakeRunner(confirm_answers=[True, False, True, False])
+            with patch("subprocess.run", side_effect=fake_run), patch(
+                "odoo_cli.core.prompts.prompt_for_submodule",
+                return_value="third-party-addons",
+            ), patch(
+                "odoo_cli.core.prompts.prompt_for_tag", return_value="2.0.0"
+            ):
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1", "proj2"],
+                    "integra-addons",
+                    "1.0.0",
+                    "master",
+                )
+
+            branch_creates = [c for c in calls if c[:3] == ["git", "checkout", "-b"]]
+            self.assertEqual(
+                len(branch_creates), 2,
+                f"Debía haber UNA rama nueva por proyecto (2 en total), no una "
+                f"por submódulo. Llamadas: {calls}",
+            )
+            for c in branch_creates:
+                self.assertIn("integra-addons-1.0.0", c[3])
+                self.assertIn("third-party-addons-2.0.0", c[3])
+
+            commit_calls = [c for c in calls if c[:2] == ["git", "commit"]]
+            self.assertEqual(
+                len(commit_calls), 4,
+                f"2 proyectos x 2 bumps = 4 commits. Llamadas: {calls}",
+            )
+            self.assertIn(["git", "add", "integra-addons"], calls)
+            self.assertIn(["git", "add", "third-party-addons"], calls)
 
     def test_skips_project_missing_submodule_without_aborting_batch(self):
         with tempfile.TemporaryDirectory() as base:
@@ -1399,7 +1480,7 @@ class UpdateTagsBulkTest(unittest.TestCase):
             self.addCleanup(os.chdir, orig_cwd)
 
             calls = []
-            runner = FakeRunner(confirm_answers=[False])
+            runner = FakeRunner(confirm_answers=[False, True, False])
             with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
                 update_tags_bulk(
                     runner,
@@ -1449,7 +1530,7 @@ class UpdateTagsBulkTest(unittest.TestCase):
                     return subprocess.CompletedProcess(cmd, 0, stdout="feature-x\n", stderr="")
                 return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-            runner = FakeRunner(confirm_answers=[False])
+            runner = FakeRunner(confirm_answers=[False, True, False])
             with patch("subprocess.run", side_effect=fake_run):
                 update_tags_bulk(
                     runner,
@@ -1468,6 +1549,33 @@ class UpdateTagsBulkTest(unittest.TestCase):
                 f"No se reportó el tag faltante en proj2. Mensajes: {runner.messages}",
             )
 
+    def test_declining_the_plan_touches_nothing_but_the_reference_project(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1")
+            self._make_project(base, "proj2")
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            # "¿otro submódulo?" -> No, "¿aplicar el plan?" -> No.
+            runner = FakeRunner(confirm_answers=[False, False])
+            with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1", "proj2"],
+                    "integra-addons",
+                    "17.0.2.0.0-beta.1",
+                    "master",
+                )
+
+            self.assertFalse(
+                any(c[:3] == ["git", "checkout", "-b"] for c in calls),
+                f"No debía crear ninguna rama al declinar el plan. Llamadas: {calls}",
+            )
+            self.assertFalse(any(c[:2] == ["git", "commit"] for c in calls))
+
     def test_branch_origin_none_never_checks_out_a_branch(self):
         with tempfile.TemporaryDirectory() as base:
             self._make_project(base, "proj1")
@@ -1476,7 +1584,7 @@ class UpdateTagsBulkTest(unittest.TestCase):
             self.addCleanup(os.chdir, orig_cwd)
 
             calls = []
-            runner = FakeRunner(confirm_answers=[False])
+            runner = FakeRunner(confirm_answers=[False, True, False])
             with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
                 update_tags_bulk(
                     runner,
@@ -1506,7 +1614,7 @@ class UpdateTagsBulkTest(unittest.TestCase):
             self.addCleanup(os.chdir, orig_cwd)
 
             calls = []
-            runner = FakeRunner(confirm_answers=[False])
+            runner = FakeRunner(confirm_answers=[False, True, False])
             with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
                 update_tags_bulk(
                     runner,
@@ -1517,19 +1625,23 @@ class UpdateTagsBulkTest(unittest.TestCase):
                     "staging",
                 )
 
+            # proj1 (the reference) is prepared twice — once to resolve
+            # the bump against it, once more in the main loop, which
+            # re-preps every project uniformly (itself included) —
+            # plus once for proj2, for 3 of each in total.
             self.assertEqual(
-                len([c for c in calls if c == ["git", "checkout", "staging"]]), 2,
+                len([c for c in calls if c == ["git", "checkout", "staging"]]), 3,
                 f"Llamadas: {calls}",
             )
             self.assertEqual(
                 len([c for c in calls if c == ["git", "pull", "origin", "staging"]]),
-                2,
+                3,
                 f"Llamadas: {calls}",
             )
             foreach_fetch = [
                 c for c in calls if c[:3] == ["git", "submodule", "foreach"]
             ]
-            self.assertEqual(len(foreach_fetch), 2, f"Llamadas: {calls}")
+            self.assertEqual(len(foreach_fetch), 3, f"Llamadas: {calls}")
 
     def test_batch_confirmations_apply_to_every_project_not_once_total(self):
         with tempfile.TemporaryDirectory() as base:
@@ -1540,12 +1652,13 @@ class UpdateTagsBulkTest(unittest.TestCase):
             self.addCleanup(os.chdir, orig_cwd)
 
             calls = []
-            # Exactly 4 answers for the WHOLE batch: push, PR, merge,
+            # "¿otro submódulo?" -> No, "¿aplicar el plan?" -> Sí, then
+            # exactly 4 answers for the WHOLE batch: push, PR, merge,
             # admin-retry — if these were (wrongly) asked per project,
             # the queue would run dry after proj1 and proj2 would fall
             # back to `default=False`, so push/PR/merge would only
             # happen once instead of twice.
-            runner = FakeRunner(confirm_answers=[True, True, True, False])
+            runner = FakeRunner(confirm_answers=[False, True, True, True, True, False])
             with patch(
                 "subprocess.run", side_effect=self._base_fake_run(calls)
             ), patch("shutil.which", return_value="/usr/bin/gh"):
@@ -1574,7 +1687,7 @@ class UpdateTagsBulkTest(unittest.TestCase):
             self.addCleanup(os.chdir, orig_cwd)
 
             calls = []
-            runner = FakeRunner(confirm_answers=[False])
+            runner = FakeRunner(confirm_answers=[False, True, False])
             with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
                 update_tags_bulk(
                     runner,

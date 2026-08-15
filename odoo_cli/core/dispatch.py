@@ -68,6 +68,7 @@ from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.actions.testing import run_tests
 from odoo_cli.core.prompts import (
     prompt_for_branch,
+    prompt_for_bulk_branch_origin,
     prompt_for_bulk_projects,
     prompt_for_database,
     prompt_for_instance,
@@ -280,6 +281,8 @@ def dispatch(
             )
         else:
             args.projects = [p.strip() for p in args.projects.split(",") if p.strip()]
+        if getattr(args, "branch_origin", None) is None:
+            args.branch_origin = prompt_for_bulk_branch_origin(runner)
         update_tags_bulk(
             runner,
             args.odoo_version,
