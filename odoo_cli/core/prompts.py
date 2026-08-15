@@ -487,6 +487,65 @@ def prompt_for_repos(runner: "Runner") -> list[str]:
     return selected
 
 
+def prompt_for_odoo_version(runner: "Runner", config: dict) -> str:
+    """Ask which Odoo version to bulk-update projects for.
+
+    Options come straight from ``instances.json`` (via
+    :func:`generators.config_loader.get_unique_odoo_versions`) — no
+    hardcoded version list to keep in sync.
+    """
+    from generators.config_loader import get_unique_odoo_versions
+
+    versions = sorted(get_unique_odoo_versions(config))
+    if not versions:
+        runner.info("No hay versiones de Odoo configuradas en instances.json.")
+        sys.exit(1)
+
+    options = [(v, v) for v in versions]
+    selected = prompt_selection(runner, options, "Selecciona la versión de Odoo")
+    if not selected:
+        runner.info("No se seleccionó ninguna versión.")
+        sys.exit(0)
+    return selected
+
+
+def prompt_for_bulk_projects(
+    runner: "Runner", config: dict, odoo_version: str
+) -> list[str]:
+    """Ask which projects on ``odoo_version`` to bulk-update.
+
+    Multi-select over :func:`odoo_cli.core.instance.get_projects_for_version`,
+    with an "Todos" shortcut prepended (mirrors the "Todas las instancias"
+    entry in :func:`prompt_for_instance`) on top of the grid menu's own
+    ``A``/``"all"`` shortcut.
+    """
+    from odoo_cli.core.instance import get_projects_for_version
+
+    projects = get_projects_for_version(config, odoo_version)
+    if not projects:
+        runner.info(
+            f"\nNo se encontraron proyectos en src/custom/ para Odoo {odoo_version}."
+        )
+        sys.exit(1)
+
+    options = [(f"Todos ({len(projects)})", "__all__")] + [
+        (p, p) for p in projects
+    ]
+    selected = prompt_selection(
+        runner,
+        options,
+        f"Selecciona proyectos en Odoo {odoo_version} "
+        "(Espacio para marcar, Enter para confirmar)",
+        multi=True,
+    )
+    if not selected:
+        runner.info("No se seleccionó ningún proyecto.")
+        sys.exit(0)
+    if "__all__" in selected:
+        return projects
+    return selected
+
+
 def prompt_for_project(runner: "Runner") -> str:
     """Ask the user which project (``src/custom/<proyecto>``) to target.
 
@@ -627,4 +686,6 @@ __all__ = [
     "prompt_for_branch_origin",
     "prompt_for_submodule",
     "prompt_for_tag",
+    "prompt_for_odoo_version",
+    "prompt_for_bulk_projects",
 ]

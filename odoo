@@ -80,7 +80,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  Ciclo de vida       build, start, stop, restart, remove, fix-files\n"
             "  Acceso / debug      bash, logs, list, psql, pw\n"
             "  Módulos             update, init, test\n"
-            "  Git / submódulos    sync, update-tags, submodule-status\n"
+            "  Git / submódulos    sync, update-tags, update-tags-bulk, "
+            "submodule-status\n"
             "  Cobertura de tests  coverage-status, coverage\n"
             "  Config / infra      new, hosts, validate-instances, tui\n"
             "\n"
@@ -355,6 +356,52 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "tag", nargs="?", default=None,
         help="Tag exacto a checkear (opcional)",
+    )
+    p.add_argument(
+        "--v", action="store_true", default=False,
+        help="Mostrar salida de git",
+    )
+
+    # update-tags-bulk
+    p = subparsers.add_parser(
+        "update-tags-bulk",
+        help="Actualiza un submódulo a un tag en varios proyectos de la misma versión de Odoo",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Ejemplos:\n"
+            "  ./odoo update-tags-bulk                       "
+            "elige version, proyectos, submódulo y tag interactivamente\n"
+            "  ./odoo update-tags-bulk 17.0 odoo-venezuela l10nve_17.0.3.4.2\n"
+            "  ./odoo update-tags-bulk 17.0 --projects contiflex,gno,syf\n"
+            "  ./odoo update-tags-bulk 17.0 --branch-origin staging\n"
+        ),
+    )
+    p.add_argument(
+        "odoo_version", nargs="?", default=None,
+        help="Versión de Odoo (ej. 17.0) — opcional, se pregunta si falta",
+    )
+    p.add_argument(
+        "submodulo", nargs="?", default=None,
+        help="Submódulo a actualizar en todos los proyectos (opcional)",
+    )
+    p.add_argument(
+        "tag", nargs="?", default=None,
+        help="Tag exacto a checkear en todos los proyectos (opcional)",
+    )
+    p.add_argument(
+        "--branch-origin", dest="branch_origin", default=None,
+        help=(
+            "Rama base para pull y para crear la rama nueva en CADA proyecto. "
+            "Sin esto, cada proyecto se queda en la rama en la que ya está "
+            "parado (no se hace ningún checkout de rama base)."
+        ),
+    )
+    p.add_argument(
+        "--projects", default=None,
+        help=(
+            "Proyectos a actualizar, separados por coma (opcional, se "
+            "pregunta con selección múltiple si falta)."
+        ),
     )
     p.add_argument(
         "--v", action="store_true", default=False,

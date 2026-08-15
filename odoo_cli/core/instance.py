@@ -235,6 +235,25 @@ def get_custom_repos(base_path: str | None = None) -> list[str]:
     ])
 
 
+def get_projects_for_version(
+    config: dict, odoo_version: str, base_path: str | None = None
+) -> list[str]:
+    """Instance names on ``odoo_version`` that have a ``src/custom/<name>`` checkout.
+
+    Instance names map 1:1 to ``src/custom/<name>`` by convention across
+    every instance in ``instances.json`` (each instance's first custom
+    addon path is its own ``src/custom/<name>``). Instances whose
+    project hasn't been cloned locally yet are silently excluded — a
+    bulk bump can't touch a repo that doesn't exist on disk.
+    """
+    existing = set(get_custom_repos(base_path))
+    return sorted(
+        name
+        for name, inst in config["instances"].items()
+        if inst["odoo_version"] == odoo_version and name in existing
+    )
+
+
 def get_custom_modules(
     config: dict, instance: str, base_path: str | None = None
 ) -> list[str]:

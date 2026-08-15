@@ -32,11 +32,13 @@ from odoo_cli.core.actions.maintenance import (  # noqa: E402
     submodule_status,
     sync,
     update_tags,
+    update_tags_bulk,
 )
 from odoo_cli.core.actions.validate import (
     check_host_port_collisions,
     validate_instances,
 )
+from odoo_cli.core.instance import get_projects_for_version  # noqa: E402
 
 # Real tag list from src/custom/bananera/integra-addons (68 tags, as of
 # this writing), captured via `git tag --sort=-v:refname`. Used as a
@@ -1286,6 +1288,310 @@ class UpdateTagsTest(unittest.TestCase):
                 any("no tiene commits nuevos" in t for t in info_msgs),
                 f"No se avisó que la rama no tenía commits nuevos. Mensajes: {info_msgs}",
             )
+
+
+class GetProjectsForVersionTest(unittest.TestCase):
+    """``get_projects_for_version`` — instances.json x on-disk src/custom/."""
+
+    def test_filters_by_version_and_requires_existing_folder(self):
+        with tempfile.TemporaryDirectory() as base:
+            os.makedirs(os.path.join(base, "src", "custom", "proj1"))
+            os.makedirs(os.path.join(base, "src", "custom", "proj2"))
+            # proj3 is on 17.0 too but was never cloned locally — must
+            # be excluded, a bulk bump can't touch a repo that doesn't
+            # exist on disk.
+            config = {
+                "instances": {
+                    "proj1": {"odoo_version": "17.0"},
+                    "proj2": {"odoo_version": "18.0"},
+                    "proj3": {"odoo_version": "17.0"},
+                }
+            }
+            self.assertEqual(
+                get_projects_for_version(config, "17.0", base_path=base),
+                ["proj1"],
+            )
+            self.assertEqual(
+                get_projects_for_version(config, "18.0", base_path=base),
+                ["proj2"],
+            )
+            self.assertEqual(
+                get_projects_for_version(config, "19.0", base_path=base), []
+            )
+
+
+class UpdateTagsBulkTest(unittest.TestCase):
+    """``update_tags_bulk`` — one (submodulo, tag) bump fanned out over N projects."""
+
+    def _make_project(self, base, project, submodulos=("integra-addons",)):
+        project_path = os.path.join(base, "src", "custom", project)
+        os.makedirs(project_path, exist_ok=True)
+        for sub in submodulos:
+            os.makedirs(os.path.join(project_path, sub), exist_ok=True)
+        return project_path
+
+    def _base_fake_run(self, calls, tag="17.0.2.0.0-beta.1"):
+        """Generic responder: tags match, no branch conflicts, HEAD is 'feature-x'."""
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:3] == ["git", "tag", "--list"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout=f"{tag}\n", stderr="")
+            if cmd[:2] == ["git", "show-ref"]:
+                return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+            if cmd[:4] == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="feature-x\n", stderr="")
+            if cmd[:3] == ["git", "rev-list", "--count"]:
+                return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+            if cmd[:4] == ["git", "remote", "get-url", "origin"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="git@github.com:org/repo.git\n", stderr=""
+                )
+            if cmd[:2] == ["gh", "pr"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="https://github.com/org/repo/pull/1\n", stderr=""
+                )
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        return fake_run
+
+    def test_resolves_submodulo_tag_once_and_applies_to_all_projects(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1")
+            self._make_project(base, "proj2")
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            runner = FakeRunner(confirm_answers=[False])  # push declined
+            with patch(
+                "subprocess.run", side_effect=self._base_fake_run(calls)
+            ), patch(
+                "odoo_cli.core.prompts.prompt_for_submodule",
+                return_value="integra-addons",
+            ) as mock_submodulo, patch(
+                "odoo_cli.core.prompts.prompt_for_tag",
+                return_value="17.0.2.0.0-beta.1",
+            ) as mock_tag:
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1", "proj2"],
+                    None,
+                    None,
+                    "master",
+                )
+
+            self.assertEqual(mock_submodulo.call_count, 1)
+            self.assertEqual(mock_tag.call_count, 1)
+            tag_checkouts = [
+                c for c in calls if c == ["git", "checkout", "17.0.2.0.0-beta.1"]
+            ]
+            self.assertEqual(len(tag_checkouts), 2, f"Llamadas: {calls}")
+
+    def test_skips_project_missing_submodule_without_aborting_batch(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1")
+            self._make_project(base, "proj2", submodulos=())  # no submodules at all
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            runner = FakeRunner(confirm_answers=[False])
+            with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1", "proj2"],
+                    "integra-addons",
+                    "17.0.2.0.0-beta.1",
+                    "master",
+                )
+
+            commit_calls = [c for c in calls if c[:2] == ["git", "commit"]]
+            self.assertEqual(
+                len(commit_calls), 1,
+                f"proj1 debía commitear igual aunque proj2 se saltee. Llamadas: {calls}",
+            )
+            error_msgs = [m[1] for m in runner.messages if m[0] == "error"]
+            self.assertTrue(
+                any("proj2" in t or "Submódulo" in t for t in error_msgs),
+                f"No se reportó el salteo de proj2. Mensajes: {runner.messages}",
+            )
+            info_msgs = [m[1] for m in runner.messages if m[0] == "info"]
+            self.assertTrue(any("proj1" in t for t in info_msgs))
+            self.assertTrue(any("proj2" in t for t in info_msgs))
+
+    def test_skips_project_missing_tag_without_aborting_batch(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1")
+            self._make_project(base, "proj2")
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[:3] == ["git", "tag", "--list"]:
+                    # proj2's submodule doesn't have the target tag.
+                    if "proj2" in kwargs.get("cwd", ""):
+                        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+                    return subprocess.CompletedProcess(
+                        cmd, 0, stdout="17.0.2.0.0-beta.1\n", stderr=""
+                    )
+                if cmd[:2] == ["git", "show-ref"]:
+                    return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="")
+                if cmd[:4] == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="feature-x\n", stderr="")
+                return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+            runner = FakeRunner(confirm_answers=[False])
+            with patch("subprocess.run", side_effect=fake_run):
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1", "proj2"],
+                    "integra-addons",
+                    "17.0.2.0.0-beta.1",
+                    "master",
+                )
+
+            commit_calls = [c for c in calls if c[:2] == ["git", "commit"]]
+            self.assertEqual(len(commit_calls), 1, f"Llamadas: {calls}")
+            error_msgs = [m[1] for m in runner.messages if m[0] == "error"]
+            self.assertTrue(
+                any("17.0.2.0.0-beta.1" in t for t in error_msgs),
+                f"No se reportó el tag faltante en proj2. Mensajes: {runner.messages}",
+            )
+
+    def test_branch_origin_none_never_checks_out_a_branch(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1")
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            runner = FakeRunner(confirm_answers=[False])
+            with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1"],
+                    "integra-addons",
+                    "17.0.2.0.0-beta.1",
+                    None,
+                )
+
+            plain_branch_checkouts = [
+                c for c in calls
+                if len(c) == 3 and c[:2] == ["git", "checkout"]
+                and c[2] != "17.0.2.0.0-beta.1"
+            ]
+            self.assertEqual(
+                plain_branch_checkouts, [],
+                f"No debía hacer checkout de ninguna rama base. Llamadas: {calls}",
+            )
+
+    def test_branch_origin_given_checks_out_pulls_and_refreshes_submodules(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1")
+            self._make_project(base, "proj2")
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            runner = FakeRunner(confirm_answers=[False])
+            with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1", "proj2"],
+                    "integra-addons",
+                    "17.0.2.0.0-beta.1",
+                    "staging",
+                )
+
+            self.assertEqual(
+                len([c for c in calls if c == ["git", "checkout", "staging"]]), 2,
+                f"Llamadas: {calls}",
+            )
+            self.assertEqual(
+                len([c for c in calls if c == ["git", "pull", "origin", "staging"]]),
+                2,
+                f"Llamadas: {calls}",
+            )
+            foreach_fetch = [
+                c for c in calls if c[:3] == ["git", "submodule", "foreach"]
+            ]
+            self.assertEqual(len(foreach_fetch), 2, f"Llamadas: {calls}")
+
+    def test_batch_confirmations_apply_to_every_project_not_once_total(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1")
+            self._make_project(base, "proj2")
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            # Exactly 4 answers for the WHOLE batch: push, PR, merge,
+            # admin-retry — if these were (wrongly) asked per project,
+            # the queue would run dry after proj1 and proj2 would fall
+            # back to `default=False`, so push/PR/merge would only
+            # happen once instead of twice.
+            runner = FakeRunner(confirm_answers=[True, True, True, False])
+            with patch(
+                "subprocess.run", side_effect=self._base_fake_run(calls)
+            ), patch("shutil.which", return_value="/usr/bin/gh"):
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1", "proj2"],
+                    "integra-addons",
+                    "17.0.2.0.0-beta.1",
+                    "master",
+                )
+
+            push_calls = [c for c in calls if c[:2] == ["git", "push"]]
+            pr_calls = [c for c in calls if c[:3] == ["gh", "pr", "create"]]
+            merge_calls = [c for c in calls if c[:3] == ["gh", "pr", "merge"]]
+            self.assertEqual(len(push_calls), 2, f"Llamadas: {calls}")
+            self.assertEqual(len(pr_calls), 2, f"Llamadas: {calls}")
+            self.assertEqual(len(merge_calls), 2, f"Llamadas: {calls}")
+
+    def test_summary_lists_every_project(self):
+        with tempfile.TemporaryDirectory() as base:
+            self._make_project(base, "proj1")
+            self._make_project(base, "proj2")
+            orig_cwd = os.getcwd()
+            os.chdir(base)
+            self.addCleanup(os.chdir, orig_cwd)
+
+            calls = []
+            runner = FakeRunner(confirm_answers=[False])
+            with patch("subprocess.run", side_effect=self._base_fake_run(calls)):
+                update_tags_bulk(
+                    runner,
+                    "17.0",
+                    ["proj1", "proj2"],
+                    "integra-addons",
+                    "17.0.2.0.0-beta.1",
+                    "master",
+                )
+
+            info_msgs = [m[1] for m in runner.messages if m[0] == "info"]
+            summary_idx = next(
+                i for i, t in enumerate(info_msgs) if "RESUMEN" in t
+            )
+            summary_text = "\n".join(info_msgs[summary_idx:])
+            self.assertIn("proj1", summary_text)
+            self.assertIn("proj2", summary_text)
 
 
 class SubmoduleStatusTest(unittest.TestCase):

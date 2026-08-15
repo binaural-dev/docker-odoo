@@ -62,14 +62,17 @@ from odoo_cli.core.actions.maintenance import (
     submodule_status,
     sync,
     update_tags,
+    update_tags_bulk,
 )
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.actions.testing import run_tests
 from odoo_cli.core.prompts import (
     prompt_for_branch,
+    prompt_for_bulk_projects,
     prompt_for_database,
     prompt_for_instance,
     prompt_for_modules,
+    prompt_for_odoo_version,
     prompt_for_project,
     prompt_for_repos,
     prompt_for_test_modules,
@@ -253,6 +256,25 @@ def dispatch(
             args.branch_origin,
             args.submodulo,
             args.tag,
+            show=args.v,
+        )
+
+    elif args.action == "update-tags-bulk":
+        if getattr(args, "odoo_version", None) is None:
+            args.odoo_version = prompt_for_odoo_version(runner, config)
+        if getattr(args, "projects", None) is None:
+            args.projects = prompt_for_bulk_projects(
+                runner, config, args.odoo_version
+            )
+        else:
+            args.projects = [p.strip() for p in args.projects.split(",") if p.strip()]
+        update_tags_bulk(
+            runner,
+            args.odoo_version,
+            args.projects,
+            args.submodulo,
+            args.tag,
+            args.branch_origin,
             show=args.v,
         )
 

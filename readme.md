@@ -186,7 +186,7 @@ El script `./odoo` es un shim liviano (331 LOC) que delega a `odoo_cli/core/`, e
 | `odoo_cli/core/actions/lifecycle.py` | `build_odoo`, `start_odoo`, `stop_odoo`, `restart_odoo`, `remove_odoo` |
 | `odoo_cli/core/actions/access.py` | `run_bash`, `show_logs`, `list_containers`, `psql_connect`, `fix_filestore` |
 | `odoo_cli/core/actions/modules.py` | `update`, `reset_password`, `bash_update_modules` |
-| `odoo_cli/core/actions/maintenance.py` | `init_addons`, `sync`, `update_tags`, `submodule_status` |
+| `odoo_cli/core/actions/maintenance.py` | `init_addons`, `sync`, `update_tags`, `update_tags_bulk`, `submodule_status` |
 | `odoo_cli/core/actions/hosts.py` | `hosts_status`, `hosts_apply`, `hosts_show` |
 
 | Comando | Descripción |
@@ -208,6 +208,7 @@ El script `./odoo` es un shim liviano (331 LOC) que delega a `odoo_cli/core/`, e
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
 | `update-tags [proyecto] [branch_origin] [submodulo] [tag] [--v]` | Bumpea uno o más submódulos a un tag específico, en una rama nueva para PR. Todo argumento faltante se pregunta interactivamente (proyecto, rama base, submódulo, tag — con menú de tags filtrable, ej: `19, alpha`). Push y `gh pr create` se ofrecen al final, cada uno con su propia confirmación. |
+| `update-tags-bulk [odoo_version] [submodulo] [tag] [--branch-origin BRANCH] [--projects p1,p2,...] [--v]` | Bumpea **un** submódulo a **un** tag en varios proyectos de la misma versión de Odoo a la vez (resuelto contra `instances.json`). Submódulo/tag se resuelven una sola vez; push/PR/merge se confirman una sola vez para todo el lote, no por proyecto. Sin `--branch-origin`, cada proyecto se queda en la rama en la que ya estaba (no se lo mueve); con `--branch-origin`, cada proyecto hace `checkout`+`pull` a esa rama antes de ramificar. Un proyecto sin el submódulo o sin el tag se saltea sin frenar al resto. |
 | `submodule-status [proyecto]` | Muestra en qué tag/rama/hash está parado cada submódulo (y el repo del proyecto en sí) — de solo lectura, no toca git. Sin proyecto, corre sobre todos los de `src/custom/`. |
 | `validate-instances` | Valida `instances.json` de forma explícita (ya corre implícitamente antes de cualquier comando). |
 | `hosts [status\|show\|apply\|dry-run]` | Sincroniza `/etc/hosts` con los subdominios de las instances. Ver [Subdominios locales por instance](#subdominios-locales-por-instance). |
@@ -268,6 +269,16 @@ gotchas): [`docs/comandos-odoo.md`](docs/comandos-odoo.md).
 
 # Bumpear un submódulo a un tag y preparar el PR (todo interactivo si se omite)
 ./odoo update-tags bananera
+
+# Bumpear el mismo submódulo/tag en varios proyectos de la misma versión de una
+# (todo interactivo: elige versión, proyectos, submódulo y tag)
+./odoo update-tags-bulk
+
+# Lo mismo, todo por flags: sin moverse de la rama en la que ya está cada proyecto
+./odoo update-tags-bulk 17.0 odoo-venezuela l10nve_17.0.3.4.2 --projects contiflex,gno,syf
+
+# Lo mismo, pero parando cada proyecto en 'staging' antes de ramificar
+./odoo update-tags-bulk 17.0 odoo-venezuela l10nve_17.0.3.4.2 --branch-origin staging
 ```
 
 ## Subdominios locales por instance

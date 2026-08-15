@@ -806,6 +806,338 @@ def update_tags(
 
 
 # ============================================================
+# update-tags-bulk: bump one submodule to one tag, across every
+# project on a given Odoo version
+# ============================================================
+
+
+def _prepare_bulk_project(
+    runner: "Runner", project_path: str, branch_origin: str | None, stdout
+) -> str:
+    """Stash, land on ``branch_origin`` (or stay put), refresh submodules.
+
+    Assumes the caller has already ``os.chdir``'d into ``project_path``
+    (same convention as :func:`update_tags`/:func:`sync`).
+
+    With ``branch_origin=None`` the project is **never** checked out to
+    a different branch — it stays exactly where it already was, and the
+    branch it's on is read back via ``git rev-parse`` to use as the
+    effective base for the new bump branch. With ``branch_origin`` given,
+    every project is moved onto it (``checkout`` + ``pull``) before its
+    submodules are refreshed, so the tag check that follows sees what's
+    actually pinned on that branch, not whatever the project happened to
+    be on before.
+
+    Either way, submodules are refreshed (``submodule update --init
+    --checkout --recursive`` + ``submodule foreach fetch --prune``)
+    before returning — the caller relies on this to check out/validate
+    the target tag against fresh remotes.
+    """
+    runner.info("→ Guardando cambios locales (stash)...")
+    subprocess.run(["git", "stash"], stdout=stdout)
+
+    if branch_origin is not None:
+        runner.info(f"→ Cambiando a rama base {branch_origin}...")
+        subprocess.run(["git", "checkout", branch_origin], stdout=stdout)
+        runner.info(f"→ Trayendo últimos cambios (pull origin {branch_origin})...")
+        subprocess.run(["git", "pull", "origin", branch_origin], stdout=stdout)
+        effective_branch_origin = branch_origin
+    else:
+        current = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=project_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).stdout.strip()
+        effective_branch_origin = current or "HEAD"
+
+    runner.info("→ Actualizando submódulos (init --checkout --recursive)...")
+    subprocess.run(
+        ["git", "submodule", "update", "--init", "--checkout", "--recursive"],
+        stdout=stdout,
+    )
+    runner.info("→ Actualizando remotos de submódulos (fetch --prune)...")
+    subprocess.run(
+        ["git", "submodule", "foreach", "git fetch origin --prune"],
+        stdout=stdout,
+    )
+    return effective_branch_origin
+
+
+def update_tags_bulk(
+    runner: "Runner",
+    odoo_version: str,
+    projects: list[str],
+    submodulo: str | None,
+    tag: str | None,
+    branch_origin: str | None,
+    show: bool = False,
+) -> None:
+    """Bump one submodule to one tag, across every project in ``projects``.
+
+    Unlike :func:`update_tags` (one project, any number of bumps,
+    confirmed step by step), this bumps exactly **one** ``(submodulo,
+    tag)`` pair across **many** projects — the submodule and tag are
+    resolved interactively only once (against the first project in
+    ``projects``, used as a reference), and push/PR/merge are each
+    confirmed once for the whole batch instead of once per project.
+    To bump a different submodule too, run this again.
+
+    A project missing the target submodule, or whose submodule doesn't
+    have the target tag, is skipped (reported, not fatal) — not every
+    project on a given Odoo version necessarily carries every shared
+    submodule. Likewise, any per-project git/gh failure is caught and
+    reported without aborting the rest of the batch (same
+    continue-on-error pattern as :func:`sync`/:func:`submodule_status`).
+    """
+    import shutil
+
+    from odoo_cli.core.prompts import prompt_for_submodule, prompt_for_tag
+
+    base_path = os.getcwd()
+    stdout = subprocess.DEVNULL if not show else None
+
+    valid_projects = []
+    for project in projects:
+        if os.path.isdir(os.path.join(base_path, "src", "custom", project)):
+            valid_projects.append(project)
+        else:
+            runner.error(
+                f"Error: Proyecto '{project}' no encontrado en src/custom/ "
+                "— se omite del lote."
+            )
+    if not valid_projects:
+        runner.error("❌ Ningún proyecto válido para procesar.")
+        return
+
+    runner.info(
+        f"\n=== 🔀 UPDATE-TAGS-BULK: Odoo {odoo_version} — "
+        f"{len(valid_projects)} proyecto(s) ===\n"
+    )
+    runner.info(
+        f"Se actualizarán {len(valid_projects)} proyectos en Odoo "
+        f"{odoo_version}: {', '.join(valid_projects)}"
+    )
+
+    # 1) Resolve submodulo + tag ONCE, against the first project as a
+    # reference — prepared the same way every project will be prepared
+    # in the loop below, so the tags it lists are the ones that'll
+    # actually be checked against every other project.
+    ref_project = valid_projects[0]
+    ref_path = os.path.join(base_path, "src", "custom", ref_project)
+    os.chdir(ref_path)
+    try:
+        runner.info(f"\n--- Preparando {ref_project} (referencia) ---")
+        _prepare_bulk_project(runner, ref_path, branch_origin, stdout)
+    finally:
+        os.chdir(base_path)
+
+    if submodulo is None:
+        submodulo = prompt_for_submodule(runner, ref_path)
+    if not submodulo:
+        runner.error("No se seleccionó ningún submódulo.")
+        return
+
+    if tag is None:
+        submodule_path = os.path.join(ref_path, submodulo)
+        if not os.path.isdir(submodule_path):
+            runner.error(
+                f"Error: Submódulo '{submodulo}' no encontrado en "
+                f"'{ref_project}' (proyecto de referencia)."
+            )
+            return
+        tag = prompt_for_tag(runner, submodule_path)
+    if not tag:
+        runner.error("No se seleccionó ningún tag.")
+        return
+
+    # 2) Batch-level confirmations — asked once, applied to every
+    # project. Nested the same way update_tags nests them per-project:
+    # no point asking about PRs if push was declined, etc.
+    do_push = runner.confirm(
+        f"\n¿Pushear las ramas de los {len(valid_projects)} proyectos?",
+        default=False,
+    )
+    do_pr = do_push and runner.confirm(
+        "¿Crear el PR en cada proyecto (gh pr create)?", default=False
+    )
+    do_merge = do_pr and runner.confirm(
+        "¿Mergear los PRs creados (gh pr merge)?", default=False
+    )
+    do_admin_retry = do_merge and runner.confirm(
+        "¿Reintentar con --admin los merges bloqueados solo por "
+        "branch protection?",
+        default=False,
+    )
+
+    if do_pr and shutil.which("gh") is None:
+        runner.error(
+            "❌ 'gh' (GitHub CLI) no está instalado — no se pueden crear "
+            "PRs automáticamente. Se pushearán las ramas nada más."
+        )
+        do_pr = do_merge = do_admin_retry = False
+
+    # 3) Loop over every project — one project's failure never aborts
+    # the batch (same continue-on-error pattern as sync/submodule_status).
+    results: list[tuple[str, str]] = []
+    for project in valid_projects:
+        project_path = os.path.join(base_path, "src", "custom", project)
+        os.chdir(project_path)
+        try:
+            runner.info(f"\n--- {project} ---")
+            if project == ref_project:
+                # Already prepared above (as the reference project) —
+                # re-preparing here would just redo the same stash/
+                # checkout/pull/submodule-refresh for no benefit.
+                effective_branch_origin = (
+                    branch_origin
+                    if branch_origin is not None
+                    else subprocess.run(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=project_path,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        text=True,
+                    ).stdout.strip()
+                    or "HEAD"
+                )
+            else:
+                effective_branch_origin = _prepare_bulk_project(
+                    runner, project_path, branch_origin, stdout
+                )
+
+            resolved = _resolve_bump_checkout(
+                runner, project_path, submodulo, tag, stdout
+            )
+            if not resolved:
+                results.append(
+                    (project, "sin ese submódulo/tag — salteado")
+                )
+                continue
+            bump_submodulo, bump_tag = resolved
+
+            suggested_branch = _suggest_branch_name(
+                [(bump_submodulo, bump_tag)], effective_branch_origin
+            )
+            new_branch = suggested_branch
+            suffix = 2
+            while _branch_exists(new_branch) or _branch_ref_conflict(new_branch):
+                new_branch = f"{suggested_branch}-{suffix}"
+                suffix += 1
+
+            runner.info(f"→ Creando rama {new_branch} desde {effective_branch_origin}...")
+            checkout_b = subprocess.run(
+                ["git", "checkout", "-b", new_branch],
+                stdout=stdout, stderr=subprocess.PIPE, text=True,
+            )
+            if checkout_b.returncode != 0:
+                runner.error(
+                    f"❌ {project}: no se pudo crear la rama '{new_branch}': "
+                    f"{checkout_b.stderr.strip()}"
+                )
+                results.append((project, "error creando rama nueva"))
+                continue
+
+            _commit_bump(runner, bump_submodulo, bump_tag, stdout)
+
+            rev_count = subprocess.run(
+                ["git", "rev-list", "--count",
+                 f"{effective_branch_origin}..{new_branch}"],
+                stdout=subprocess.PIPE, text=True,
+            ).stdout.strip()
+            if rev_count == "0":
+                results.append(
+                    (project, f"sin cambios — ya estaba en {bump_tag}")
+                )
+                continue
+
+            if not do_push:
+                results.append(
+                    (project, f"rama '{new_branch}' lista localmente (sin push)")
+                )
+                continue
+
+            runner.info(f"→ Pusheando {new_branch} a origin...")
+            push = subprocess.run(
+                ["git", "push", "-u", "origin", new_branch],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            if push.returncode != 0:
+                runner.error(f"❌ {project}: error al hacer push: {push.stderr.strip()}")
+                results.append((project, "error en push"))
+                continue
+
+            if not do_pr:
+                results.append((project, f"rama '{new_branch}' pusheada (sin PR)"))
+                continue
+
+            repo_slug = _gh_repo_slug()
+            title = f"Update {bump_submodulo} to {bump_tag}"
+            body = f"- {bump_submodulo} → {bump_tag}"
+            gh_pr_cmd = [
+                "gh", "pr", "create",
+                "--base", effective_branch_origin,
+                "--head", new_branch,
+                "--title", title,
+                "--body", body,
+            ]
+            if repo_slug:
+                gh_pr_cmd += ["--repo", repo_slug]
+            runner.info("→ Creando PR con gh...")
+            pr = subprocess.run(
+                gh_pr_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            if pr.returncode != 0:
+                runner.error(f"❌ {project}: error creando el PR: {pr.stderr.strip()}")
+                results.append((project, "push ok, error creando PR"))
+                continue
+            pr_url = pr.stdout.strip()
+            runner.info(f"✅ {project}: PR creado: {pr_url}")
+
+            if not do_merge:
+                results.append((project, f"PR creado: {pr_url}"))
+                continue
+
+            gh_merge_cmd = [
+                "gh", "pr", "merge", new_branch, "--merge", "--delete-branch",
+            ]
+            if repo_slug:
+                gh_merge_cmd += ["--repo", repo_slug]
+            runner.info("→ Mergeando PR (gh pr merge --merge --delete-branch)...")
+            merge = subprocess.run(
+                gh_merge_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+            if merge.returncode != 0 and do_admin_retry and "--admin" in merge.stderr:
+                runner.info(f"→ {project}: reintentando merge con --admin...")
+                merge = subprocess.run(
+                    gh_merge_cmd + ["--admin"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                )
+            if merge.returncode != 0:
+                runner.error(
+                    f"❌ {project}: no se pudo mergear el PR: {merge.stderr.strip()}"
+                )
+                results.append((project, f"PR creado ({pr_url}), no mergeado"))
+                continue
+
+            runner.info(f"✅ {project}: PR mergeado.")
+            results.append((project, f"mergeado: {pr_url}"))
+        except Exception as e:
+            runner.error(f"❌ Error procesando {project}: {e}")
+            results.append((project, f"error: {e}"))
+        finally:
+            os.chdir(base_path)
+
+    # 4) Final summary — one line per project, so the outcome of all
+    # N projects is visible at a glance.
+    runner.info("\n=== 📋 RESUMEN update-tags-bulk ===")
+    for project, outcome in results:
+        runner.info(f"  • {project}: {outcome}")
+    runner.info("")
+
+
+# ============================================================
 # submodule-status: report-only — what tag/branch/hash is each
 # submodule checked out to, right now
 # ============================================================
@@ -886,5 +1218,6 @@ __all__ = [
     "init_addons",
     "sync",
     "update_tags",
+    "update_tags_bulk",
     "submodule_status",
 ]

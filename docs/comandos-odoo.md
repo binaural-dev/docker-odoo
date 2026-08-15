@@ -32,6 +32,7 @@ tocar Docker.
 | `new [nombre] [repo] [branch] [version]` | — | Wizard: clona repo del cliente + registra la instancia |
 | `sync [repo] [branch]` | — | Sincroniza submódulos de un repo en `src/custom/` |
 | `update-tags [proyecto] [branch] [submódulo] [tag]` | — | Bump de un submódulo a un tag, en rama nueva para PR |
+| `update-tags-bulk [odoo_version] [submódulo] [tag]` | — | Igual, pero en varios proyectos de la misma versión de Odoo a la vez |
 | `submodule-status [proyecto] [--ref r1,r2]` | — | Solo lectura: tag/rama/hash de cada submódulo |
 | `validate-instances` | — | Valida `instances.json` (ya corrió implícitamente antes de cualquier comando) |
 | `hosts [status\|show\|apply\|dry-run]` | — | Sincroniza `/etc/hosts` con los subdominios `.local` |
@@ -220,6 +221,41 @@ abrir PR. Todo argumento faltante se pregunta:
   para no confundir bumps de `17.0` con bumps de `18.0`.
 - Al final ofrece `git push` y `gh pr create`, cada uno con su propia
   confirmación — nunca automático.
+
+### `update-tags-bulk [odoo_version] [submódulo] [tag] [--branch-origin BRANCH] [--projects p1,p2,...] [--v]`
+
+Igual que `update-tags`, pero para **un** `(submódulo, tag)` aplicado a
+**varios** proyectos de la misma versión de Odoo de una sola vez —
+pensado para no repetir `update-tags` a mano proyecto por proyecto
+cuando hay que bumpear el mismo submódulo en 10+ clientes que comparten
+versión.
+
+- **odoo_version**: se busca entre los valores únicos de `odoo_version`
+  en `instances.json`.
+- **proyectos**: por defecto se preguntan con selección múltiple (con
+  atajo "Todos"), filtrados a los que están en esa versión **y** ya
+  tienen su carpeta en `src/custom/`. También se pueden pasar directo
+  con `--projects p1,p2,p3`.
+- **submódulo/tag**: se resuelven **una sola vez** (contra el primer
+  proyecto del lote, como referencia) — no se vuelve a preguntar por
+  cada proyecto. Un proyecto que no tenga ese submódulo, o cuyo
+  submódulo no tenga ese tag, se saltea (se reporta, no frena al resto
+  del lote).
+- **rama base**: sin `--branch-origin`, cada proyecto se queda parado en
+  la rama en la que ya estaba (nunca se le hace `checkout`) — solo se
+  actualizan y refrescan sus submódulos antes de chequear el tag. Con
+  `--branch-origin <rama>`, CADA proyecto hace `checkout <rama>` +
+  `pull origin <rama>` + refresco de submódulos (`submodule update
+  --init --checkout --recursive` + `submodule foreach fetch --prune`)
+  antes de ramificar, y el PR de cada proyecto se abre contra esa misma
+  rama.
+- **push / PR / merge**: cada uno se confirma **una sola vez para todo
+  el lote** (no una vez por proyecto) y esa respuesta se aplica a los N
+  proyectos — es la diferencia clave con correr `update-tags` varias
+  veces a mano.
+- Al terminar, imprime un resumen con el resultado de cada proyecto
+  (bumpeado + PR, bumpeado sin push, salteado por falta de submódulo/tag,
+  o error).
 
 ### `submodule-status [proyecto] [--ref rama1,rama2]`
 
