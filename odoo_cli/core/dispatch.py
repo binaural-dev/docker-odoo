@@ -260,11 +260,23 @@ def dispatch(
         )
 
     elif args.action == "update-tags-bulk":
+        # Bumping a submodule tag is a git-only operation on
+        # src/custom/<project> — it has nothing to do with whether an
+        # instance's Docker container is enabled locally. `config`
+        # here is already filtered by `enabled` (for the docker/build
+        # actions), so this reloads the FULL instances.json instead,
+        # same as the TUI's enable/disable toggle does — otherwise a
+        # client with `enabled: false` would silently never show up
+        # as a version/project option, even though its repo under
+        # src/custom/ is exactly as real as any enabled one.
+        from generators.config_loader import load_full_config
+
+        full_config = load_full_config(base_path)
         if getattr(args, "odoo_version", None) is None:
-            args.odoo_version = prompt_for_odoo_version(runner, config)
+            args.odoo_version = prompt_for_odoo_version(runner, full_config)
         if getattr(args, "projects", None) is None:
             args.projects = prompt_for_bulk_projects(
-                runner, config, args.odoo_version
+                runner, full_config, args.odoo_version
             )
         else:
             args.projects = [p.strip() for p in args.projects.split(",") if p.strip()]
