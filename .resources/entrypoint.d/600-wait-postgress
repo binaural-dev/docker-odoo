@@ -1,14 +1,41 @@
 #!/bin/bash
 set -e
 
-# Know if Postgres is listening
-function db_is_listening() {
-    psql --list > /dev/null 2>&1 || (sleep 1 && db_is_listening)
+# WAIT_PG_TIMEOUT: max seconds to wait for Postgres before giving up and
+# exiting non-zero. Without a cap, a down/slow Postgres left this retrying
+# forever -- and the old implementation used recursive subshells
+# ("|| (sleep 1 && func)") instead of a loop, so every failed attempt piled a
+# new subshell on top of the previous one instead of replacing it. With
+# Postgres down for any real stretch of time, that leaked one process per
+# second per container, across every odoo-* container hitting the same
+# outage at once -- which is exactly how a prior incident on another server
+# ended up with 600+ stuck processes eating all the RAM. A bounded loop that
+# actually exits lets the container fail fast and let `restart: always`
+# (a full, clean process) handle the retry instead.
+WAIT_PG_TIMEOUT="${WAIT_PG_TIMEOUT:-300}"
+
+db_is_listening() {
+    local waited=0
+    until psql --list > /dev/null 2>&1; do
+        waited=$((waited + 1))
+        if [ "$waited" -ge "$WAIT_PG_TIMEOUT" ]; then
+            echo "ERROR: Postgres no respondio en ${WAIT_PG_TIMEOUT}s, abortando arranque." > /dev/stderr
+            exit 1
+        fi
+        sleep 1
+    done
 }
 
-# Check pg user exist
-function pg_user_exist() {
-    psql postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PGUSER'" > /dev/null 2>&1 || (sleep 1 && pg_user_exist)
+pg_user_exist() {
+    local waited=0
+    until psql postgres -tAc "SELECT 1 FROM pg_roles WHERE rolname='$PGUSER'" > /dev/null 2>&1; do
+        waited=$((waited + 1))
+        if [ "$waited" -ge "$WAIT_PG_TIMEOUT" ]; then
+            echo "ERROR: el usuario Postgres '$PGUSER' no aparecio en ${WAIT_PG_TIMEOUT}s, abortando arranque." > /dev/stderr
+            exit 1
+        fi
+        sleep 1
+    done
 }
 
 if [ "${WAIT_PG,,}" == "true" ]; then

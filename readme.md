@@ -68,6 +68,8 @@ Define las conexiones a PostgreSQL. `create_container` (default: `true`) control
       "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
+      "bootstrap_user": "odoo_bootstrap",
+      "bootstrap_password": "cambiar-esto",
       "config": "postgresql.conf"
     },
     "external_pg16": {
@@ -86,6 +88,15 @@ Las bases de datos gestionadas (`create_container: true`) **no publican su puert
 
 Si necesitas conectarte a la base de datos desde el host (por ejemplo con un cliente de escritorio), agrega `"expose_host_port": true` para que se publique `port` en `docker-compose.generated.yml`. Para uso normal (`./odoo psql`, `./odoo bash`, backups, restores, pgAdmin) no hace falta: todos corren dentro de los contenedores y usan la red interna.
 
+#### `user`/`password` vs `bootstrap_user`/`bootstrap_password`
+
+Cada base de datos gestionada tiene dos identidades de Postgres:
+
+- **`user`/`password`**: el rol que **Odoo usa para todo**. No es superusuario (tiene `LOGIN` y `CREATEDB`, nada más), aunque sí puede crear/alterar/borrar tablas de módulos vía herencia de privilegios del rol bootstrap. Es el único que debería usarse desde `./odoo psql`, backups, restores, etc.
+- **`bootstrap_user`/`bootstrap_password`**: el rol que Postgres crea automáticamente al inicializar el volumen (`initdb`). Postgres nunca permite quitarle el atributo de superusuario a este rol específico ni reasignarle la propiedad de sus objetos — es una restricción del motor, no de configuración. Por eso no se usa directamente: en un volumen nuevo, el rol de `user` se crea aparte (no-superusuario) heredando los privilegios del bootstrap vía `GRANT`, y el bootstrap queda con `NOLOGIN` — existe porque es dueño de los objetos, pero nadie puede autenticarse con él.
+
+Ambos campos son opcionales: si se omiten, se usa el mismo valor de `user`/`password` para el bootstrap (comportamiento anterior a este esquema, con el rol de Odoo siendo superusuario — no recomendado, pero sigue funcionando para no romper configs existentes).
+
 ### `instances` — Instancias de Odoo
 
 Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`.
@@ -101,7 +112,8 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
       "overwrite_odoo_config": {
         "workers": 4,
         "addons": ["src/enterprise", "src/custom/bananera"],
-        "db_name": "bananera_prod"
+        "db_name": "bananera_prod",
+        "db_filter": "^bananera_"
       }
     },
     "client-b": {
@@ -116,6 +128,8 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
   }
 }
 ```
+
+`db_filter` es el patrón de regex que Odoo usa en runtime para decidir qué bases de datos le pertenecen (ej. `^bananera_` matcheará `bananera_prod`, `bananera_staging`, etc.), y también lo respeta el CLI de gestión: `./odoo update -d all` para una instancia solo actualiza las bases que matchean su `db_filter`, no todas las del servicio de Postgres que comparte con otras instancias. Si una instancia no define `db_filter` (o es `"*"`), `-d all` sigue trayendo todas las bases del servicio, con una advertencia explícita en pantalla.
 
 ### `pgadmin` (opcional)
 
@@ -162,7 +176,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `remove [instance]` | Elimina contenedores y volúmenes. |
 | `fix-files [instance]` | Corrige permisos del filestore. |
 | `psql <instance> -d <db>` | Conecta a PostgreSQL. |
-| `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
+| `update <instance> [-d <db\|all>] [-m modules] [-f]` | Actualiza módulos de Odoo (una base o todas). Sin `-m`, actualiza todos los módulos usando `click-odoo-update` (solo los que cambiaron desde la última actualización); con `-f`/`--force` fuerza un upgrade completo de todos, sin importar qué cambió. Un módulo puntual (`-m modulo`) siempre se actualiza directo, sin pasar por ninguno de los dos caminos anteriores. |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
@@ -194,8 +208,11 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 # Actualizar módulos
 ./odoo update bananera -d bananera_prod -m sale,purchase
 
-# Actualizar todas las bases de datos de una instancia
+# Actualizar todas las bases de datos de una instancia (solo lo que cambio, via click-odoo-update)
 ./odoo update bananera -d all
+
+# Forzar un upgrade completo de todos los modulos, sin importar que cambio
+./odoo update bananera -d all -f
 
 # Correr tests con cobertura de un modulo
 ./odoo test bananera sale_extension
