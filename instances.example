@@ -16,7 +16,7 @@
       "db_maxconn": 200,                       # Conexiones maximas a PostgreSQL por worker
       "unaccent": false,                       # Extension unaccent de PostgreSQL para busquedas sin acentos
       "server_wide_modules": "",               # Modulos cargados en todos los workers (ej: "web,base_import_module")
-      "db_filter": "",                         # Filtro regex para restringir bases de datos visibles
+      "db_filter": "",                         # Filtro regex de bases de datos visibles para Odoo, y usado por "./odoo update -d all" para no tocar bases de otras instancias
       "db_name": "False",                      # Base de datos por defecto ("False" para deshabilitar)
       "server_mode": "test",                   # Modo del servidor: "test", "development", "production"
       "aeroo_docs_host": "aeroo",              # Host del servicio Aeroo Docs para reportes
@@ -58,8 +58,10 @@
       "postgres_version": 16,                  # Version de PostgreSQL a usar (16, 15, 14, etc.)
       "port": 5432,                            # Puerto en el host, solo se publica si expose_host_port=true
       "expose_host_port": false,               # true: publica "port" en el host (docker-compose ports). Por defecto la DB solo es alcanzable dentro de la red interna de Docker (db-<nombre>:5432)
-      "user": "odoo",                          # Usuario de PostgreSQL (tambien usado por Odoo)
-      "password": "odoo",                      # Password de PostgreSQL (tambien usado por Odoo)
+      "user": "odoo",                          # Usuario de PostgreSQL que usa Odoo (NO superusuario: solo LOGIN + CREATEDB)
+      "password": "odoo",                      # Password del usuario de arriba
+      "bootstrap_user": "odoo_bootstrap",       # Opcional. Rol que crea Postgres al inicializar el volumen (initdb) -- SIEMPRE superusuario, Postgres no permite quitarle ese atributo. Se usa solo para crear "user" en un volumen nuevo, y luego queda en NOLOGIN (nadie se autentica con el). Si se omite, "user" hace de bootstrap tambien (compatibilidad con configs viejas, no recomendado)
+      "bootstrap_password": "cambiar-esto",     # Opcional, ver bootstrap_user arriba
       "config": "postgresql.conf",             # Archivo de configuracion de PostgreSQL en .resources/dbconfigs/
       "create_container": true                 # true: Docker crea y gestiona el contenedor de PostgreSQL
     },
@@ -95,7 +97,7 @@
         "db_maxconn": 200,                         # Sobrescribe conexiones maximas
         "unaccent": false,                         # Sobrescribe sin unaccent
         "server_wide_modules": "",                 # Sobrescribe modulos server-wide
-        "db_filter": "",                           # Sobrescribe filtro de bases de datos
+        "db_filter": "^client-a_",                 # Sobrescribe filtro de bases de datos (ej: matchea client-a_prod, client-a_staging, etc.)
         "db_name": "prod",                         # Sobrescribe nombre de base de datos por defecto
         "server_mode": "production",               # Sobrescribe modo del servidor
         "aeroo_docs_host": "aeroo",                # Sobrescribe host de Aeroo
