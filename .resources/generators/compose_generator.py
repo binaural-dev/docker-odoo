@@ -9,6 +9,7 @@ from .config_loader import (
     resolve_instance_config,
     resolve_db_config,
     get_db_host,
+    get_db_internal_port,
     get_managed_databases,
     get_odoo_minor,
 )
@@ -78,9 +79,18 @@ def _header():
 def _db_service(db_name, db_conf):
     pg_version = db_conf["postgres_version"]
     port = db_conf["port"]
+    # "user"/"password" are the non-superuser role Odoo actually connects with.
+    # "bootstrap_user"/"bootstrap_password" (falls back to user/password if
+    # absent) are the cluster's initdb bootstrap role, which Postgres always
+    # creates as a superuser and never lets lose that attribute. The bootstrap
+    # role is only used internally (docker-entrypoint-initdb.d) to create the
+    # app role on a fresh volume; Odoo itself never authenticates as it.
     user = db_conf["user"]
     password = db_conf["password"]
+    bootstrap_user = db_conf.get("bootstrap_user", user)
+    bootstrap_password = db_conf.get("bootstrap_password", password)
     pg_config = db_conf.get("config")
+    expose_host_port = db_conf.get("expose_host_port", False)
     container_name = f"db-{db_name}"
 
     lines = [
@@ -95,14 +105,25 @@ def _db_service(db_name, db_conf):
     lines += [
         "    restart: always",
         f"    container_name: {container_name}",
+        "    shm_size: 512m",
         "    build:",
         "      context: .",
         "      dockerfile: ./.resources/db.Dockerfile",
         "      args:",
         f"        POSTGRES_IMG_VERSION: {pg_version}",
         f"    image: local_odoo_db_{db_name}:{pg_version}",
-        "    ports:",
-        f'      - "{port}:5432"',
+    ]
+
+    # Host port publishing is opt-in: by default Postgres is only reachable
+    # from sibling containers over the internal Docker network (db-<name>:5432).
+    # Set "expose_host_port": true on the database config to publish it.
+    if expose_host_port:
+        lines += [
+            "    ports:",
+            f'      - "{port}:5432"',
+        ]
+
+    lines += [
         f"    networks:",
         f"      - {NETWORK_NAME}",
         "    volumes:",
@@ -110,8 +131,10 @@ def _db_service(db_name, db_conf):
         f"      - {db_name}-data:/var/lib/postgresql/data",
         "    environment:",
         "      - POSTGRES_DB=postgres",
-        f"      - POSTGRES_PASSWORD={password}",
-        f"      - POSTGRES_USER={user}",
+        f"      - POSTGRES_PASSWORD={bootstrap_password}",
+        f"      - POSTGRES_USER={bootstrap_user}",
+        f"      - APP_DB_USER={user}",
+        f"      - APP_DB_PASSWORD={password}",
         "      - PGDATA=/var/lib/postgresql/data/pgdata",
         "",
     ]
@@ -123,7 +146,10 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     odoo_minor = get_odoo_minor(odoo_version)
     container_name = f"odoo-{inst_name}"
     db_host = get_db_host(db_name, db_conf)
-    db_port = db_conf["port"]
+    # NOTE: db_conf["port"] is the HOST-side port (only published when
+    # expose_host_port is set) — not reachable from sibling containers.
+    # Odoo always talks to Postgres over the internal Docker network.
+    db_port = get_db_internal_port(db_conf)
     db_user = db_conf["user"]
     db_password = db_conf["password"]
 
@@ -269,8 +295,6 @@ def _pgadmin_service(pgadmin_conf):
         "    environment:",
         f"      PGADMIN_DEFAULT_EMAIL: {email}",
         f"      PGADMIN_DEFAULT_PASSWORD: {password}",
-        "    extra_hosts:",
-        '      - "db:host-gateway"',
         "    ports:",
         f'      - "{port}:80"',
         f"    networks:",
