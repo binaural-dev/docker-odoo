@@ -79,8 +79,16 @@ def _header():
 def _db_service(db_name, db_conf):
     pg_version = db_conf["postgres_version"]
     port = db_conf["port"]
+    # "user"/"password" are the non-superuser role Odoo actually connects with.
+    # "bootstrap_user"/"bootstrap_password" (falls back to user/password if
+    # absent) are the cluster's initdb bootstrap role, which Postgres always
+    # creates as a superuser and never lets lose that attribute. The bootstrap
+    # role is only used internally (docker-entrypoint-initdb.d) to create the
+    # app role on a fresh volume; Odoo itself never authenticates as it.
     user = db_conf["user"]
     password = db_conf["password"]
+    bootstrap_user = db_conf.get("bootstrap_user", user)
+    bootstrap_password = db_conf.get("bootstrap_password", password)
     pg_config = db_conf.get("config")
     expose_host_port = db_conf.get("expose_host_port", False)
     container_name = f"db-{db_name}"
@@ -123,8 +131,10 @@ def _db_service(db_name, db_conf):
         f"      - {db_name}-data:/var/lib/postgresql/data",
         "    environment:",
         "      - POSTGRES_DB=postgres",
-        f"      - POSTGRES_PASSWORD={password}",
-        f"      - POSTGRES_USER={user}",
+        f"      - POSTGRES_PASSWORD={bootstrap_password}",
+        f"      - POSTGRES_USER={bootstrap_user}",
+        f"      - APP_DB_USER={user}",
+        f"      - APP_DB_PASSWORD={password}",
         "      - PGDATA=/var/lib/postgresql/data/pgdata",
         "",
     ]

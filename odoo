@@ -206,11 +206,25 @@ def run_bash(config, instance):
     os.system(f"docker exec -u root -it {container} bash")
 
 
-def bash_update_modules(config, instance, dbname, modules="all"):
-    """Update Odoo modules in an instance."""
+def bash_update_modules(config, instance, dbname, modules="all", force_all=False):
+    """Update Odoo modules in an instance.
+
+    When updating "all" modules, this uses click-odoo-update by default --
+    it only touches addons whose file hash changed since the last update,
+    instead of literally reprocessing every installed module (which is what
+    `odoo -u all` always does, regardless of whether anything changed).
+    Pass force_all=True (the -f/--force CLI flag) to force a complete
+    upgrade via click-odoo-update's own --update-all flag. Updating one
+    specific module by name is unaffected -- that's already a deliberate,
+    targeted operation, so it always goes straight through `odoo -u <modulo>`.
+    """
     print(f"\n\033[1;35m=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     container = f"odoo-{instance}"
-    cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+    if modules == "all":
+        force_flag = " --update-all" if force_all else ""
+        cmd = f"docker exec -u root -it {container} click-odoo-update --if-exists{force_flag} -d {dbname}"
+    else:
+        cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
     print(cmd)
     return os.system(cmd)
 
@@ -393,7 +407,14 @@ def sync(repo_names, branch, show=False):
 
 
 def get_databases(config, instance):
-    """Fetch database names from the postgres container of an instance."""
+    """Fetch database names from the postgres container of an instance.
+
+    Filtered by the instance's own db_filter when it has one -- otherwise
+    a database service shared by several instances (e.g. pg16_odoo_17) would
+    return every database on the server, not just the ones that belong to
+    this instance (this is exactly what made `./odoo update -d all -i X` slow:
+    it ended up updating modules on unrelated instances' databases too).
+    """
     try:
         inst_conf = config["instances"][instance]
         db_conf = resolve_db_config(inst_conf, config)
@@ -403,11 +424,25 @@ def get_databases(config, instance):
         db_port = get_db_internal_port(db_conf)
         container = f"odoo-{instance}"
 
+        odoo_conf = resolve_instance_config(inst_conf, config)
+        db_filter = odoo_conf.get("db_filter")
+
+        where_clause = "datistemplate = false AND datname NOT IN ('postgres', 'template1')"
+        if db_filter and db_filter != "*":
+            escaped_filter = db_filter.replace("'", "''")
+            where_clause += f" AND datname ~ '{escaped_filter}'"
+        else:
+            print(
+                f"\n⚠️  La instancia '{instance}' no tiene un db_filter especifico (o es '*') -- "
+                f"se listaran TODAS las bases del servicio de Postgres '{inst_conf['database']}', "
+                f"incluyendo las de otras instancias que lo compartan.\n"
+            )
+
         # Try to get databases from postgres
         cmd = (
             f"docker exec -e PGPASSWORD={db_password} {container} "
             f"psql --host {db_host} --port {db_port} -U {db_user} -d postgres -At -c "
-            f"\"SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres', 'template1');\" 2>/dev/null"
+            f"\"SELECT datname FROM pg_database WHERE {where_clause};\" 2>/dev/null"
         )
         output = subprocess.check_output(cmd, shell=True).decode().strip()
         if output:
@@ -717,19 +752,6 @@ def prompt_for_database(config, instance, allow_all=False):
     return prompt_selection(options, f"Selecciona base de datos para '{instance}'")
 
 
-def prompt_for_modules(config, instance):
-    modules = get_custom_modules(config, instance)
-    if not modules:
-        print(f"\nNo se encontraron módulos custom en los addons de '{instance}'.")
-        return "all"
-    
-    options = [(mod, mod) for mod in modules]
-    selected = prompt_selection(options, f"Selecciona módulos a actualizar para '{instance}' (Espacio para marcar, Enter para confirmar)", multi=True)
-    if not selected:
-        return "all"
-    return ",".join(selected)
-
-
 def prompt_for_test_modules(config, instance):
     """Como prompt_for_modules, pero para 'test': no hay un 'all' valido,
     asi que si no se selecciona nada se sale con error."""
@@ -810,6 +832,10 @@ def main():
     update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
     update_p.add_argument("-d", required=False, help="Nombre de la base de datos o 'all' (opcional)")
     update_p.add_argument("-m", default=None, help="Módulos a actualizar (opcional)")
+    update_p.add_argument(
+        "-f", "--force", action="store_true",
+        help="Forzar actualizacion literal de TODOS los modulos (sin esto, se usa click-odoo-update para actualizar solo lo que cambio)",
+    )
 
     # init
     init_p = subparsers.add_parser("init", help="Inicializar addons/repositorios")
@@ -949,7 +975,10 @@ def main():
         if args.d is None:
             args.d = prompt_for_database(config, args.instance, allow_all=True)
         if args.m is None:
-            args.m = prompt_for_modules(config, args.instance)
+            # Sin -m, actualizar todo directo -- no tiene sentido forzar al
+            # usuario a elegir de una lista cuando "todos" ya es la opcion
+            # por defecto sensata (y ahora, con click-odoo-update, la rapida).
+            args.m = "all"
         if args.d.strip().lower() == "all":
             databases = get_databases(config, args.instance)
             if not databases:
@@ -958,7 +987,7 @@ def main():
 
             failures = []
             for db_name in databases:
-                result = bash_update_modules(config, args.instance, db_name, args.m)
+                result = bash_update_modules(config, args.instance, db_name, args.m, force_all=args.force)
                 if result != 0:
                     failures.append((db_name, result))
 
@@ -968,7 +997,7 @@ def main():
                     print(f"  - {db_name} (exit code: {code})")
                 sys.exit(1)
         else:
-            bash_update_modules(config, args.instance, args.d, args.m)
+            bash_update_modules(config, args.instance, args.d, args.m, force_all=args.force)
     elif args.action == "init":
         init_addons(config, args.instance)
     elif args.action == "sync":
