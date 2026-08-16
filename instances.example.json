@@ -24,8 +24,11 @@
     "pg16": {
       "postgres_version": 16,
       "port": 5432,
+      "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
+      "bootstrap_user": "odoo_bootstrap",
+      "bootstrap_password": "cambiar-esto",
       "config": "postgresql.conf"
     }
   },
