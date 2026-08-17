@@ -152,7 +152,31 @@ def _validate_cron_dbfilter_isolation(config):
             if not inst_conf.get("db_user") or not inst_conf.get("db_password"):
                 credential_violations.append(inst_name)
 
-        if not (filter_violations or placeholder_violations or credential_violations):
+        # 'db_user' debe identificar un rol REALMENTE distinto por instancia
+        # -- esto se chequea para todo el grupo, sin el escape hatch de
+        # max_cron_threades: 0, porque un rol compartido por error rompe el
+        # aislamiento de Postgres (ambas instancias terminan viendo/pudiendo
+        # tocar la union de las bases de las dos) independientemente de si
+        # alguna corre cron o no.
+        db_users_seen = defaultdict(list)
+        for inst_name in inst_names:
+            db_user = config["instances"][inst_name].get("db_user")
+            if db_user:
+                db_users_seen[db_user].append(inst_name)
+
+        duplicate_role_violations = {
+            db_user: insts for db_user, insts in db_users_seen.items() if len(insts) > 1
+        }
+
+        shared_service_user = config["databases"][db_name].get("user")
+        reused_shared_role_violations = [
+            inst_name for inst_name in inst_names
+            if config["instances"][inst_name].get("db_user") == shared_service_user
+            and shared_service_user
+        ]
+
+        if not (filter_violations or placeholder_violations or credential_violations
+                or duplicate_role_violations or reused_shared_role_violations):
             continue
 
         lines = [
@@ -184,6 +208,19 @@ def _validate_cron_dbfilter_isolation(config):
                 "",
             ]
 
+        if duplicate_role_violations:
+            lines += ["'db_user' repetido entre instancias del mismo grupo (no son roles realmente distintos -- Postgres ve un solo rol, dueno de la union de bases de ambas):"]
+            for db_user, insts in duplicate_role_violations.items():
+                lines.append(f"  - '{db_user}' usado por: {', '.join(insts)}")
+            lines.append("")
+
+        if reused_shared_role_violations:
+            lines += [
+                f"'db_user' igual al rol compartido del servicio ('{shared_service_user}') -- no es un rol dedicado, es el mismo que ya usan las demas instancias sin credenciales propias:",
+                *(f"  - {n}" for n in reused_shared_role_violations),
+                "",
+            ]
+
         lines += [
             "Por que las dos cosas son obligatorias juntas: Odoo NO aplica "
             "'dbfilter' al ejecutar cron (ir.cron), solo al ruteo HTTP -- ya "
@@ -198,10 +235,11 @@ def _validate_cron_dbfilter_isolation(config):
             "",
             "Para arreglar cada instancia listada arriba, en su nivel raiz "
             "(no dentro de overwrite_odoo_config):",
-            "  - Agregar 'db_user'/'db_password' con un rol dedicado, y un "
-            "'db_filter' especifico en overwrite_odoo_config (ej. "
-            "'^integra\\-17\\.0'). Correr el aprovisionamiento del rol antes "
-            "de levantar la instancia con esas credenciales.",
+            "  - Agregar 'db_user'/'db_password' con un rol dedicado (distinto "
+            "al de cualquier otra instancia del grupo y al rol compartido del "
+            "servicio), y un 'db_filter' especifico en overwrite_odoo_config "
+            "(ej. '^integra\\-17\\.0'). Correr el aprovisionamiento del rol "
+            "antes de levantar la instancia con esas credenciales.",
             "  - O, si esta instancia NO debe correr cron (solo se usa para "
             "explorar otra base), poner 'max_cron_threads': 0 explicitamente "
             "en overwrite_odoo_config -- deja constancia de que es "

@@ -54,7 +54,11 @@ nativo alcanza sin parchear nada.
   `db_filter` específico (no vacío/`"*"`, sin placeholders `%h`/`%d` — no
   hay host de request que resolver desde cron) **y** `db_user`/`db_password`
   propios. Sin esto, el CLI completo se bloquea con un error detallado.
-  Escape hatch: `max_cron_threads: 0` explícito.
+  Escape hatch: `max_cron_threads: 0` explícito. Además, `db_user` debe ser
+  realmente único: distinto al de cualquier otra instancia del grupo y al
+  rol de servicio compartido (`databases.<nombre>.user`) — un `db_user`
+  repetido no aísla nada (Postgres ve un solo rol, dueño de la unión de
+  bases de ambas), chequeo que aplica sin importar el escape hatch de cron.
 - **`.resources/generators/compose_generator.py`**: `_odoo_service()` usa
   `db_user`/`db_password` de la instancia si están definidos, con fallback
   al rol de servicio compartido (`database.user`/`password`) — no rompe

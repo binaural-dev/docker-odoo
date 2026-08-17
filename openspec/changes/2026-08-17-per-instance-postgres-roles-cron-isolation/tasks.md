@@ -24,6 +24,17 @@
       placeholders, sin credenciales), listando instancias afectadas y el
       comando para resolverlo.
 - [x] Verificar que corre en cualquier comando `./odoo` (no solo `build`).
+- [x] Chequear que `db_user` sea realmente único dentro del grupo (no
+      repetido entre instancias) y distinto al rol de servicio compartido
+      (`databases.<nombre>.user`) — sin esto, un `db_user` copiado por
+      error entre dos instancias no aísla nada (mismo rol de Postgres,
+      dueño de la unión de bases de ambas). Aplica sin importar el escape
+      hatch de `max_cron_threads: 0`.
+- [x] Probado con configs sintéticas: `db_user` duplicado se detecta (aun
+      con una instancia en `max_cron_threads: 0`), `db_user` igual al rol
+      compartido se detecta, y una config con roles distintos sigue
+      pasando limpio. Confirmado que `instances.json` real no tenía
+      ningún duplicado.
 
 ## Rol dedicado por instancia (Postgres)
 
