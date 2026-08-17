@@ -276,6 +276,37 @@ según su nombre (sufijo `__exp_YYYY_MM_DD`).
 
 ---
 
+## `cleanup-legacy-template-files` — Limpieza de archivos legacy del template `integra`
+
+Recorre `src/custom/*/` (repos independientes) y detecta/elimina los
+archivos de bootstrap heredados del template `integra` (Dockerfile,
+workflows de CI, scripts de test/README, docs) que el propio template ya
+eliminó en su limpieza de referencia (commit `5c2ee0a6`, 2026-03-24) al
+migrar a `.pre-commit-config.yaml` + submódulos.
+
+```sh
+./scripts/cleanup-legacy-template-files audit <branch> [repo...]
+./scripts/cleanup-legacy-template-files apply <branch> [repo...]
+  [--exclude repo1,repo2] [--ticket ID] [--org NAME] [--dry-run]
+```
+
+- `audit`: solo reporta cuántos de los 34 archivos legacy quedan en la
+  rama indicada por repo, sin tocar nada.
+- `apply`: por cada repo con archivos legacy, crea una rama en un
+  `git worktree` aislado, los elimina, commitea con el formato de commit
+  Binaural (`[IMP] template: ...`), pushea y abre un PR con `gh` contra
+  esa rama.
+- Sin `repo...`: procesa todos los repos de `src/custom/`.
+- `--dry-run` (solo en `apply`): arma la rama y el commit local pero no
+  pushea ni abre PR — útil para revisar antes de tocar el remoto.
+- Requiere `gh` autenticado con permisos de push sobre los repos objetivo.
+- ⚠️ Si el repo objetivo tiene un ruleset de GitHub que bloquea la
+  creación de ramas (ej. el propio `integra`, no los repos de
+  `src/custom/`), el push falla con `GH013` y el script lo reporta como
+  `ERROR` sin hacer fallback a fork — eso se resuelve a mano.
+
+---
+
 ## `odoo-pw` — Restablecer contraseña de usuario
 
 Conecta a PostgreSQL vía el contenedor Odoo y actualiza la contraseña
