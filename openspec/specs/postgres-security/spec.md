@@ -105,6 +105,30 @@ que matchean su `db_filter`.
 - **THEN** esa instancia NO debe requerir `db_filter` específico ni
   `db_user`/`db_password` propios
 
+### Requirement: El rol dedicado de cada instancia debe ser realmente único
+
+Dentro de un grupo de instancias que comparten `database`, el `db_user` de
+cada una DEBE ser distinto al de cualquier otra instancia del mismo grupo,
+y distinto al rol de servicio compartido (`databases.<nombre>.user`). Un
+`db_user` repetido no aísla nada — Postgres ve un único rol, dueño de la
+unión de las bases de ambas instancias. Este chequeo aplica
+independientemente del escape hatch de `max_cron_threads: 0`, porque la
+colisión de identidad de rol es un problema estructural, no ligado al cron.
+
+#### Scenario: `db_user` repetido entre dos instancias del grupo
+- **GIVEN** dos instancias del mismo grupo con el mismo valor de `db_user`
+- **WHEN** se corre `load_config()`
+- **THEN** DEBE fallar con un error listando el `db_user` repetido y las
+  instancias que lo comparten
+
+#### Scenario: `db_user` igual al rol de servicio compartido
+- **GIVEN** una instancia de un grupo compartido cuyo `db_user` coincide
+  con `databases.<nombre>.user`
+- **WHEN** se corre `load_config()`
+- **THEN** DEBE fallar, porque esa instancia no tiene en realidad un rol
+  dedicado — sigue usando el mismo rol que las instancias sin credenciales
+  propias
+
 ### Requirement: El rol dedicado de una instancia debe ser el único con `CONNECT` sobre sus bases
 
 Además de ser el `datdba` (dueño) de cada base que le corresponde según su

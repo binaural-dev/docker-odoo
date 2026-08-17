@@ -161,6 +161,8 @@ Cuando **más de una** instancia usa el mismo `database` (mismo servicio de Post
 
 Si falta cualquiera de los dos requisitos (`db_filter` específico o `db_user`/`db_password`) en alguna instancia de un grupo así, **cualquier comando `./odoo` falla de entrada** con un error detallado listando qué instancia(s) y qué les falta. Escape hatch legítimo: poner `"max_cron_threads": 0` explícito en `overwrite_odoo_config` para una instancia que de verdad no necesita cron (por ejemplo, una copia de solo lectura) — deja constancia de que es intencional, no un olvido.
 
+La validación también exige que `db_user` sea **realmente distinto** entre instancias del mismo grupo, y distinto del rol de servicio compartido (`databases.<nombre>.user`) — si dos instancias apuntan al mismo `db_user` (por ejemplo, copiando una instancia y olvidando cambiarlo), Postgres ve un solo rol dueño de la unión de bases de ambas, y el aislamiento no existe aunque cada una tenga su `db_filter` "propio". Este chequeo aplica siempre, incluso si una de las dos tiene `max_cron_threads: 0` — el problema es de identidad de rol, no de cron.
+
 **Cómo aplicar credenciales nuevas a una instancia que ya tiene bases de datos creadas:**
 
 ```bash
