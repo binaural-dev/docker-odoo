@@ -97,6 +97,8 @@ Cada base de datos gestionada tiene dos identidades de Postgres:
 
 Ambos campos son opcionales: si se omiten, se usa el mismo valor de `user`/`password` para el bootstrap (comportamiento anterior a este esquema, con el rol de Odoo siendo superusuario — no recomendado, pero sigue funcionando para no romper configs existentes).
 
+Existe una **tercera** identidad opcional, a nivel de instancia (no de `databases`): `db_user`/`db_password`, para cuando varias instancias comparten un mismo servicio de Postgres. Ver "Instancias que comparten un mismo servicio de Postgres" más abajo.
+
 ### `instances` — Instancias de Odoo
 
 Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`.
@@ -130,6 +132,73 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
 ```
 
 `db_filter` es el patrón de regex que Odoo usa en runtime para decidir qué bases de datos le pertenecen (ej. `^bananera_` matcheará `bananera_prod`, `bananera_staging`, etc.), y también lo respeta el CLI de gestión: `./odoo update -d all` para una instancia solo actualiza las bases que matchean su `db_filter`, no todas las del servicio de Postgres que comparte con otras instancias. Si una instancia no define `db_filter` (o es `"*"`), `-d all` sigue trayendo todas las bases del servicio, con una advertencia explícita en pantalla.
+
+⚠️ **Importante**: `db_filter` solo rige el ruteo HTTP (selector de bases en `/web/database/manager`, sesión) y el `-d all` del CLI. **El cron interno de Odoo (`ir.cron`) nunca lo consulta** — es un mecanismo puramente de request web, confirmado leyendo el código fuente real de Odoo 14.0/16.0/17.0/19.0. Si dos instancias comparten un mismo servicio de Postgres, el cron de una puede terminar procesando (y modificando) datos de la base de la OTRA — esto ya pasó en producción una vez. Ver la sección siguiente para el aislamiento real.
+
+### Instancias que comparten un mismo servicio de Postgres
+
+Cuando **más de una** instancia usa el mismo `database` (mismo servicio de Postgres) y alguna de ellas corre cron (`max_cron_threads` distinto de `0`, que es el default), `./odoo` **exige** que cada una de esas instancias tenga, además de un `db_filter` específico:
+
+```json
+{
+  "instances": {
+    "bananera": {
+      "odoo_version": "19.0",
+      "external_port": 8070,
+      "database": "pg16",
+      "odoo_config": "19.0_default",
+      "db_user": "app_bananera",
+      "db_password": "<password dedicado>",
+      "overwrite_odoo_config": {
+        "db_filter": "^bananera_"
+      }
+    }
+  }
+}
+```
+
+`db_user`/`db_password` van en la **raíz** de la instancia (hermano de `database`/`overwrite_odoo_config`), no dentro de `overwrite_odoo_config`. Son las credenciales de un rol de Postgres **dedicado a esa instancia**, dueño únicamente de sus propias bases — es la protección real contra el problema del cron descrito arriba: cada rol solo ve/puede tocar lo suyo (`list_dbs()` de Odoo ya filtra por `datdba = current_user`), y además se revoca `CONNECT` de `PUBLIC` sobre esas bases, así que ni siquiera una conexión directa con otro rol puede abrirlas.
+
+Si falta cualquiera de los dos requisitos (`db_filter` específico o `db_user`/`db_password`) en alguna instancia de un grupo así, **cualquier comando `./odoo` falla de entrada** con un error detallado listando qué instancia(s) y qué les falta. Escape hatch legítimo: poner `"max_cron_threads": 0` explícito en `overwrite_odoo_config` para una instancia que de verdad no necesita cron (por ejemplo, una copia de solo lectura) — deja constancia de que es intencional, no un olvido.
+
+**Cómo aplicar credenciales nuevas a una instancia que ya tiene bases de datos creadas:**
+
+```bash
+# 1. Agregar db_user/db_password (raíz de la instancia) y un db_filter específico
+#    (overwrite_odoo_config) en instances.json
+
+# 2. Aprovisionar: crea el rol si no existe, transfiere el ownership de toda
+#    base que matchee el db_filter, y revoca CONNECT de PUBLIC sobre ellas
+./odoo provision-role bananera
+
+# 3. Regenerar compose y recrear el contenedor para que use las credenciales nuevas
+./odoo build
+docker compose -f docker-compose.generated.yml up -d --no-deps odoo-bananera
+```
+
+`provision-role` puede requerir una ventana breve de mantenimiento de **todo** el servicio de Postgres (no solo de esa instancia) si el rol bootstrap del servicio está en `NOLOGIN` (lo normal) — el comando lo maneja solo y pide confirmación explícita antes de tocar nada.
+
+⚠️ Cambiar `db_filter` en `instances.json` **no** re-dispara nada de esto automáticamente — ver la auditoría a continuación.
+
+### Auditoría automática: `db_filter` vs. ownership real
+
+Cada `./odoo build` corre, además de generar la configuración, una auditoría de solo lectura que compara el `db_filter` de cada instancia contra el estado real en Postgres (nunca modifica nada) y avisa si encuentra:
+
+- Una base que matchea el `db_filter` de una instancia pero pertenece a otro rol (falta correr `provision-role`).
+- Una base ya del rol correcto, pero con `CONNECT` de `PUBLIC` todavía sin revocar.
+- Una base que dejó de matchear el `db_filter` actual de la instancia dueña (el filtro cambió después de aprovisionar — revisar si es intencional).
+- Una base que matchea el `db_filter` de **más de una** instancia a la vez (regex solapados — riesgo real: correr `provision-role` en ese estado puede robarle la base a la instancia que ya la tenía).
+
+No bloquea el build — solo informa, con el comando exacto a correr para resolver cada aviso.
+
+**Corrección automática (solo para los avisos sin ambigüedad):** cuando la auditoría detecta bases con dueño incorrecto o con `CONNECT` sin revocar (los primeros dos casos de la lista), `./odoo build` pregunta al final si querés correr `provision-role` para esas instancias ahora mismo (agrupando por servicio de Postgres, igual que una migración manual). Los otros dos casos (filtro que cambió, filtros solapados) **nunca** se ofrecen para autocorrección — son ambiguos y requieren revisión humana antes de tocar ownership.
+
+```
+2 instancia(s) con diferencias que 'provision-role' puede corregir automaticamente: inst_a, inst_b
+¿Correr 'provision-role' para todas ellas ahora? [y/N]:
+```
+
+Para correr `./odoo build` en un contexto no interactivo (CI, automatización), usá `--no-confirm`: se salta esta pregunta (y cualquier otra sin entrada de teclado) sin corregir nada automáticamente, dejando el aviso igual en pantalla para que alguien lo resuelva a mano después.
 
 ### `pgadmin` (opcional)
 
@@ -166,7 +235,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 
 | Comando | Descripción |
 |---------|-------------|
-| `build [--no-cache]` | Genera Dockerfiles, docker-compose y nginx config. Construye imágenes. |
+| `build [--no-cache] [--no-confirm]` | Genera Dockerfiles, docker-compose y nginx config. Audita `db_filter` vs. ownership real y ofrece corregirlo (ver más abajo). Construye imágenes. `--no-confirm` salta esa pregunta para uso en CI/automatización. |
 | `start [instance]` | Inicia instancia(s), DB(s) managed y nginx. |
 | `stop [instance]` | Detiene instancia(s). Si la DB no es usada por otras, también se detiene. |
 | `restart [instance]` | Reinicia instancia(s). |
@@ -180,6 +249,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
+| `provision-role <instance>` | Aprovisiona el rol de Postgres dedicado de una instancia: crea el rol si no existe, transfiere el ownership de toda base que matchee su `db_filter`, y revoca `CONNECT` de `PUBLIC` sobre ellas. Requiere `db_user`/`db_password` y un `db_filter` específico ya definidos en `instances.json`. Puede pedir una ventana breve de mantenimiento de todo el servicio de Postgres (pide confirmación antes). Ver "Instancias que comparten un mismo servicio de Postgres" arriba. |
 
 ### Ejemplos
 
@@ -225,6 +295,9 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 
 # Reiniciar todo
 ./odoo restart
+
+# Aprovisionar el rol dedicado de una instancia (ver seccion de instances.json)
+./odoo provision-role bananera
 ```
 
 En el comando `update`, el selector de bases incluye una opción visible de `all (todas las bases de datos)`.
