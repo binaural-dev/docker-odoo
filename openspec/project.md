@@ -27,7 +27,21 @@ commitean (contienen contraseñas reales).
     owner del bootstrap vía `GRANT bootstrap TO app` (para que los `ALTER TABLE` de
     updates de módulos sigan funcionando), pero sin heredar nunca el bit de
     superusuario (eso en Postgres solo se obtiene por atributo propio o `SET ROLE`
-    explícito). Es el que usa Odoo para todo.
+    explícito). Es el que usa Odoo para todo — salvo que la instancia tenga rol
+    dedicado (ver debajo).
+- Cuando **más de una instancia comparte un mismo servicio de Postgres** y alguna
+  corre cron (`max_cron_threads != 0`), cada una de esas instancias necesita una
+  **tercera identidad**: un rol de Postgres dedicado (`db_user`/`db_password`, a
+  nivel raíz de la instancia en `instances.json`), dueño únicamente de las bases
+  que matchean su `db_filter`, con `CONNECT` revocado de `PUBLIC` sobre ellas.
+  Motivo: el cron interno de Odoo (`ir.cron`) nunca respeta `dbfilter` — solo rige
+  el ruteo HTTP — así que sin rol propio el cron de una instancia puede procesar
+  datos de la base de otra (ya pasó en producción, 2026-08-17). `config_loader.py`
+  bloquea el CLI si falta esto en un grupo de riesgo; `./odoo provision-role
+  <instance>` aplica el rol/ownership/`CONNECT`; `./odoo build` audita en cada
+  corrida si el `db_filter` actual quedó desalineado del ownership real (no
+  bloquea, solo avisa). Detalle completo:
+  `openspec/changes/2026-08-17-per-instance-postgres-roles-cron-isolation/`.
 - Publicar puertos de Postgres al host es opt-in (`expose_host_port` en la config
   de cada base, default `false`) — por defecto solo son alcanzables entre
   contenedores hermanos vía la red interna `odoo-multi`.

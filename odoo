@@ -8,8 +8,11 @@ Reads instances.json and generates/manages Docker containers for multiple Odoo i
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+import time
+from collections import defaultdict
 from pathlib import Path
 
 # Add .resources to path for generators
@@ -68,7 +71,241 @@ def _get_db_services(config, instance=None):
 # ============================================================
 
 
-def build_odoo(config, no_cache):
+def _fetch_database_ownership(db_container, user, password):
+    """Lectura pura: lista cada base real (no template) de este servicio de
+    Postgres con su dueño actual y si PUBLIC todavia puede conectarse. Usa
+    el rol de servicio de siempre (el que ya usan los contenedores Odoo) --
+    no hace falta break-glass ni el rol bootstrap, porque el nombre/dueño de
+    cada base es metadata de catalogo, visible para cualquier rol logueable
+    aunque no tenga CONNECT a esa base puntual."""
+    result = subprocess.run(
+        ["docker", "exec", "-e", f"PGPASSWORD={password}", db_container,
+         "psql", "-U", user, "-d", "postgres", "-tAc",
+         "SELECT d.datname, r.rolname, has_database_privilege('public', d.datname, 'CONNECT') "
+         "FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE NOT d.datistemplate;"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    rows = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        datname, owner, public_connect = line.split("|")
+        rows.append({"datname": datname, "owner": owner, "public_connect": public_connect == "t"})
+    return rows
+
+
+def audit_db_filter_drift(config):
+    """Compara, para cada servicio de Postgres compartido por >1 instancia,
+    el 'db_filter' resuelto de cada instancia contra el ownership/CONNECT
+    real en Postgres. Solo lee, nunca modifica nada -- devuelve una lista de
+    hallazgos estructurados (dicts), no strings, para que el caller pueda
+    tanto imprimirlos como decidir cuales son corregibles automaticamente
+    con 'provision-role' (ver build_odoo()/_maybe_fix_drift()).
+
+    Cada hallazgo trae 'category', 'instance' (o None si involucra a mas de
+    una), 'message' (texto ya formateado para imprimir) y 'fixable' (si
+    'provision-role' sobre 'instance' resuelve esto sin ambiguedad).
+
+    Por que hace falta: 'provision-role' aplica el ownership/CONNECT una
+    sola vez, cuando se corre a mano. Editar 'db_filter' en instances.json
+    despues no re-dispara nada solo -- esta auditoria es lo que detecta que
+    quedo desalineado, para poder avisar en cada './odoo build' en vez de
+    descubrirlo por un incidente real (como ya paso una vez)."""
+    by_service = defaultdict(list)
+    for inst_name, inst_conf in config["instances"].items():
+        by_service[inst_conf["database"]].append(inst_name)
+
+    findings = []
+
+    for db_name, inst_names in by_service.items():
+        if len(inst_names) <= 1:
+            continue  # una sola instancia en el servicio, sin riesgo de cruce
+
+        db_conf = config["databases"][db_name]
+        db_container = f"db-{db_name}"
+        rows = _fetch_database_ownership(db_container, db_conf["user"], db_conf["password"])
+        if rows is None:
+            findings.append({
+                "category": "unreachable", "instance": None, "fixable": False,
+                "message": (
+                    f"[{db_name}] no se pudo leer el estado real de Postgres "
+                    f"para auditar (servicio caido o inalcanzable?) -- omitido"
+                ),
+            })
+            continue
+
+        matches_by_db = defaultdict(list)
+
+        for inst_name in inst_names:
+            inst_conf = config["instances"][inst_name]
+            odoo_conf = resolve_instance_config(inst_conf, config)
+            db_filter = odoo_conf.get("db_filter") or ""
+            max_cron_threads = odoo_conf.get("max_cron_threads", 1)
+            expected_user = inst_conf.get("db_user")
+
+            if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
+                continue  # ya lo reporta _validate_cron_dbfilter_isolation, no duplicar
+
+            try:
+                matched = [r for r in rows if re.match(db_filter, r["datname"])]
+            except re.error:
+                continue  # regex invalido -- tampoco duplicar aca
+
+            for r in matched:
+                matches_by_db[r["datname"]].append(inst_name)
+
+                if expected_user and r["owner"] != expected_user:
+                    findings.append({
+                        "category": "owner_mismatch", "instance": inst_name, "fixable": True,
+                        "message": (
+                            f"[{inst_name}] '{r['datname']}' matchea su db_filter "
+                            f"('{db_filter}') pero pertenece al rol '{r['owner']}', no a "
+                            f"'{expected_user}' -- correr: ./odoo provision-role {inst_name}"
+                        ),
+                    })
+                elif (expected_user and max_cron_threads != 0
+                        and r["owner"] == expected_user and r["public_connect"]):
+                    findings.append({
+                        "category": "connect_open", "instance": inst_name, "fixable": True,
+                        "message": (
+                            f"[{inst_name}] '{r['datname']}' ya es del rol correcto pero "
+                            f"PUBLIC todavia puede conectarse (CONNECT no revocado) -- "
+                            f"correr: ./odoo provision-role {inst_name}"
+                        ),
+                    })
+
+            if expected_user:
+                for r in rows:
+                    if r["owner"] == expected_user and not re.match(db_filter, r["datname"]):
+                        findings.append({
+                            "category": "filter_drift", "instance": inst_name, "fixable": False,
+                            "message": (
+                                f"[{inst_name}] '{r['datname']}' pertenece a su rol dedicado "
+                                f"'{expected_user}' pero YA NO matchea su db_filter actual "
+                                f"('{db_filter}') -- el filtro cambio despues de aprovisionar; "
+                                f"revisar si es intencional (¿la base deberia pasar a otra "
+                                f"instancia?) o si el filtro se edito por error -- NO se "
+                                f"ofrece correccion automatica, requiere revision manual"
+                            ),
+                        })
+
+        for datname, matched_insts in matches_by_db.items():
+            if len(matched_insts) > 1:
+                findings.append({
+                    "category": "overlap", "instance": None, "fixable": False,
+                    "message": (
+                        f"[{db_name}] '{datname}' matchea el db_filter de mas de una "
+                        f"instancia a la vez ({', '.join(matched_insts)}) -- los regex se "
+                        f"solapan, revisarlos antes de aprovisionar (aprovisionar de mas "
+                        f"puede robarle la base a la instancia que ya la tenia) -- NO se "
+                        f"ofrece correccion automatica, requiere revision manual"
+                    ),
+                })
+
+    return findings
+
+
+def print_db_filter_audit(findings):
+    """Muestra en consola el resultado de audit_db_filter_drift(). A
+    diferencia de la validacion de config_loader (que corta la ejecucion),
+    esto solo avisa -- nunca bloquea el build."""
+    print("\n\033[1;94m=== 🔍 AUDITORÍA: db_filter vs ownership real en Postgres ===\033[0m\n")
+    if not findings:
+        print("✅ Sin diferencias -- el db_filter de cada instancia coincide con el ownership/CONNECT real.\n")
+        return
+    print(f"⚠️  {len(findings)} diferencia(s) encontrada(s):\n")
+    for f in findings:
+        print(f"  - {f['message']}")
+    print()
+
+
+def _provision_targets_grouped(config, instance_names):
+    """Resuelve targets de aprovisionamiento y los agrupa por servicio de
+    Postgres (db_container) -- mismo patron usado en la migracion batch
+    original, para aplicar un solo break-glass por servicio en vez de uno
+    por instancia."""
+    targets = [_resolve_provision_target(config, name) for name in instance_names]
+    groups = defaultdict(list)
+    for t in targets:
+        groups[t["db_container"]].append(t)
+    return groups
+
+
+def provision_instances_grouped(config, instance_names):
+    """Aprovisiona varias instancias a la vez, agrupando por servicio de
+    Postgres para minimizar ventanas de mantenimiento. Usado por el flujo
+    interactivo de './odoo build' cuando se confirma corregir el drift
+    detectado por la auditoria (ver _maybe_fix_drift())."""
+    groups = _provision_targets_grouped(config, instance_names)
+    for db_container, group in groups.items():
+        bootstrap_user = group[0]["bootstrap_user"]
+        bootstrap_password = group[0]["bootstrap_password"]
+        db_conf = group[0]["db_conf"]
+        db_name = group[0]["db_name"]
+
+        print(f"\n--- Servicio {db_container}: {len(group)} instancia(s) ---")
+        for t in group:
+            print(f"  - {t['instance']} (rol {t['db_user']})")
+
+        needs = _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password)
+        if needs:
+            _bootstrap_breakglass_enable(db_container, bootstrap_user, db_conf, db_name)
+        else:
+            print(f"→ Bootstrap ya logueable, sin break-glass.")
+
+        for t in group:
+            print(f"\n--- {t['instance']} ---")
+            provision_role_sql(t)
+
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f"ALTER ROLE {bootstrap_user} NOLOGIN;")
+        print(f"\n✅ Servicio {db_container} listo, bootstrap de nuevo en NOLOGIN.")
+
+
+def _maybe_fix_drift(config, findings, no_confirm):
+    """Si la auditoria encontro diferencias corregibles sin ambiguedad
+    (dueño incorrecto, CONNECT sin revocar), ofrece corregirlas ahora
+    mismo con 'provision-role', agrupando por servicio. Los hallazgos
+    ambiguos (filtro que cambio, filtros solapados) nunca se auto-corrigen
+    -- requieren revision humana antes de tocar ownership."""
+    fixable_instances = sorted({
+        f["instance"] for f in findings if f["fixable"] and f["instance"]
+    })
+    if not fixable_instances:
+        return
+
+    print(
+        f"{len(fixable_instances)} instancia(s) con diferencias que "
+        f"'provision-role' puede corregir automaticamente: "
+        f"{', '.join(fixable_instances)}"
+    )
+
+    if no_confirm:
+        print(
+            "--no-confirm: se omite la correccion automatica -- correr "
+            "'./odoo provision-role <instancia>' a mano si hace falta.\n"
+        )
+        return
+
+    try:
+        answer = input("¿Correr 'provision-role' para todas ellas ahora? [y/N]: ").strip().lower()
+    except EOFError:
+        print(
+            "\n(sin entrada interactiva -- se omite la correccion automatica; "
+            "correr './odoo provision-role <instancia>' a mano)\n"
+        )
+        return
+
+    if answer != "y":
+        print("Se omite la correccion automatica.\n")
+        return
+
+    provision_instances_grouped(config, fixable_instances)
+
+
+def build_odoo(config, no_cache, no_confirm=False):
     """Generate all config files and build Docker images."""
     print("\n\033[1;94m=== 🛠️  GENERANDO CONFIGURACIONES Y CONSTRUYENDO IMÁGENES ===\033[0m\n")
 
@@ -82,6 +319,12 @@ def build_odoo(config, no_cache):
 
     # 3. Generate nginx config
     generate_nginx_config(BASE_PATH, config)
+
+    # 3.5 Auditar db_filter vs ownership real -- avisa, y ofrece corregir
+    #     automaticamente lo que no es ambiguo (ver _maybe_fix_drift)
+    findings = audit_db_filter_drift(config)
+    print_db_filter_audit(findings)
+    _maybe_fix_drift(config, findings, no_confirm)
 
     # 4. Build images
     print("\n=== Construyendo imágenes Docker ===\n")
@@ -278,6 +521,201 @@ def psql_connect(config, instance, dbname):
     os.system(
         f"docker exec -it -e PGPASSWORD={db_password} {container} "
         f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname}"
+    )
+
+
+def _pg_exec(db_container, pg_user, pg_password, dbname, sql, check=True):
+    """Run one SQL statement via docker exec, as argv (not a shell string) so
+    nested double-quoted Postgres identifiers can't collide with shell quoting."""
+    result = subprocess.run(
+        [
+            "docker", "exec", "-e", f"PGPASSWORD={pg_password}", db_container,
+            "psql", "-U", pg_user, "-d", dbname, "-v", "ON_ERROR_STOP=1", "-c", sql,
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(result.stdout, end="")
+        print(result.stderr, end="", file=sys.stderr)
+        if check:
+            sys.exit(1)
+    return result
+
+
+def _resolve_provision_target(config, instance):
+    """Validate and resolve everything provision_role_sql()/bootstrap
+    helpers need for one instance. Raises SystemExit on bad config."""
+    inst_conf = config["instances"].get(instance)
+    if inst_conf is None:
+        print(f"Error: instancia '{instance}' no existe.")
+        sys.exit(1)
+
+    db_user = inst_conf.get("db_user")
+    db_password = inst_conf.get("db_password")
+    if not db_user or not db_password:
+        print(
+            f"Error: la instancia '{instance}' no tiene 'db_user'/'db_password' "
+            f"en instances.json (a nivel raiz de la instancia, no dentro de "
+            f"overwrite_odoo_config). Agregalos antes de aprovisionar."
+        )
+        sys.exit(1)
+
+    db_name = inst_conf["database"]
+    db_conf = config["databases"][db_name]
+    odoo_conf = resolve_instance_config(inst_conf, config)
+    db_filter = odoo_conf.get("db_filter") or ""
+    if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
+        print(
+            f"Error: '{instance}' no tiene un db_filter especifico y estatico "
+            f"(sin %h/%d) -- no se puede resolver de forma segura que bases le "
+            f"pertenecen. Definilo antes de aprovisionar."
+        )
+        sys.exit(1)
+
+    return {
+        "instance": instance,
+        "db_name": db_name,
+        "db_container": f"db-{db_name}",
+        "db_conf": db_conf,
+        "bootstrap_user": db_conf.get("bootstrap_user", db_conf["user"]),
+        "bootstrap_password": db_conf.get("bootstrap_password", db_conf["password"]),
+        "db_user": db_user,
+        "db_password": db_password,
+        "db_filter": db_filter,
+    }
+
+
+def _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password):
+    check = subprocess.run(
+        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", db_container,
+         "psql", "-U", bootstrap_user, "-d", "postgres", "-tAc", "SELECT 1;"],
+        capture_output=True,
+    )
+    return check.returncode != 0
+
+
+def _bootstrap_breakglass_enable(db_container, bootstrap_user, db_conf, db_name):
+    """Stop the db service, flip the bootstrap role to LOGIN via
+    `postgres --single` (bypasses normal auth -- the only way in once
+    NOLOGIN, since creating roles needs CREATEROLE), then start it back up."""
+    print(f"\n→ Rol bootstrap '{bootstrap_user}' no puede loguear, aplicando break-glass en {db_container}...")
+    pg_version = db_conf["postgres_version"]
+    image = f"local_odoo_db_{db_name}:{pg_version}"
+    volume = subprocess.check_output(
+        ["docker", "inspect", db_container, "--format",
+         '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}']
+    ).decode().strip()
+    if not volume:
+        print(f"Error: no se pudo determinar el volumen de datos de {db_container}.")
+        sys.exit(1)
+
+    os.system(f"docker compose -f {COMPOSE_FILE} stop {db_container}")
+    subprocess.run(
+        ["docker", "run", "--rm", "-i", "--user", "postgres",
+         "-v", f"{volume}:/var/lib/postgresql/data",
+         "--entrypoint", "", image,
+         "postgres", "--single", "-D", "/var/lib/postgresql/data/pgdata", "postgres"],
+        input=f"ALTER ROLE {bootstrap_user} LOGIN;", text=True,
+    )
+    os.system(f"docker compose -f {COMPOSE_FILE} up -d {db_container}")
+    print("→ Esperando a que el servicio vuelva a estar disponible...")
+    time.sleep(6)
+
+
+def provision_role_sql(target):
+    """Do the actual role/ownership/ACL work for one instance, assuming the
+    bootstrap role can already log in (caller's responsibility to
+    enable/disable around this -- see provision_instance_role() for the
+    single-instance CLI entry point, or batch multiple targets of the same
+    service under one enable/disable pair to avoid repeated maintenance
+    windows).
+
+    IMPORTANT: never uses REASSIGN OWNED -- run once, connected to one
+    database, it reassigns ALL databases cluster-wide still owned by the
+    source role, not just the one you're connected to (learned the hard way
+    on 2026-08-17). ALTER DATABASE ... OWNER TO is precise and side-effect
+    free, used instead for every ownership change here.
+    """
+    db_container = target["db_container"]
+    bootstrap_user = target["bootstrap_user"]
+    bootstrap_password = target["bootstrap_password"]
+    db_user = target["db_user"]
+    db_password = target["db_password"]
+    db_filter = target["db_filter"]
+
+    print(f"\n→ Creando/actualizando rol '{db_user}'...")
+    _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+             f"CREATE ROLE {db_user} LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD '{db_password}';",
+             check=False)
+    _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+             f"ALTER ROLE {db_user} WITH PASSWORD '{db_password}';")
+    _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+             f"GRANT {bootstrap_user} TO {db_user};")
+
+    list_result = subprocess.run(
+        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", db_container,
+         "psql", "-U", bootstrap_user, "-d", "postgres", "-tAc",
+         f"SELECT datname FROM pg_database WHERE datistemplate=false AND datname ~ '{db_filter}';"],
+        capture_output=True, text=True, check=True,
+    )
+    matching = [d.strip() for d in list_result.stdout.splitlines() if d.strip()]
+    print(f"→ Bases que matchean '{db_filter}': {', '.join(matching) if matching else '(ninguna)'}")
+
+    for db in matching:
+        print(f"  - {db}")
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f'ALTER DATABASE "{db}" OWNER TO {db_user};')
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f'REVOKE CONNECT ON DATABASE "{db}" FROM PUBLIC;')
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f'GRANT CONNECT ON DATABASE "{db}" TO {db_user};')
+
+    return matching
+
+
+def provision_instance_role(config, instance):
+    """CLI entry point: provision a single instance end to end, including
+    its own dedicated break-glass window. See provision_role_sql() for what
+    "provision" means, and the module docstring context above it for why
+    this exists (Postgres-level fix for cron crossing instances that share
+    a database service, instead of patching Odoo's own code)."""
+    target = _resolve_provision_target(config, instance)
+    db_container = target["db_container"]
+    bootstrap_user = target["bootstrap_user"]
+    bootstrap_password = target["bootstrap_password"]
+
+    print(f"\n\033[1;36m=== 🔐 APROVISIONANDO ROL DEDICADO: {instance.upper()} ===\033[0m\n")
+    print(f"Servicio de Postgres: {target['db_name']}  (contenedor: {db_container})")
+    print(f"Rol: {target['db_user']}")
+    print(f"db_filter usado para resolver bases: {target['db_filter']}")
+    print(
+        f"\n⚠️  Si el rol bootstrap de '{target['db_name']}' esta en NOLOGIN (lo "
+        f"normal), esto va a requerir una ventana breve de mantenimiento de "
+        f"TODO ese servicio (se reinicia {db_container}), no solo de esta "
+        f"instancia.\n"
+    )
+
+    if input("¿Continuar? [y/N]: ").strip().lower() != "y":
+        print("Cancelado.")
+        return
+
+    needed_breakglass = _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password)
+    if needed_breakglass:
+        _bootstrap_breakglass_enable(db_container, bootstrap_user, target["db_conf"], target["db_name"])
+    else:
+        print(f"\n→ Rol bootstrap '{bootstrap_user}' ya puede loguear (sesion previa sin cerrar), sigo sin break-glass.")
+
+    matching = provision_role_sql(target)
+
+    _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+             f"ALTER ROLE {bootstrap_user} NOLOGIN;")
+
+    print(
+        f"\n✅ '{instance}' aprovisionada: rol '{target['db_user']}', dueño de "
+        f"{len(matching)} base(s), CONNECT restringido a ese rol.\n"
+        f"   Falta: regenerar el compose y recrear el contenedor de esta "
+        f"instancia (./odoo build && docker compose up -d --no-deps odoo-{instance}) "
+        f"para que use las credenciales nuevas.\n"
     )
 
 
@@ -783,6 +1221,10 @@ def main():
     # build
     build_p = subparsers.add_parser("build", help="Genera configs y construye imágenes Docker")
     build_p.add_argument("--no-cache", action="store_true", help="Construir sin caché")
+    build_p.add_argument(
+        "--no-confirm", action="store_true",
+        help="No preguntar interactivamente si corregir el drift de db_filter detectado (uso en automatizacion/CI)",
+    )
 
     # start
     start_p = subparsers.add_parser("start", help="Inicia instancia(s) de Odoo")
@@ -824,6 +1266,13 @@ def main():
     pw_p = subparsers.add_parser("pw", help="Restablecer contraseña de un usuario")
     pw_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
     pw_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
+
+    # provision-role
+    provision_p = subparsers.add_parser(
+        "provision-role",
+        help="Crea/actualiza el rol dedicado de Postgres de una instancia y aisla sus bases (owner + REVOKE CONNECT)",
+    )
+    provision_p.add_argument("instance", help="Nombre de instancia (requiere db_user/db_password en instances.json)")
     pw_p.add_argument("-l", help="Login a restablecer (opcional)")
     pw_p.add_argument("-p", "--password", default="admin", help="Nueva contraseña (por defecto: admin)")
 
@@ -942,7 +1391,7 @@ def main():
 
     # Dispatch
     if args.action == "build":
-        build_odoo(config, args.no_cache)
+        build_odoo(config, args.no_cache, args.no_confirm)
     elif args.action == "start":
         start_odoo(config, args.instance)
     elif args.action == "stop":
@@ -969,6 +1418,8 @@ def main():
         if args.l is None:
             args.l = prompt_for_user(config, args.instance, args.d)
         reset_password(config, args.instance, args.d, args.l, args.password)
+    elif args.action == "provision-role":
+        provision_instance_role(config, args.instance)
     elif args.action == "update":
         if args.instance is None:
             args.instance = prompt_for_instance(config, "update")
