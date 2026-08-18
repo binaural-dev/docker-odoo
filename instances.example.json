@@ -38,12 +38,29 @@
       "external_port": 8070,
       "database": "pg16",
       "odoo_config": "default",
+      "db_user": "app_client_a",
+      "db_password": "odoo",
       "overwrite_odoo_config": {
         "addons": [
           "src/enterprise-19.0",
           "src/custom/client-a"
         ],
         "db_filter": "^client-a_"
+      }
+    },
+    "client-a-maintenance": {
+      "odoo_version": "19.0",
+      "external_port": 8071,
+      "database": "pg16",
+      "odoo_config": "default",
+      "db_user": "app_client_a_maintenance",
+      "db_password": "odoo",
+      "overwrite_odoo_config": {
+        "addons": [
+          "src/enterprise-19.0",
+          "src/custom/client-a-maintenance"
+        ],
+        "db_filter": "^client-a-maintenance_"
       }
     }
   },
