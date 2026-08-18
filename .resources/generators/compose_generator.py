@@ -150,8 +150,13 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     # expose_host_port is set) — not reachable from sibling containers.
     # Odoo always talks to Postgres over the internal Docker network.
     db_port = get_db_internal_port(db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
+    # An instance can optionally connect with its own dedicated Postgres role
+    # (owner of only its own databases, for datdba-based isolation) instead of
+    # the role shared by every instance on this database service. Falls back
+    # to the service-level role when not set, so existing instances are
+    # unaffected.
+    db_user = inst_conf.get("db_user", db_conf["user"])
+    db_password = inst_conf.get("db_password", db_conf["password"])
 
     # Build addons list for INSTANCE_ADDONS env var
     addons = odoo_conf.get("addons", [])
