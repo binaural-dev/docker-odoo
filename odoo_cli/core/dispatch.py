@@ -65,6 +65,7 @@ from odoo_cli.core.actions.maintenance import (
     update_tags_bulk,
 )
 from odoo_cli.core.actions.modules import reset_password, update
+from odoo_cli.core.actions.postgres import provision_instance_role
 from odoo_cli.core.actions.testing import run_tests
 from odoo_cli.core.prompts import (
     prompt_for_branch,
@@ -180,7 +181,10 @@ def dispatch(
         args.instance = _resolve_instance(runner, config, args)
 
     if args.action == "build":
-        build_odoo(runner, config, args.no_cache)
+        build_odoo(
+            runner, config, args.no_cache,
+            no_confirm=getattr(args, "no_confirm", False),
+        )
 
     elif args.action == "start":
         start_odoo(runner, config, args.instance)
@@ -220,6 +224,14 @@ def dispatch(
             runner, config, args.instance, args.d, args.l, args.password
         )
 
+    elif args.action == "provision-role":
+        # Deliberately NOT in _INSTANCE_AWARE_ACTIONS: the instance is a
+        # required positional here. Provisioning rewrites database
+        # ownership and revokes CONNECT, so "no instance given" must be
+        # an argparse error, never an interactive menu that a mistyped
+        # command could walk into.
+        provision_instance_role(runner, config, args.instance)
+
     elif args.action == "update":
         if args.instance is None:
             args.instance = prompt_for_instance(runner, config, "update")
@@ -228,8 +240,14 @@ def dispatch(
                 runner, config, args.instance, allow_all=True
             )
         if getattr(args, "m", None) is None:
+            # The picker returns "all" when nothing is selected (just
+            # hit Enter), so the fast click-odoo-update path stays one
+            # keypress away while the per-module choice is still there.
             args.m = prompt_for_modules(runner, config, args.instance)
-        update(runner, config, args.instance, args.d, args.m)
+        update(
+            runner, config, args.instance, args.d, args.m,
+            force_all=getattr(args, "force", False),
+        )
 
     elif args.action == "init":
         init_addons(runner, config, args.instance)

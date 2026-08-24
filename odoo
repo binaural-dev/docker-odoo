@@ -83,6 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  Git / submódulos    sync, update-tags, update-tags-bulk, "
             "submodule-status\n"
             "  Cobertura de tests  coverage-status, coverage\n"
+            "  Postgres / roles    provision-role\n"
             "  Config / infra      new, hosts, validate-instances, tui\n"
             "\n"
             "Ejemplos:\n"
@@ -110,11 +111,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "mucho y usar mucho disco si hay muchas instancias — para "
             "buildear una sola imagen puntual, usa "
             "'docker compose -f docker-compose.generated.yml build odoo-<instancia>' "
-            "en su lugar."
+            "en su lugar.\n\n"
+            "También corre una auditoría de sólo lectura que compara el "
+            "db_filter de cada instancia contra el ownership/CONNECT real en "
+            "Postgres, y ofrece corregir con 'provision-role' lo que no es "
+            "ambiguo. La auditoría avisa, nunca bloquea el build."
         ),
     )
     p.add_argument(
         "--no-cache", action="store_true", help="Construir sin caché"
+    )
+    p.add_argument(
+        "--no-confirm", action="store_true",
+        help=(
+            "No preguntar interactivamente si corregir el drift de db_filter "
+            "detectado (uso en automatización/CI)"
+        ),
     )
 
     # start
@@ -218,6 +230,38 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Nueva contraseña (por defecto: admin)",
     )
 
+    # provision-role
+    p = subparsers.add_parser(
+        "provision-role",
+        help=(
+            "Crea/actualiza el rol dedicado de Postgres de una instancia y "
+            "aisla sus bases (owner + REVOKE CONNECT)"
+        ),
+        description=(
+            "Le da a la instancia su propio rol de Postgres, dueño únicamente "
+            "de las bases que matchean su db_filter, y le revoca CONNECT a "
+            "PUBLIC. Es la forma de evitar que el cron de una instancia corra "
+            "sobre las bases de otra cuando comparten servicio de Postgres "
+            "(ir.cron no respeta dbfilter).\n\n"
+            "Requiere db_user/db_password a nivel raíz de la instancia en "
+            "instances.json. Si el rol bootstrap del servicio está en NOLOGIN "
+            "(lo normal), aplica un break-glass temporal: eso implica una "
+            "ventana breve de mantenimiento de TODO el servicio de Postgres, "
+            "no sólo de esta instancia. Pide confirmación antes de tocar nada."
+        ),
+    )
+    # Posicional obligatorio a propósito (sin nargs="?"): esto reescribe
+    # ownership de bases y revoca CONNECT. Si falta la instancia tiene
+    # que ser un error de argparse, no un menú interactivo en el que se
+    # pueda caer por un comando mal tipeado.
+    p.add_argument(
+        "instance",
+        help=(
+            "Nombre de instancia (requiere db_user/db_password en "
+            "instances.json)"
+        ),
+    )
+
     # update
     p = subparsers.add_parser(
         "update", help="Actualizar módulos de Odoo"
@@ -232,6 +276,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "-m", default=None, help="Módulos a actualizar (opcional)"
+    )
+    p.add_argument(
+        "-f", "--force", action="store_true",
+        help=(
+            "Forzar actualización literal de TODOS los módulos. Sin esto se "
+            "usa click-odoo-update, que actualiza sólo lo que cambió"
+        ),
     )
 
     # init

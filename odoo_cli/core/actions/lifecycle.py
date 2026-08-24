@@ -56,8 +56,18 @@ def _docker_compose(runner: "Runner", *args: str) -> int:
 # ============================================================
 
 
-def build_odoo(runner: "Runner", config: dict, no_cache: bool) -> None:
-    """Generate all config files and build Docker images."""
+def build_odoo(
+    runner: "Runner", config: dict, no_cache: bool, no_confirm: bool = False
+) -> None:
+    """Generate all config files and build Docker images.
+
+    ``no_confirm`` only affects step 3.5 (the ``db_filter`` drift audit):
+    it skips the interactive offer to auto-correct the fixable findings,
+    so a non-interactive build (CI/automation) never hangs on a prompt and
+    never changes Postgres ownership without explicit confirmation. The
+    audit itself always runs and only ever warns — it must never block
+    the build.
+    """
     runner.info("\n=== 🛠️  GENERANDO CONFIGURACIONES Y CONSTRUYENDO IMÁGENES ===\n")
 
     # Imported here (not at module top) so that ``odoo_cli.core.actions.lifecycle``
@@ -82,6 +92,21 @@ def build_odoo(runner: "Runner", config: dict, no_cache: bool) -> None:
 
     # 3. Generate nginx config
     generate_nginx_config(base_path, config)
+
+    # 3.5 Audit db_filter vs the real ownership/CONNECT state in Postgres.
+    #     Editing db_filter in instances.json re-triggers no ownership
+    #     change on its own, so this read-only audit is the only thing
+    #     that catches the resulting drift. It warns (never blocks) and
+    #     offers to auto-fix only the unambiguous findings.
+    from odoo_cli.core.actions.postgres import (
+        audit_db_filter_drift,
+        maybe_fix_drift,
+        print_db_filter_audit,
+    )
+
+    findings = audit_db_filter_drift(config)
+    print_db_filter_audit(runner, findings)
+    maybe_fix_drift(runner, config, findings, no_confirm)
 
     # 4. Build images
     runner.info("\n=== Construyendo imágenes Docker ===\n")

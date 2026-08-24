@@ -40,13 +40,31 @@ def bash_update_modules(
     instance: str,
     dbname: str,
     modules: str = "all",
+    force_all: bool = False,
 ) -> int:
     """Update Odoo modules in an instance (single database).
 
-    Runs ``odoo --stop-after-init -u <modules> -d <dbname>`` inside
-    the Odoo container and returns the process returncode. The
-    caller is responsible for interpreting the returncode (the
+    Two different code paths, on purpose:
+
+    * ``modules == "all"`` → ``click-odoo-update``. It only touches
+      addons whose file hash changed since the last update, instead of
+      literally reprocessing every installed module (which is what
+      ``odoo -u all`` always does, regardless of whether anything
+      changed). ``force_all=True`` (the ``-f``/``--force`` CLI flag)
+      forces a complete upgrade via click-odoo-update's own
+      ``--update-all``.
+    * a specific module name → straight through ``odoo -u <modulo>``.
+      That's already a deliberate, targeted operation, so there is
+      nothing to optimise away.
+
+    Returns the process returncode; the caller interprets it (the
     ``update`` orchestration collects failures across databases).
+
+    Note on ``--user root``: only the click-odoo-update path runs as
+    root, matching the behaviour this command was verified with in
+    production. The ``odoo -u`` path keeps running as the image's
+    default user, which is how it has been working since the actions
+    were extracted out of ``./odoo``. Neither is changed here.
     """
     runner.info(
         f"\n=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} "
@@ -55,11 +73,21 @@ def bash_update_modules(
     from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
 
     container = f"odoo-{instance}"
-    cmd = [
-        "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container, "odoo",
-        "--stop-after-init", "--http-port", "9999", "--workers=0",
-        "-u", modules, "-d", dbname,
-    ]
+    if modules == "all":
+        cmd = [
+            "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T",
+            "--user", "root", container,
+            "click-odoo-update", "--if-exists",
+        ]
+        if force_all:
+            cmd.append("--update-all")
+        cmd += ["-d", dbname]
+    else:
+        cmd = [
+            "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container, "odoo",
+            "--stop-after-init", "--http-port", "9999", "--workers=0",
+            "-u", modules, "-d", dbname,
+        ]
     runner.info(" ".join(cmd))
     return subprocess.run(cmd).returncode
 
@@ -70,6 +98,7 @@ def update(
     instance: str,
     dbname: str,
     modules: str = "all",
+    force_all: bool = False,
 ) -> None:
     """Update Odoo modules, fanning out to every database when ``dbname=='all'``.
 
@@ -94,7 +123,9 @@ def update(
 
         failures: list[tuple[str, int]] = []
         for db_name in databases:
-            result = bash_update_modules(runner, config, instance, db_name, modules)
+            result = bash_update_modules(
+                runner, config, instance, db_name, modules, force_all=force_all
+            )
             if result != 0:
                 failures.append((db_name, result))
 
@@ -106,7 +137,9 @@ def update(
                 runner.error(f"  - {db_name} (exit code: {code})")
             sys.exit(1)
     else:
-        bash_update_modules(runner, config, instance, dbname, modules)
+        bash_update_modules(
+            runner, config, instance, dbname, modules, force_all=force_all
+        )
 
 
 # ============================================================

@@ -100,6 +100,13 @@ def get_db_services(
 def get_databases(config: dict, instance: str) -> list[str]:
     """Fetch database names from the postgres container of an instance.
 
+    Filtered by the instance's own ``db_filter`` when it has one --
+    otherwise a database service shared by several instances (e.g.
+    ``pg16_odoo_17``) would return every database on the server, not just
+    the ones belonging to this instance. That is exactly what made
+    ``./odoo update -d all <instance>`` slow *and wrong*: it ended up
+    updating modules on unrelated instances' databases too.
+
     Returns ``[]`` on any error (container not running, psql failure,
     network blip, ...). Callers must handle the empty case (typically
     by falling back to manual input).
@@ -108,6 +115,7 @@ def get_databases(config: dict, instance: str) -> list[str]:
     # only added to sys.path by the ./odoo launcher.
     from generators.config_loader import (
     resolve_db_config, get_db_host, get_db_internal_port,
+    resolve_instance_config,
 )
 
     try:
@@ -119,14 +127,30 @@ def get_databases(config: dict, instance: str) -> list[str]:
         db_port = get_db_internal_port(db_conf)
         service = f"odoo-{instance}"
 
+        odoo_conf = resolve_instance_config(inst_conf, config)
+        db_filter = odoo_conf.get("db_filter")
+
+        where_clause = (
+            "datistemplate = false AND datname NOT IN ('postgres', 'template1')"
+        )
+        if db_filter and db_filter != "*":
+            escaped_filter = db_filter.replace("'", "''")
+            where_clause += f" AND datname ~ '{escaped_filter}'"
+        else:
+            print(
+                f"\n⚠️  La instancia '{instance}' no tiene un db_filter "
+                f"especifico (o es '*') -- se listaran TODAS las bases del "
+                f"servicio de Postgres '{inst_conf['database']}', incluyendo "
+                f"las de otras instancias que lo compartan.\n"
+            )
+
         cmd = (
             f"docker compose -f {_COMPOSE_FILE} exec -T "
             f"-e PGPASSWORD={db_password} {service} "
             f"psql --host {db_host} --port {db_port} -U {db_user} "
             f"-d postgres -At -c "
             f"\"SELECT datname FROM pg_database "
-            f"WHERE datistemplate = false AND datname NOT IN "
-            f"('postgres', 'template1');\" 2>/dev/null"
+            f"WHERE {where_clause};\" 2>/dev/null"
         )
         output = subprocess.check_output(cmd, shell=True).decode().strip()
         if output:

@@ -1,0 +1,73 @@
+{
+  "odoo_configs": {
+    "default": {
+      "admin_password": "admin",
+      "workers": 2,
+      "without_demo": true,
+      "list_db": true,
+      "proxy_mode": true,
+      "limit_memory_soft": 12000000000,
+      "limit_memory_hard": 13000000000,
+      "max_cron_threads": 1,
+      "limit_time_real_cron": 0,
+      "limit_time_real": 3600,
+      "limit_time_cpu": 60,
+      "db_maxconn": 200,
+      "unaccent": false,
+      "server_wide_modules": "",
+      "addons": [
+        "src/enterprise"
+      ]
+    }
+  },
+  "databases": {
+    "pg16": {
+      "postgres_version": 16,
+      "port": 5432,
+      "expose_host_port": false,
+      "user": "odoo",
+      "password": "odoo",
+      "bootstrap_user": "odoo_bootstrap",
+      "bootstrap_password": "cambiar-esto",
+      "config": "postgresql.conf"
+    }
+  },
+  "instances": {
+    "client-a": {
+      "odoo_version": "19.0",
+      "external_port": 8070,
+      "database": "pg16",
+      "odoo_config": "default",
+      "db_user": "app_client_a",
+      "db_password": "odoo",
+      "overwrite_odoo_config": {
+        "addons": [
+          "src/enterprise-19.0",
+          "src/custom/client-a"
+        ],
+        "db_filter": "^client-a_"
+      }
+    },
+    "client-a-maintenance": {
+      "odoo_version": "19.0",
+      "external_port": 8071,
+      "database": "pg16",
+      "odoo_config": "default",
+      "db_user": "app_client_a_maintenance",
+      "db_password": "odoo",
+      "overwrite_odoo_config": {
+        "addons": [
+          "src/enterprise-19.0",
+          "src/custom/client-a-maintenance"
+        ],
+        "db_filter": "^client-a-maintenance_"
+      }
+    }
+  },
+  "pgadmin": {
+    "enabled": false,
+    "port": 5050,
+    "email": "admin@admin.com",
+    "password": "admin"
+  }
+}

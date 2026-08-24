@@ -109,8 +109,16 @@ def _header():
 def _db_service(db_name, db_conf, project):
     pg_version = db_conf["postgres_version"]
     port = db_conf["port"]
+    # "user"/"password" are the non-superuser role Odoo actually connects with.
+    # "bootstrap_user"/"bootstrap_password" (falls back to user/password if
+    # absent) are the cluster's initdb bootstrap role, which Postgres always
+    # creates as a superuser and never lets lose that attribute. The bootstrap
+    # role is only used internally (docker-entrypoint-initdb.d) to create the
+    # app role on a fresh volume; Odoo itself never authenticates as it.
     user = db_conf["user"]
     password = db_conf["password"]
+    bootstrap_user = db_conf.get("bootstrap_user", user)
+    bootstrap_password = db_conf.get("bootstrap_password", password)
     pg_config = db_conf.get("config")
     expose_host_port = db_conf.get("expose_host_port", False)
     container_name = f"db-{db_name}"
@@ -152,8 +160,10 @@ def _db_service(db_name, db_conf, project):
         f"      - {db_name}-data:/var/lib/postgresql/data",
         "    environment:",
         "      - POSTGRES_DB=postgres",
-        f"      - POSTGRES_PASSWORD={password}",
-        f"      - POSTGRES_USER={user}",
+        f"      - POSTGRES_PASSWORD={bootstrap_password}",
+        f"      - POSTGRES_USER={bootstrap_user}",
+        f"      - APP_DB_USER={user}",
+        f"      - APP_DB_PASSWORD={password}",
         "      - PGDATA=/var/lib/postgresql/data/pgdata",
         "",
     ]
@@ -169,8 +179,13 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
     # expose_host_port is set) — not reachable from sibling containers.
     # Odoo always talks to Postgres over the internal Docker network.
     db_port = get_db_internal_port(db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
+    # An instance can optionally connect with its own dedicated Postgres role
+    # (owner of only its own databases, for datdba-based isolation) instead of
+    # the role shared by every instance on this database service. Falls back
+    # to the service-level role when not set, so existing instances are
+    # unaffected.
+    db_user = inst_conf.get("db_user", db_conf["user"])
+    db_password = inst_conf.get("db_password", db_conf["password"])
     smtp_server = mailhog_conf.get("service_name", MAILHOG_SERVICE_NAME) if mailhog_conf else MAILHOG_SERVICE_NAME
     smtp_port = mailhog_conf.get("smtp_port", MAILHOG_DEFAULT_SMTP_PORT) if mailhog_conf else MAILHOG_DEFAULT_SMTP_PORT
 
