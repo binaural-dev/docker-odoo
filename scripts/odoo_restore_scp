@@ -3,13 +3,22 @@
 import argparse
 import csv
 import datetime
-import importlib
 import os
 import posixpath
 import re
 import shlex
 import subprocess
 import sys
+import time
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import (
+    load_config,
+    resolve_db_config,
+    get_db_host,
+)
 
 
 class EnvConfig:
@@ -20,26 +29,16 @@ class EnvConfig:
 		self.db_port = db_port
 
 	@classmethod
-	def from_environment(cls):
-		container_name = os.getenv("PROJECT_NAME")
-		db_user = os.getenv("POSTGRES_USER")
-		db_host = os.getenv("POSTGRES_HOST")
-		db_port = os.getenv("EXTERNAL_PORT_POSTGRES")
+	def from_instance(cls, config, instance):
+		if instance not in config["instances"]:
+			raise RuntimeError(f"Instancia '{instance}' no existe en instances.json")
 
-		missing = []
-		if not container_name:
-			missing.append("PROJECT_NAME")
-		if not db_user:
-			missing.append("POSTGRES_USER")
-		if not db_host:
-			missing.append("POSTGRES_HOST")
-		if not db_port:
-			missing.append("EXTERNAL_PORT_POSTGRES")
-
-		if missing:
-			raise RuntimeError(
-				"Faltan variables de entorno requeridas: " + ", ".join(missing)
-			)
+		inst_conf = config["instances"][instance]
+		db_conf = resolve_db_config(inst_conf, config)
+		db_host = get_db_host(inst_conf["database"], db_conf)
+		db_user = db_conf["user"]
+		db_port = db_conf["port"]
+		container_name = f"odoo-{instance}"
 
 		return cls(
 			container_name=container_name,
@@ -84,14 +83,16 @@ def describe_days_until_cleanup(days_until_cleanup):
 
 
 def compute_cleanup_on(expires_on, delay_days=0):
-	return expires_on + datetime.timedelta(days=delay_days + 1)
+	return expires_on + datetime.timedelta(days=delay_days)
 
 
 def classify_cleanup_status(expires_on, cleanup_on, today):
 	if today < expires_on:
 		return "vigente"
 	if today == expires_on:
-		return "vence hoy"
+		if cleanup_on == expires_on:
+			return "eliminable hoy"
+		return "en gracia"
 	if today < cleanup_on:
 		return "en gracia"
 	if today == cleanup_on:
@@ -276,6 +277,31 @@ class SCPDownloadManager:
 
 		return local_zip_path
 
+	def find_first_local_zip_by_raw_base(self, raw_base):
+		if not raw_base:
+			return None
+
+		if not os.path.isdir(self.download_path):
+			return None
+
+		for filename in sorted(os.listdir(self.download_path)):
+			if not filename.lower().endswith(".zip"):
+				continue
+
+			if not filename.startswith(raw_base):
+				continue
+
+			candidate_path = os.path.join(self.download_path, filename)
+			if not os.path.isfile(candidate_path):
+				continue
+
+			if os.path.getsize(candidate_path) <= 0:
+				continue
+
+			return candidate_path
+
+		return None
+
 
 class DatabaseNameBuilder:
 	EXPIRY_PATTERN = re.compile(
@@ -392,20 +418,32 @@ class DatabaseNameBuilder:
 		raw_base = cls.normalize_backup_base_name(zip_path)
 		if variant:
 			raw_base = f"{raw_base}__{variant}"
-		end_date = today + datetime.timedelta(days=retention_days)
+		end_date = today + datetime.timedelta(days=retention_days - 1)
 		resource_base_name = f"{raw_base}__exp_{cls._fmt_date(end_date)}"
 		local_zip_filename = f"{resource_base_name}.zip"
 		return resource_base_name, local_zip_filename, end_date
 
 
 class OdooRestoreScriptRunner:
-	def __init__(self, restore_script_path, workdir=None, psql_bin=None, verbose=False):
+	def __init__(
+		self,
+		restore_script_path,
+		workdir=None,
+		psql_bin=None,
+		verbose=False,
+		db_prefix=None,
+		env_config=None,
+		post_restore_config_path=None,
+	):
 		self.restore_script_path = restore_script_path
 		self.workdir = workdir
 		self.psql_bin = psql_bin
 		self.verbose = verbose
+		self.db_prefix = db_prefix
+		self.env_config = env_config
+		self.post_restore_config_path = post_restore_config_path
 
-	def run_restore(self, zip_path, db_name):
+	def run_restore(self, instance, zip_path, db_name):
 		if not os.path.isfile(self.restore_script_path):
 			raise FileNotFoundError(
 				f"No se encontró el script de restore: {self.restore_script_path}"
@@ -415,6 +453,7 @@ class OdooRestoreScriptRunner:
 			sys.executable,
 			self.restore_script_path,
 			"restore",
+			instance,
 			"-z",
 			zip_path,
 			"-d",
@@ -425,19 +464,142 @@ class OdooRestoreScriptRunner:
 			cmd.extend(["--workdir", self.workdir])
 		if self.psql_bin:
 			cmd.extend(["--psql-bin", self.psql_bin])
+		if self.db_prefix:
+			cmd.extend(["--db-prefix", self.db_prefix])
 		if self.verbose:
 			cmd.append("--verbose")
 
 		print("\nEjecutando restore con script existente odoo_restore...\n")
 		subprocess.run(cmd, check=True)
 
+		# odoo_restore antepone --db-prefix al crear la base físicamente
+		# (ver `effective_db_name` en ese script); `db_name` aquí es el
+		# nombre "lógico" sin prefijo que usa este orquestador para sus
+		# propios logs/expiración, así que hay que replicar ese mismo
+		# cálculo para apuntar post_restore_db a la base que en verdad existe.
+		effective_db_name = f"{self.db_prefix}{db_name}" if self.db_prefix else db_name
+		self._run_module_update(instance, effective_db_name)
+		self._run_post_restore_config(instance, effective_db_name)
+
+	# El contenedor destino es un servidor multi-tenant siempre corriendo
+	# (workers + hilo de cron) que sirve, vía `dbfilter`, cualquier base que
+	# calce con el prefijo de la instancia. Apenas la base recién restaurada
+	# queda visible, ese servidor puede engancharse a ella (cron, workers)
+	# justo cuando este `-u all` también la está tocando, y Postgres aborta
+	# una de las dos transacciones con "deadlock detected" sobre
+	# `ir_module_module`. Es una condición de carrera real contra el propio
+	# servidor, no un fallo aislado, así que se reintenta con backoff.
+	MODULE_UPDATE_RETRY_ATTEMPTS = 4
+	MODULE_UPDATE_RETRY_DELAY_SECONDS = 20
+
+	def _run_module_update(self, instance, db_name):
+		if not self.env_config:
+			return
+		cmd = [
+			"docker", "exec", "-u", "root", self.env_config.container_name,
+			"odoo", "--stop-after-init", "--no-http", "--workers=0",
+			"-u", "all", "-d", db_name,
+		]
+
+		result = None
+		for attempt in range(1, self.MODULE_UPDATE_RETRY_ATTEMPTS + 1):
+			print(
+				f"\nActualizando modulos en '{db_name}' antes de la config "
+				f"post-restore (intento {attempt}/{self.MODULE_UPDATE_RETRY_ATTEMPTS})...\n"
+			)
+			result = subprocess.run(cmd)
+			if result.returncode == 0:
+				break
+
+			print(
+				f"AVISO: la actualización de módulos en '{db_name}' terminó con "
+				f"código {result.returncode} en el intento {attempt}/"
+				f"{self.MODULE_UPDATE_RETRY_ATTEMPTS}."
+			)
+			if attempt < self.MODULE_UPDATE_RETRY_ATTEMPTS:
+				time.sleep(self.MODULE_UPDATE_RETRY_DELAY_SECONDS)
+
+		# Best-effort: si after de todos los reintentos esto sigue fallando,
+		# NO debe abortar el resto del pipeline. La config post-restore
+		# (Environment + Sandbox Mode) tiene que ejecutarse siempre sobre la
+		# base recién restaurada, sin depender de que este paso haya salido
+		# limpio ni de intervención manual.
+		if result.returncode != 0:
+			print(
+				f"AVISO: la actualización de módulos en '{db_name}' siguió fallando "
+				f"tras {self.MODULE_UPDATE_RETRY_ATTEMPTS} intentos (código "
+				f"{result.returncode}). Se continúa con la configuración post-restore "
+				"de todas formas; revisa el esquema de esta base si algo falla más "
+				"adelante."
+			)
+
+	# Instancias soportadas por post_restore_db y el valor que corresponde
+	# escribir en el parámetro de sistema 'Environment' para cada una.
+	ENVIRONMENT_LABELS = {
+		"bp-staging": "Staging",
+		"bp-qa": "QA",
+	}
+
+	@classmethod
+	def _environment_label(cls, instance):
+		try:
+			return cls.ENVIRONMENT_LABELS[instance]
+		except KeyError:
+			supported = ", ".join(sorted(cls.ENVIRONMENT_LABELS))
+			raise RuntimeError(
+				f"No hay un valor de 'Environment' configurado para la instancia "
+				f"'{instance}'. Instancias soportadas: {supported}."
+			)
+
+	def _run_post_restore_config(self, instance, db_name):
+		if not self.env_config or not self.post_restore_config_path:
+			return
+
+		if not os.path.isfile(self.post_restore_config_path):
+			raise FileNotFoundError(
+				"No se encontró el script de configuración post-restore: "
+				f"{self.post_restore_config_path}"
+			)
+
+		environment = self._environment_label(instance)
+
+		cmd = [
+			sys.executable,
+			self.post_restore_config_path,
+			"--container",
+			self.env_config.container_name,
+			"--db-name",
+			db_name,
+			"--environment",
+			environment,
+		]
+		if self.verbose:
+			cmd.append("--verbose")
+
+		print(
+			f"\nEjecutando configuración post-restore para la base '{db_name}' "
+			f"(Environment={environment})...\n"
+		)
+		# Best-effort también aquí: si esta base en particular falla (QA
+		# restaura 2 por corrida, la normal y la "long"), no debe impedir
+		# que se procese la siguiente. El error queda visible en el log
+		# del cron para revisar esa base puntual.
+		result = subprocess.run(cmd)
+		if result.returncode != 0:
+			print(
+				f"AVISO: la configuración post-restore de '{db_name}' terminó "
+				f"con código {result.returncode}. Revisa esta base manualmente; "
+				"el resto del proceso continúa."
+			)
+
 
 class ExpiredDatabaseCleaner:
 	FILESTORE_BASE_PATH = "/home/odoo/data/filestore"
 
-	def __init__(self, env_config, logger=None):
+	def __init__(self, env_config, logger=None, db_prefix=None):
 		self.env = env_config
 		self.logger = logger
+		self.db_prefix = db_prefix
 
 	def _run_container_command(self, command):
 		cmd = ["docker", "exec", self.env.container_name, *command]
@@ -478,6 +640,9 @@ class ExpiredDatabaseCleaner:
 		for db_name in candidates:
 			expires_on = DatabaseNameBuilder.parse_database_expiry(db_name)
 			if not expires_on:
+				continue
+
+			if self.db_prefix and not db_name.startswith(self.db_prefix):
 				continue
 
 			cleanup_on = compute_cleanup_on(expires_on, delay_days=0)
@@ -721,6 +886,7 @@ class ExpiredZipCleaner:
 class RestoreSCPOrchestrator:
 	def __init__(
 		self,
+		instance,
 		scp_manager,
 		db_name_builder,
 		restore_runner,
@@ -731,7 +897,9 @@ class RestoreSCPOrchestrator:
 		long_retention_days=None,
 		cleanup_dbs=False,
 		cleanup_zips=False,
+		force_download=False,
 	):
+		self.instance = instance
 		self.scp_manager = scp_manager
 		self.db_name_builder = db_name_builder
 		self.restore_runner = restore_runner
@@ -742,6 +910,7 @@ class RestoreSCPOrchestrator:
 		self.long_retention_days = long_retention_days
 		self.cleanup_dbs = cleanup_dbs
 		self.cleanup_zips = cleanup_zips
+		self.force_download = force_download
 
 	def _log_downloaded_zip(self, local_zip_path, remote_zip_path, end_date):
 		if not self.logger:
@@ -784,7 +953,30 @@ class RestoreSCPOrchestrator:
 			cleanup_on=compute_cleanup_on(end_date, delay_days=0) if end_date else None,
 			source_path=local_zip_path,
 			target_path=db_name,
-			details=f"restore desde ZIP {os.path.basename(local_zip_path)}",
+				details=f"restore desde ZIP {os.path.basename(local_zip_path)}",
+		)
+
+	def _log_reused_zip(self, local_zip_path, remote_zip_path, end_date):
+		if not self.logger:
+			return
+
+		self.logger.log_event(
+			event_type="reused-rawbase",
+			resource_type="zip",
+			resource_name=os.path.basename(local_zip_path),
+			expires_on=end_date,
+			cleanup_on=(
+				compute_cleanup_on(
+					end_date,
+					delay_days=self.expired_zip_cleaner.delay_cleanup_days,
+				)
+				if end_date
+				else None
+			),
+			size_bytes=os.path.getsize(local_zip_path),
+			source_path=remote_zip_path,
+			target_path=local_zip_path,
+			details="ZIP local reutilizado por coincidencia raw_base; no se ejecutó SCP",
 		)
 
 	def cleanup_expired_resources(self):
@@ -797,6 +989,9 @@ class RestoreSCPOrchestrator:
 	def run(self):
 		remote_zip_path = self.scp_manager.resolve_remote_zip_path()
 		source_zip_filename = posixpath.basename(remote_zip_path)
+		remote_raw_base = self.db_name_builder.normalize_backup_base_name(
+			source_zip_filename
+		)
 
 		db_name, local_zip_filename, end_date = self.db_name_builder.build(
 			source_zip_filename,
@@ -810,10 +1005,40 @@ class RestoreSCPOrchestrator:
 				variant="long",
 			)
 
-		local_zip_path = self.scp_manager.download(
-			remote_zip_path=remote_zip_path,
-			local_zip_filename=local_zip_filename,
-		)
+		local_zip_path = self.scp_manager.build_local_zip_path(local_zip_filename)
+		reused_local_zip = False
+		should_download = True
+
+		if not self.force_download:
+			matched_local_zip = self.scp_manager.find_first_local_zip_by_raw_base(
+				remote_raw_base
+			)
+			if matched_local_zip:
+				reused_local_zip = True
+				should_download = False
+				local_zip_path = matched_local_zip
+				print(
+					"\nSe reutiliza ZIP local por coincidencia de raw_base "
+					f"('{remote_raw_base}*.zip') en --download-path: "
+					f"{local_zip_path}\n"
+				)
+
+		if should_download:
+			if self.force_download and os.path.isfile(local_zip_path):
+				print(
+					"\n--force-download activo: se forzará la descarga y "
+					f"sobrescritura de {local_zip_path}\n"
+				)
+			elif os.path.isfile(local_zip_path) and os.path.getsize(local_zip_path) == 0:
+				print(
+					"\nZIP local existente vacío detectado; "
+					"se descargará nuevamente por SCP.\n"
+				)
+
+			local_zip_path = self.scp_manager.download(
+				remote_zip_path=remote_zip_path,
+				local_zip_filename=local_zip_filename,
+			)
 
 		print(f"\nBase de datos objetivo: {db_name}")
 		if long_db_target:
@@ -829,14 +1054,17 @@ class RestoreSCPOrchestrator:
 				f"{long_db_target[2].strftime('%Y_%m_%d')}\n"
 			)
 
-		self._log_downloaded_zip(local_zip_path, remote_zip_path, end_date)
+		if reused_local_zip:
+			self._log_reused_zip(local_zip_path, remote_zip_path, end_date)
+		else:
+			self._log_downloaded_zip(local_zip_path, remote_zip_path, end_date)
 
-		self.restore_runner.run_restore(local_zip_path, db_name)
+		self.restore_runner.run_restore(self.instance, local_zip_path, db_name)
 		self._log_restored_database(db_name, local_zip_path, end_date)
 
 		if long_db_target:
 			long_db_name, _, long_end_date = long_db_target
-			self.restore_runner.run_restore(local_zip_path, long_db_name)
+			self.restore_runner.run_restore(self.instance, local_zip_path, long_db_name)
 			self._log_restored_database(long_db_name, local_zip_path, long_end_date)
 
 		self.cleanup_expired_resources()
@@ -847,6 +1075,7 @@ def parse_args():
 		description="Descarga un backup ZIP por SCP, ejecuta restore y opcionalmente limpia recursos expirados en Odoo"
 	)
 
+	parser.add_argument("--instance", required=True, help="Nombre de la instancia de Odoo")
 	parser.add_argument("--host", help="Host remoto para SCP")
 	parser.add_argument("--user", help="Usuario remoto para SCP")
 	parser.add_argument(
@@ -869,6 +1098,14 @@ def parse_args():
 	parser.add_argument(
 		"--identity-file",
 		help="Ruta local de la clave privada SSH para SCP",
+	)
+	parser.add_argument(
+		"--force-download",
+		action="store_true",
+		help=(
+			"Fuerza descarga por SCP aunque el ZIP local objetivo ya exista. "
+			"Sobrescribe el archivo local"
+		),
 	)
 	parser.add_argument(
 		"--retention-days",
@@ -933,6 +1170,11 @@ def parse_args():
 		action="store_true",
 		help="Habilita salida detallada en odoo_restore",
 	)
+	parser.add_argument(
+		"--db-prefix",
+		default="",
+		help="Prefijo opcional para el nombre de la base de datos restaurada",
+	)
 
 	args = parser.parse_args()
 
@@ -989,18 +1231,7 @@ def parse_args():
 	return args
 
 
-def load_dotenv_if_available():
-	try:
-		dotenv_module = importlib.import_module("dotenv")
-	except ModuleNotFoundError:
-		return
-
-	dotenv_module.load_dotenv()
-
-
 def main():
-	load_dotenv_if_available()
-
 	args = parse_args()
 	logger = LifecycleCsvLogger(args.log_csv_path) if args.log_csv_path else None
 
@@ -1015,8 +1246,9 @@ def main():
 		expired_zip_cleaner.delete_expired_zips()
 		return
 
-	env_config = EnvConfig.from_environment()
-	expired_db_cleaner = ExpiredDatabaseCleaner(env_config=env_config, logger=logger)
+	config = load_config(BASE_PATH)
+	env_config = EnvConfig.from_instance(config, args.instance)
+	expired_db_cleaner = ExpiredDatabaseCleaner(env_config=env_config, logger=logger, db_prefix=args.db_prefix)
 
 	if args.cleanup_dbs_only or args.cleanup_zips_only:
 		print("\nModo cleanup selectivo: se omite descarga y restore.\n")
@@ -1029,6 +1261,7 @@ def main():
 
 	scripts_dir = os.path.dirname(os.path.abspath(__file__))
 	restore_script_path = os.path.join(scripts_dir, "odoo_restore")
+	post_restore_config_path = os.path.join(scripts_dir, "post_restore_db")
 
 	scp_manager = SCPDownloadManager(
 		host=args.host,
@@ -1044,9 +1277,13 @@ def main():
 		workdir=args.workdir,
 		psql_bin=args.psql_bin,
 		verbose=args.verbose,
+		db_prefix=args.db_prefix,
+		env_config=env_config,
+		post_restore_config_path=post_restore_config_path,
 	)
 
 	orchestrator = RestoreSCPOrchestrator(
+		instance=args.instance,
 		scp_manager=scp_manager,
 		db_name_builder=DatabaseNameBuilder,
 		restore_runner=restore_runner,
@@ -1057,6 +1294,7 @@ def main():
 		long_retention_days=args.long_retention_days,
 		cleanup_dbs=args.cleanup_dbs,
 		cleanup_zips=args.cleanup_zips,
+		force_download=args.force_download,
 	)
 
 	orchestrator.run()

@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""
+Configuración post-restore para bases de datos de testing (Staging/QA).
+
+Se ejecuta después de `odoo_restore_scp` sobre cada base recién restaurada.
+Dos pasos, en este orden exacto (obligatorio: `database_neutralize_toggle`
+bloquea la activación de Sandbox Mode si el parámetro de sistema
+'Environment' todavía indica producción):
+
+  1. Ajusta el parámetro de sistema 'Environment' (prod -> Staging/QA).
+  2. Activa Sandbox Mode a través del wizard de Ajustes Generales
+     (res.config.settings), igual que si un usuario marcara el check y
+     diera clic en "Guardar". Esto es lo que efectivamente desactiva los
+     servidores de correo, fetchmail y crons (vía database_neutralize_toggle,
+     que ya viene instalado en el dump de producción).
+
+Ambos pasos corren en una sola sesión de `odoo shell` contra la base
+recién restaurada, en el mismo contenedor que la va a servir.
+
+La activación de Sandbox Mode puede chocar con una condición de carrera:
+apenas la base queda visible tras el `-u all` previo, el scheduler de
+crons del propio contenedor puede tomar y estar ejecutando alguno de los
+`ir.cron` heredados de producción justo cuando `settings.execute()` intenta
+desactivarlos todos, y Odoo bloquea la escritura sobre un cron en ejecución
+(UserError "esta tarea de cron se está ejecutando..."). Por eso ese paso
+reintenta con backoff antes de darse por vencido.
+"""
+
+import argparse
+import subprocess
+import sys
+
+ENVIRONMENT_PARAM = "Environment"
+SANDBOX_RETRY_ATTEMPTS = 5
+SANDBOX_RETRY_DELAY_SECONDS = 10
+
+
+def _build_shell_script(environment):
+    return f'''
+import sys
+import time
+
+try:
+    icp = env["ir.config_parameter"].sudo()
+    icp.set_param({ENVIRONMENT_PARAM!r}, {environment!r})
+    env.cr.commit()
+    print("POST_RESTORE_STEP: {ENVIRONMENT_PARAM} -> {environment}")
+
+    if "sandbox_mode" not in env["res.config.settings"]._fields:
+        print(
+            "POST_RESTORE_SKIP_SANDBOX: database_neutralize_toggle no esta "
+            "instalado en esta base"
+        )
+    else:
+        max_attempts = {SANDBOX_RETRY_ATTEMPTS}
+        retry_delay = {SANDBOX_RETRY_DELAY_SECONDS}
+        last_exc = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # El wizard (res.config.settings) se crea de nuevo en cada
+                # intento: un rollback() por un fallo previo (p.ej. el cron
+                # bloqueado) deshace también el create() anterior, así que
+                # reutilizar el mismo registro en el siguiente intento
+                # revienta con MissingError.
+                settings = env["res.config.settings"].create({{}})
+                settings.sandbox_mode = True
+                settings.execute()
+                env.cr.commit()
+                last_exc = None
+                break
+            except Exception as exc:
+                env.cr.rollback()
+                last_exc = exc
+                print(
+                    "POST_RESTORE_SANDBOX_RETRY: intento %d/%d fallo: %r"
+                    % (attempt, max_attempts, exc)
+                )
+                if attempt < max_attempts:
+                    time.sleep(retry_delay)
+
+        if last_exc is not None:
+            raise last_exc
+
+        print("POST_RESTORE_STEP: sandbox_mode -> True")
+        print("POST_RESTORE_SANDBOX_APPLIED")
+
+    print("POST_RESTORE_OK")
+except Exception as exc:
+    env.cr.rollback()
+    print("POST_RESTORE_FAILED: %r" % (exc,), file=sys.stderr)
+    sys.exit(1)
+'''
+
+
+def run_post_restore(container, db_name, environment, odoo_bin="odoo", verbose=False):
+    script = _build_shell_script(environment)
+
+    cmd = [
+        "docker", "exec", "-i", container,
+        odoo_bin, "shell",
+        "-d", db_name,
+        "--no-http",
+    ]
+
+    if verbose:
+        print(
+            f"\nEjecutando post-restore en '{db_name}' (contenedor {container})...\n"
+            f"Environment objetivo: {environment}\n"
+        )
+
+    result = subprocess.run(cmd, input=script, text=True, capture_output=True)
+
+    if verbose or result.returncode != 0 or "POST_RESTORE_OK" not in result.stdout:
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+
+    if result.returncode != 0 or "POST_RESTORE_OK" not in result.stdout:
+        print(
+            f"ERROR: post-restore falló para la base '{db_name}' "
+            f"(contenedor {container}, environment={environment})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    sandbox_note = (
+        "Sandbox Mode activado"
+        if "POST_RESTORE_SANDBOX_APPLIED" in result.stdout
+        else "Sandbox Mode omitido (database_neutralize_toggle no instalado)"
+    )
+    print(
+        f"post_restore_db: '{db_name}' -> {ENVIRONMENT_PARAM}={environment}, "
+        f"{sandbox_note}"
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Configura una base de datos recién restaurada de Staging/QA: "
+            "ajusta el parámetro de sistema 'Environment' y activa Sandbox Mode."
+        )
+    )
+    parser.add_argument(
+        "--container", required=True, help="Contenedor Odoo, ej. odoo-bp-staging"
+    )
+    parser.add_argument(
+        "--db-name", required=True, help="Base de datos recién restaurada"
+    )
+    parser.add_argument(
+        "--environment",
+        required=True,
+        help="Valor a guardar en el parámetro de sistema 'Environment' (ej. Staging, QA)",
+    )
+    parser.add_argument(
+        "--odoo-bin", default="odoo", help="Comando/binario odoo dentro del contenedor"
+    )
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+
+    run_post_restore(
+        container=args.container,
+        db_name=args.db_name,
+        environment=args.environment,
+        odoo_bin=args.odoo_bin,
+        verbose=args.verbose,
+    )
+
+
+if __name__ == "__main__":
+    main()
