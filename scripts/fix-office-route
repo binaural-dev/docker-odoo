@@ -5,53 +5,129 @@ afectar el resto del trafico (que sigue yendo por la VPN, incluido el acceso
 a Claude).
 
 Detecta el sistema operativo (macOS, Linux o Windows) y usa el comando de
-rutas correspondiente a cada uno.
+rutas correspondiente a cada uno. El gateway de la red local tambien se
+detecta automaticamente (cada laptop puede tener uno distinto segun su
+interfaz/red) - no hace falta editarlo a mano.
 
 Correr esto DESPUES de conectar la VPN, cada vez que te conectes - la ruta
 se pierde en cada reconexion. Necesita permisos de administrador (pide la
 contrasena via sudo en macOS/Linux; en Windows hay que abrir la terminal
 "como Administrador" antes de correrlo).
 
-Antes de usarlo la primera vez, confirma el gateway real de tu red SIN la
-VPN conectada (puede no ser el mismo en otra maquina/red) y ajusta
-OFFICE_GATEWAY mas abajo si difiere:
-    macOS:   route -n get 10.50.27.76
-    Linux:   ip route get 10.50.27.76
-    Windows: route print   (o: tracert 10.50.27.76)
+Si la deteccion automatica del gateway falla, el script lo va a decir
+explicitamente en vez de adivinar - en ese caso confirma el gateway a mano:
+    macOS:   route -n get 10.50.27.76        (o desconectando la VPN)
+    Linux:   ip route get 10.50.27.76        (o: nmcli device show <iface>)
+    Windows: ipconfig /all   (buscar el adaptador real, no el de la VPN)
+y pasalo con --gateway <ip>.
 """
+import argparse
 import platform
+import re
 import subprocess
 import sys
 
 OFFICE_NETWORK = "10.50.0.0"
 OFFICE_PREFIX = 16
 OFFICE_MASK = "255.255.0.0"
-OFFICE_GATEWAY = "10.50.154.1"
 TEST_HOST = "10.50.27.76"
 CLAUDE_URL = "https://api.anthropic.com/"
 
+# Palabras que delatan una interfaz virtual de VPN (para descartarla al
+# buscar el gateway real de la red local) en vez de la red fisica.
+VPN_HINTS_RE = re.compile(r"vpn|tap|tun|wireguard|proton|utun|ipsec|virtual|tunnel", re.IGNORECASE)
 
-def run(cmd):
-    print("+ %s" % " ".join(cmd))
-    return subprocess.run(cmd)
+
+def run(cmd, quiet=False):
+    if not quiet:
+        print("+ %s" % " ".join(cmd))
+    return subprocess.run(cmd, capture_output=quiet, text=quiet)
 
 
-def add_route(system):
+def _try(cmd):
+    """Corre un comando de diagnostico sin ruido y sin romper el script si
+    el binario no existe en esta maquina (ej. nmcli en una laptop sin
+    NetworkManager)."""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=5)
+        return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+
+
+def detect_gateway_macos():
+    services = _try(["networksetup", "-listnetworkserviceorder"])
+    for iface in re.findall(r"Device: (\w+)", services):
+        if not _try(["ipconfig", "getifaddr", iface]):
+            continue  # interfaz sin IP activa
+        gateway = _try(["ipconfig", "getoption", iface, "router"])
+        if re.match(r"^\d+\.\d+\.\d+\.\d+$", gateway):
+            return gateway, iface
+    return None, None
+
+
+def detect_gateway_linux():
+    # Primero via NetworkManager (la mayoria de laptops Linux lo tienen).
+    devices = _try(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"])
+    for line in devices.splitlines():
+        parts = line.split(":")
+        if len(parts) < 3:
+            continue
+        device, dtype, state = parts[0], parts[1], parts[2]
+        if state != "connected" or dtype not in ("wifi", "ethernet"):
+            continue
+        gateway = _try(["nmcli", "-t", "-g", "IP4.GATEWAY", "device", "show", device])
+        if gateway:
+            return gateway, device
+
+    # Fallback sin NetworkManager: la ruta por defecto que no sea de VPN.
+    for line in _try(["ip", "route", "show"]).splitlines():
+        if not line.startswith("default"):
+            continue
+        match = re.search(r"default via (\S+) dev (\S+)", line)
+        if match and not VPN_HINTS_RE.search(match.group(2)):
+            return match.group(1), match.group(2)
+    return None, None
+
+
+def detect_gateway_windows():
+    # Get-NetIPConfiguration da objetos con nombres de propiedad en ingles
+    # sin importar el idioma de Windows (a diferencia de parsear el texto
+    # de "ipconfig /all", que cambia segun el idioma del sistema).
+    script = (
+        "Get-NetIPConfiguration | Where-Object { "
+        "$_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' -and "
+        "$_.InterfaceDescription -notmatch 'VPN|TAP|WireGuard|Proton|Virtual|Tunnel' "
+        "} | Select-Object -First 1 -ExpandProperty IPv4DefaultGateway "
+        "| Select-Object -ExpandProperty NextHop"
+    )
+    gateway = _try(["powershell.exe", "-NoProfile", "-Command", script])
+    return (gateway, None) if re.match(r"^\d+\.\d+\.\d+\.\d+$", gateway or "") else (None, None)
+
+
+def detect_gateway(system):
+    if system == "Darwin":
+        return detect_gateway_macos()
+    if system == "Linux":
+        return detect_gateway_linux()
+    if system == "Windows":
+        return detect_gateway_windows()
+    return None, None
+
+
+def add_route(system, gateway):
     if system == "Darwin":  # macOS
-        run(["sudo", "route", "add", "-net", "%s/%d" % (OFFICE_NETWORK, OFFICE_PREFIX), OFFICE_GATEWAY])
+        run(["sudo", "route", "add", "-net", "%s/%d" % (OFFICE_NETWORK, OFFICE_PREFIX), gateway])
     elif system == "Linux":
-        run(["sudo", "ip", "route", "add", "%s/%d" % (OFFICE_NETWORK, OFFICE_PREFIX), "via", OFFICE_GATEWAY])
+        run(["sudo", "ip", "route", "add", "%s/%d" % (OFFICE_NETWORK, OFFICE_PREFIX), "via", gateway])
     elif system == "Windows":
-        result = run(["route", "add", OFFICE_NETWORK, "mask", OFFICE_MASK, OFFICE_GATEWAY])
+        result = run(["route", "add", OFFICE_NETWORK, "mask", OFFICE_MASK, gateway])
         if result.returncode != 0:
             print(
                 "\nSi fallo por falta de permisos, volve a abrir la "
                 "terminal (cmd/PowerShell) con 'Ejecutar como "
                 "Administrador' y corre este script de nuevo."
             )
-    else:
-        print("Sistema operativo no reconocido: %s" % system)
-        sys.exit(1)
 
 
 def test_connectivity(system):
@@ -68,9 +144,39 @@ def test_connectivity(system):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--gateway",
+        help="Usar este gateway en vez de detectarlo automaticamente "
+        "(por si la deteccion falla o da un resultado incorrecto).",
+    )
+    args = parser.parse_args()
+
     system = platform.system()
     print("Sistema detectado: %s" % system)
-    add_route(system)
+
+    if system not in ("Darwin", "Linux", "Windows"):
+        print("Sistema operativo no reconocido: %s" % system)
+        sys.exit(1)
+
+    if args.gateway:
+        gateway, iface = args.gateway, None
+    else:
+        gateway, iface = detect_gateway(system)
+
+    if not gateway:
+        print(
+            "\nNo pude detectar el gateway de tu red local automaticamente.\n"
+            "Confirmalo a mano y volve a correr este script con --gateway <ip>:\n"
+            "    macOS:   route -n get %s\n"
+            "    Linux:   ip route get %s   (o: nmcli device show <interfaz>)\n"
+            "    Windows: ipconfig /all   (el adaptador real, no el de la VPN)"
+            % (TEST_HOST, TEST_HOST)
+        )
+        sys.exit(1)
+
+    print("Gateway detectado: %s%s" % (gateway, " (interfaz %s)" % iface if iface else ""))
+    add_route(system, gateway)
     test_connectivity(system)
 
 
