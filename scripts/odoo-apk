@@ -1,0 +1,276 @@
+#!/usr/bin/env python3
+"""Genera el APK/AAB de la app de ventas a partir del manifest de una instancia.
+
+Envuelve a Bubblewrap, que empaqueta la PWA como Trusted Web Activity.
+
+Lo importante que resuelve este script, y que es fácil de olvidar haciéndolo
+a mano: **hornea el version_code dentro del start_url del APK**. Bubblewrap
+fija el start_url al compilar, así que una build generada con
+``start_url = /payments?app_version=11000`` reporta esa versión en cada
+arranque. Ese es el mecanismo con el que ``binaural_app_version`` sabe qué
+versión tiene instalada cada vendedor. Si una build sale sin ese parámetro,
+esa gente queda invisible en el catálogo.
+
+Requisitos (una sola vez):
+    npm i -g @bubblewrap/cli
+    brew install openjdk@17
+    brew install --cask android-commandlinetools
+
+Uso:
+    scripts/odoo-apk maxcam-ext --domain vendedores.maxcam.com \\
+        --package com.binaural.maxcam.ventas --version 1.2.0 --version-code 12000
+
+    # Reconstruir la misma versión tras cambiar algo del sitio
+    scripts/odoo-apk maxcam-ext --domain ... --package ... \\
+        --version 1.2.0 --version-code 12000 --rebuild
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import click
+
+BASE_PATH = Path(__file__).resolve().parent.parent
+BUILD_ROOT = BASE_PATH / ".tmp_ignored" / "apk-build"
+
+#: Bubblewrap valida que el SDK tenga <sdk>/tools o <sdk>/bin. Homebrew lo
+#: instala con cmdline-tools/latest/bin, así que hay que armar una raíz con
+#: enlaces simbólicos: tocar el árbol de Homebrew se pierde en cada upgrade.
+DEFAULT_SDK_LINK = Path.home() / ".bubblewrap" / "android-sdk"
+BREW_SDK = Path("/opt/homebrew/share/android-commandlinetools")
+BREW_JDK = Path("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk")
+
+
+def fail(msg):
+    click.echo(click.style(f"✗ {msg}", fg="red"))
+    sys.exit(1)
+
+
+def ensure_toolchain(jdk, sdk):
+    """Deja el SDK con la forma que Bubblewrap espera y escribe su config."""
+    if not Path(jdk).exists():
+        fail(f"No existe el JDK en {jdk}. Instalar con: brew install openjdk@17")
+    if not BREW_SDK.exists():
+        fail(
+            f"No existe el SDK de Android en {BREW_SDK}. "
+            "Instalar con: brew install --cask android-commandlinetools"
+        )
+
+    if sdk == str(DEFAULT_SDK_LINK):
+        DEFAULT_SDK_LINK.parent.mkdir(parents=True, exist_ok=True)
+        DEFAULT_SDK_LINK.mkdir(exist_ok=True)
+        for name in ("platforms", "build-tools", "platform-tools",
+                     "licenses", "cmdline-tools"):
+            link = DEFAULT_SDK_LINK / name
+            if not link.exists():
+                link.symlink_to(BREW_SDK / name)
+        binlink = DEFAULT_SDK_LINK / "bin"
+        if not binlink.exists():
+            binlink.symlink_to(BREW_SDK / "cmdline-tools" / "latest" / "bin")
+
+    config = Path.home() / ".bubblewrap" / "config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"jdkPath": str(jdk), "androidSdkPath": str(sdk)}, indent=2))
+
+
+def build_env(jdk):
+    env = os.environ.copy()
+    java_home = Path(jdk) / "Contents" / "Home"
+    env["JAVA_HOME"] = str(java_home)
+    env["PATH"] = f"{java_home / 'bin'}:{env['PATH']}"
+    return env
+
+
+def run(cmd, cwd, env, quiet=False):
+    result = subprocess.run(
+        cmd, cwd=cwd, env=env, shell=isinstance(cmd, str),
+        capture_output=quiet, text=True,
+    )
+    if result.returncode != 0:
+        if quiet:
+            click.echo(result.stdout or "")
+            click.echo(result.stderr or "")
+        fail(f"Falló: {cmd if isinstance(cmd, str) else ' '.join(cmd)}")
+    return result
+
+
+def fingerprint(keystore, alias, storepass, env):
+    """SHA-256 del certificado, que es lo que va en el assetlinks.json."""
+    out = subprocess.run(
+        ["keytool", "-list", "-v", "-keystore", str(keystore),
+         "-alias", alias, "-storepass", storepass],
+        capture_output=True, text=True, env=env,
+    ).stdout
+    m = re.search(r"SHA256:\s*([0-9A-F:]{95})", out)
+    return m.group(1) if m else None
+
+
+@click.command()
+@click.argument("instance")
+@click.option("--domain", required=True,
+              help="Dominio donde corre la app, sin esquema. El host queda "
+                   "horneado en el APK: cambiarlo obliga a recompilar.")
+@click.option("--package", required=True,
+              help="Package name Android, p.ej. com.binaural.cliente.ventas. "
+                   "Debe coincidir con el del assetlinks.json del sitio.")
+@click.option("--version", "version_name", required=True, help="Versión visible, p.ej. 1.2.0")
+@click.option("--version-code", type=int, required=True,
+              help="Entero monotónico. Es el que se hornea en el start_url y "
+                   "el que compara binaural_app_version contra la mínima.")
+@click.option("--start-path", default="/payments",
+              help="Ruta de arranque, antes del parámetro de versión.")
+@click.option("--app-name", default=None, help="Nombre completo (por defecto, el del manifest).")
+@click.option("--short-name", default=None, help="Nombre bajo el icono.")
+@click.option("--target-sdk", type=int, default=None,
+              help="targetSdkVersion. Play Store sube el mínimo exigido todos "
+                   "los años; es lo que Bubblewrap permite fijar y PWABuilder no.")
+@click.option("--keystore", default=None, help="Ruta del keystore (por defecto, el del directorio de build).")
+@click.option("--alias", default="app", help="Alias de la clave.")
+@click.option("--storepass", envvar="APK_STOREPASS", default=None,
+              help="Contraseña del keystore. Preferible por la variable APK_STOREPASS.")
+@click.option("--jdk", default=str(BREW_JDK), show_default=True)
+@click.option("--sdk", default=str(DEFAULT_SDK_LINK), show_default=True)
+@click.option("--rebuild", is_flag=True, help="Regenerar el proyecto Android desde cero.")
+def run_command(instance, domain, package, version_name, version_code, start_path,
+                app_name, short_name, target_sdk, keystore, alias, storepass,
+                jdk, sdk, rebuild):
+    if not storepass:
+        fail("Falta la contraseña del keystore: usar --storepass o la variable APK_STOREPASS.")
+
+    workdir = BUILD_ROOT / instance
+    workdir.mkdir(parents=True, exist_ok=True)
+    keystore = Path(keystore) if keystore else workdir / "android.keystore"
+
+    click.echo(click.style(f"→ Instancia {instance} · {domain} · {version_name} ({version_code})", fg="cyan"))
+
+    ensure_toolchain(jdk, sdk)
+    env = build_env(jdk)
+
+    if not keystore.exists():
+        fail(
+            f"No existe el keystore en {keystore}.\n"
+            "  Generarlo una sola vez y RESGUARDARLO: si se pierde, no se puede\n"
+            "  volver a firmar la app y los usuarios deben desinstalar y reinstalar.\n\n"
+            f"  keytool -genkeypair -v -keystore {keystore} -alias {alias} \\\n"
+            "    -keyalg RSA -keysize 2048 -validity 10000 \\\n"
+            "    -dname \"CN=<app>, O=<empresa>, C=VE\""
+        )
+
+    manifest_url = f"https://{domain}/pwa/manifest.json"
+    click.echo(f"  manifest: {manifest_url}")
+    remote = subprocess.run(["curl", "-s", "-m", "30", manifest_url],
+                            capture_output=True, text=True).stdout
+    try:
+        remote_manifest = json.loads(remote)
+    except ValueError:
+        fail(f"El manifest no respondió JSON válido. ¿Está el sitio publicado como PWA en {domain}?")
+
+    # El start_url lleva el version_code: es lo que permite saber después qué
+    # versión tiene instalada cada vendedor.
+    start_url = f"{start_path}?app_version={version_code}"
+    icon = f"https://{domain}/web/image/website/1/pwa_icon_512/512x512"
+
+    twa = {
+        "packageId": package,
+        "host": domain,
+        "name": app_name or remote_manifest.get("name") or instance,
+        "launcherName": short_name or remote_manifest.get("short_name") or instance,
+        "display": "standalone",
+        "themeColor": remote_manifest.get("theme_color", "#000000"),
+        "themeColorDark": remote_manifest.get("theme_color", "#000000"),
+        "navigationColor": remote_manifest.get("theme_color", "#000000"),
+        "navigationColorDark": remote_manifest.get("theme_color", "#000000"),
+        "navigationDividerColor": remote_manifest.get("theme_color", "#000000"),
+        "navigationDividerColorDark": remote_manifest.get("theme_color", "#000000"),
+        "backgroundColor": remote_manifest.get("background_color", "#FFFFFF"),
+        "enableNotifications": False,
+        "startUrl": start_url,
+        "iconUrl": icon,
+        "maskableIconUrl": icon,
+        "splashScreenFadeOutDuration": 300,
+        "signingKey": {"path": str(keystore), "alias": alias},
+        "appVersion": version_name,
+        "appVersionCode": version_code,
+        "shortcuts": [],
+        "generatorApp": "odoo-apk",
+        "webManifestUrl": manifest_url,
+        "fallbackType": "customtabs",
+        "features": {},
+        "alphaDependencies": {"enabled": False},
+        "enableSiteSettingsShortcut": True,
+        "isChromeOSOnly": False,
+        "isMetaQuest": False,
+        "fullScopeUrl": f"https://{domain}/",
+        "minSdkVersion": 23,
+        "orientation": "default",
+        "fingerprints": [],
+        "additionalTrustedOrigins": [],
+        "retainedBundles": [],
+        "protocolHandlers": [],
+        "fileHandlers": [],
+        "launchHandlerClientMode": "",
+    }
+    (workdir / "twa-manifest.json").write_text(json.dumps(twa, indent=2))
+    click.echo(f"  start_url horneado: {start_url}")
+
+    if rebuild:
+        for path in ("app", "gradle", "build.gradle", "settings.gradle",
+                     "gradlew", "gradlew.bat", "manifest-checksum.txt"):
+            target = workdir / path
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+
+    click.echo("  generando el proyecto Android...")
+    run(["bubblewrap", "update", "--skipVersionUpgrade"], workdir, env, quiet=True)
+
+    if target_sdk:
+        gradle = workdir / "app" / "build.gradle"
+        text = gradle.read_text()
+        text = re.sub(r"targetSdkVersion \d+", f"targetSdkVersion {target_sdk}", text)
+        text = re.sub(r"compileSdkVersion \d+", f"compileSdkVersion {target_sdk}", text)
+        gradle.write_text(text)
+        click.echo(f"  targetSdkVersion fijado en {target_sdk}")
+
+    click.echo("  compilando (la primera vez Gradle descarga bastante)...")
+    env["BUBBLEWRAP_KEYSTORE_PASSWORD"] = storepass
+    env["BUBBLEWRAP_KEY_PASSWORD"] = storepass
+    run(["bubblewrap", "build", "--skipPwaValidation"], workdir, env, quiet=True)
+
+    apk = workdir / "app-release-signed.apk"
+    aab = workdir / "app-release-bundle.aab"
+    if not apk.exists():
+        fail("Bubblewrap terminó sin generar el APK.")
+
+    click.echo(click.style("\n✓ Listo", fg="green"))
+    click.echo(f"  APK: {apk}  ({apk.stat().st_size // 1024} KB)")
+    if aab.exists():
+        click.echo(f"  AAB: {aab}  ({aab.stat().st_size // 1024} KB)")
+
+    fp = fingerprint(keystore, alias, storepass, env)
+    if fp:
+        assetlinks = [{
+            "relation": ["delegate_permission/common.handle_all_urls"],
+            "target": {"namespace": "android_app", "package_name": package,
+                       "sha256_cert_fingerprints": [fp]},
+        }]
+        out = workdir / "assetlinks.json"
+        out.write_text(json.dumps(assetlinks, indent=2))
+        click.echo(f"\n  assetlinks.json generado en {out}")
+        click.echo("  Pegarlo en Ajustes → Aplicación instalable → assetlinks.json del website.")
+        click.echo("  Sin eso la TWA arranca con la barra de URL de Chrome encima.")
+
+    click.echo(click.style("\nFalta cargar la versión en Odoo:", fg="yellow"))
+    click.echo(f"  Aplicación móvil → Versiones → nueva: {version_name} / código {version_code},")
+    click.echo(f"  adjuntar el APK y publicarla. Sin registrarla, quien la instale")
+    click.echo("  reporta una versión que no está en el catálogo y queda sin seguimiento.")
+
+
+if __name__ == "__main__":
+    run_command()
