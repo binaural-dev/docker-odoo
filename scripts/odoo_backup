@@ -18,6 +18,12 @@ from generators.config_loader import (
     get_db_internal_port,
 )
 
+# The container's real name is namespaced by the Compose project, not a
+# bare "odoo-<instance>" — everything here must go through ``docker
+# compose exec``/``docker compose cp`` (by *service* name), never plain
+# ``docker exec``/``docker cp`` against a container name.
+COMPOSE_FILE = os.path.join(BASE_PATH, "docker-compose.generated.yml")
+
 
 # ============================================================
 # 1. DumpManager: genera dump.sql dentro del contenedor
@@ -55,7 +61,11 @@ class DumpManager:
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             "-u",
             self.linux_dump_user,
             self.container,
@@ -100,7 +110,11 @@ class DumpManager:
 
         verify_cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             self.container,
             "bash",
             "-lc",
@@ -111,11 +125,18 @@ class DumpManager:
 
         if verify_result.returncode != 0:
             print(
-                f"No se encontró {target_bin}. Instalando {package_name} dentro del contenedor {self.container}..."
+                "\n*** WARNING: Se instalará software dentro del contenedor de producción ***\n"
+                f"  Paquete: {package_name}\n"
+                f"  Contenedor: {self.container}\n"
+                "  Esto requiere acceso a internet desde el contenedor y permisos root.\n"
             )
             install_cmd = [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 "root",
                 self.container,
@@ -126,7 +147,23 @@ class DumpManager:
                 f"{package_name}",
             ]
 
-            subprocess.run(install_cmd, check=True)
+            try:
+                install_result = subprocess.run(install_cmd, capture_output=True, text=True)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Error al ejecutar apt-get install {package_name} en {self.container}: {exc}\n"
+                    f"Sugerencia: instalá manualmente con:\n"
+                    f"  docker compose -f {COMPOSE_FILE} exec -u root {self.container} apt-get install -y {package_name}"
+                ) from exc
+
+            if install_result.returncode != 0:
+                stderr = (install_result.stderr or "").strip()
+                print(f"*** ERROR: Falló la instalación de {package_name} ***\n  Detalle: {stderr}")
+                raise RuntimeError(
+                    f"Falló la instalación de {package_name} dentro del contenedor {self.container}.\n"
+                    f"Sugerencia: instalá manualmente con:\n"
+                    f"  docker compose -f {COMPOSE_FILE} exec -u root {self.container} apt-get install -y {package_name}"
+                )
 
         detected_major = self._get_pg_dump_major_in_container(pg_dump_bin=target_bin)
         if detected_major != self.target_pg_major:
@@ -163,7 +200,11 @@ class DumpManager:
         # 1. Verificar si el usuario ya existe
         check_cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             self.container,
             "bash",
             "-c",
@@ -180,7 +221,11 @@ class DumpManager:
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             "-u",
             "root",
             self.container,
@@ -201,7 +246,11 @@ class DumpManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 self.linux_dump_user,
                 self.container,
@@ -224,24 +273,30 @@ class DumpManager:
         print(f"Usando pg_dump para generar dump: {self.pg_dump_bin}")
 
         inner_cmd = (
-            f"if [ -f '{self.dump_path}' ]; then "
-            f"echo 'ERROR: El archivo {self.dump_path} ya existe.' >&2; exit 1; "
+            f"if [ -f {shlex.quote(self.dump_path)} ]; then "
+            f"echo 'ERROR: El archivo {shlex.quote(self.dump_path)} ya existe.' >&2; exit 1; "
             f"else "
-            f"{pg_dump_bin} -h {self.db_host} -p {self.db_port} -U {self.db_user} "
-            f"-F p -d {self.db_name} -f {self.dump_path} -b; "
+            f"{pg_dump_bin} -h {shlex.quote(self.db_host)} -p {shlex.quote(self.db_port)} "
+            f"-U {shlex.quote(self.db_user)} "
+            f"-F p -d {shlex.quote(self.db_name)} -f {shlex.quote(self.dump_path)} -b; "
             f"fi"
         )
 
         overwriting_cmd = (
-            f"{pg_dump_bin} -h {self.db_host} -p {self.db_port} -U {self.db_user} "
-            f"-F p -d {self.db_name} -f {self.dump_path} -b; "
+            f"{pg_dump_bin} -h {shlex.quote(self.db_host)} -p {shlex.quote(self.db_port)} "
+            f"-U {shlex.quote(self.db_user)} "
+            f"-F p -d {shlex.quote(self.db_name)} -f {shlex.quote(self.dump_path)} -b; "
         )
 
         dump_cmd = overwriting_cmd if self.overwrite_existing else inner_cmd
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             "-u",
             self.linux_dump_user,
             self.container,
@@ -274,6 +329,9 @@ class DumpManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "cp",
                 f"{self.container}:{self.dump_path}",
                 self.copy_to_local_path,
@@ -313,6 +371,9 @@ class FilestoreManager:
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "cp",
             f"{self.container}:{self.container_filestore_path}/.",
             self.local_filestore_path,
@@ -405,6 +466,7 @@ class CleanupManager:
         cleanup_enabled=True,
         confirm=False,
         linux_dump_user=None,
+        non_interactive=False,
     ):
         self.container = container_name
         self.local_paths_to_cleanup = local_paths_to_cleanup
@@ -412,8 +474,12 @@ class CleanupManager:
         self.cleanup_enabled = cleanup_enabled
         self.confirm = confirm
         self.linux_dump_user = linux_dump_user
+        self.non_interactive = non_interactive
 
     def _confirm(self, message):
+
+        if self.non_interactive:
+            return True
 
         if not self.confirm:
             return True
@@ -460,7 +526,11 @@ class CleanupManager:
             subprocess.run(
                 [
                     "docker",
+                    "compose",
+                    "-f",
+                    COMPOSE_FILE,
                     "exec",
+                    "-T",
                     "-u",
                     self.linux_dump_user,
                     self.container,
@@ -483,7 +553,11 @@ class CleanupManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 self.linux_dump_user,
                 self.container,
@@ -564,6 +638,7 @@ class OdooBackupOrchestrator:
         cleanup_enabled=True,
         overwrite_existing=False,
         verbose=True,
+        non_interactive=False,
     ):
         self.verbose = verbose
 
@@ -621,6 +696,7 @@ class OdooBackupOrchestrator:
             ],
             cleanup_enabled=self.cleanup_enabled,
             linux_dump_user=self.linux_dump_user,
+            non_interactive=non_interactive,
         )
 
         if self.container_filestore_path:
@@ -754,7 +830,11 @@ def list_databases(container_name, db_user, db_host, db_port, db_password):
 
     cmd = [
         "docker",
+        "compose",
+        "-f",
+        COMPOSE_FILE,
         "exec",
+        "-T",
         container_name,
         "psql",
         f"-U{db_user}",
@@ -830,6 +910,7 @@ def backup(
     with_filestore=True,
     cleanup=True,
     verbose=True,
+    non_interactive=False,
 ):
     odoo_backup_orchestrator = OdooBackupOrchestrator(
         container_name=container_name,
@@ -848,6 +929,7 @@ def backup(
         target_pg_major=target_pg_major,
         pg_dump_bin=pg_dump_bin,
         verbose=verbose,
+        non_interactive=non_interactive,
     )
 
     odoo_backup_orchestrator.run_backup()
@@ -920,6 +1002,13 @@ def main():
         default=False,
     )
 
+    backup_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="No preguntar confirmación para limpieza (útil en CI/automation)",
+        default=False,
+    )
+
     args = parser.parse_args()
 
     if args.run != "backup":
@@ -988,6 +1077,7 @@ def main():
         with_filestore=not args.no_fs,
         cleanup=not args.no_cleanup,
         verbose=args.verbose,
+        non_interactive=args.yes,
     )
 
 

@@ -1,86 +1,141 @@
 #!/bin/bash
+set -euo pipefail
 
-# 🛡️ Validación y parsing de argumentos
+# ── Coverage runner for Odoo with dynamic temp DB ──────────────────────────
+# Usage:
+#   ./scripts/coverage --odoo_container=<name> --modules=<path> --test_tags=<tags>
+#
+# Options:
+#   --odoo_container   Odoo Compose service name, e.g. odoo-<instance> (required).
+#                      Resolved via `docker compose exec`, not a raw
+#                      `docker exec` — the real container name is namespaced
+#                      by the Compose project, so this must be the *service*
+#                      name from docker-compose.generated.yml.
+#   --modules          Comma-separated module paths relative to /home/odoo/src/ (required)
+#   --test_tags        Odoo --test-tags value (required)
+#   --db_name          Database name (optional, defaults to auto-generated temp DB)
+#   --keep-db          Don't drop the temp DB after test run (for debugging)
+#   --threshold        Minimum coverage % required (default: 70)
+#   --help             Show this help
+# ────────────────────────────────────────────────────────────────────────────
+
+ODOO_CONTAINER=""
+TEST_TAGS=""
+MODULES=""
+DB_NAME=""
+KEEP_DB=false
+THRESHOLD=70
+
+show_help() {
+  sed -n '4,20p' "$0" | sed 's/^# \{0,1\}//'
+  exit 0
+}
+
 for arg in "$@"; do
   case $arg in
-    --odoo_container=*)
-      ODOO_CONTAINER="${arg#*=}"
-      shift
-      ;;
-    --test_tags=*)
-      TEST_TAGS="${arg#*=}"
-      shift
-      ;;
-    --modules=*)
-      MODULES="${arg#*=}"
-      shift
-      ;;
-    --db_name=*)
-      DB_NAME="${arg#*=}"
-      shift
-      ;;
+    --odoo_container=*)   ODOO_CONTAINER="${arg#*=}" ;;
+    --test_tags=*)        TEST_TAGS="${arg#*=}" ;;
+    --modules=*)          MODULES="${arg#*=}" ;;
+    --db_name=*)          DB_NAME="${arg#*=}" ;;
+    --threshold=*)        THRESHOLD="${arg#*=}" ;;
+    --keep-db)            KEEP_DB=true ;;
+    --help)               show_help ;;
     *)
       echo "❌ Argumento desconocido: $arg"
-      echo "Uso: ./coverage --odoo_container=... --test_tags=... --modules=... --db_name=..."
+      echo "   Usá --help para ver las opciones."
       exit 1
       ;;
   esac
 done
 
-# ✅ Verificación de argumentos obligatorios
-if [[ -z "$ODOO_CONTAINER" || -z "$TEST_TAGS" || -z "$MODULES" || -z "$DB_NAME" ]]; then
+if [[ -z "$ODOO_CONTAINER" || -z "$TEST_TAGS" || -z "$MODULES" ]]; then
   echo "❌ Faltan argumentos obligatorios."
-  echo "Uso: ./coverage --odoo_container=... --modules=... --db_name=... --test_tags=..."
+  echo "   Uso: ./coverage --odoo_container=<name> --modules=<path> --test_tags=<tags> [--db_name=<db>] [--keep-db] [--threshold=<pct>]"
   exit 1
 fi
 
-# 🧠 Construir rutas para --source
-IFS=',' read -ra MOD_ARRAY <<< "$MODULES"
+# ── Resolve compose file + a docker-compose-exec helper ─────────────────────
+# The container's real name is namespaced by the Compose project, so every
+# docker exec/cp below targets the *service* name (docker-compose.generated.yml)
+# through `docker compose`, never a raw `docker exec`/`docker cp` by container name.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_PATH="$(dirname "$SCRIPT_DIR")"
+COMPOSE_FILE="$BASE_PATH/docker-compose.generated.yml"
 
+docker_exec() {
+  docker compose -f "$COMPOSE_FILE" exec -T "$ODOO_CONTAINER" "$@"
+}
+
+# ── Dynamic database name ────────────────────────────────────────────────────
+if [[ -z "$DB_NAME" ]]; then
+  DB_NAME="cov_$(date +%Y%m%d_%H%M%S)"
+  echo "🔧 DB temporal generada: $DB_NAME"
+else
+  echo "🔧 Usando DB: $DB_NAME"
+fi
+
+# ── Build module paths and names ─────────────────────────────────────────────
+IFS=',' read -ra MOD_ARRAY <<< "$MODULES"
 SOURCE_PATHS=""
 MODULE_NAMES=""
 
 for mod_path in "${MOD_ARRAY[@]}"; do
   SOURCE_PATHS+="/home/odoo/src/$mod_path,"
-  
-  # Extraer el nombre del módulo (último segmento del path)
   mod_name=$(basename "$mod_path")
   MODULE_NAMES+="$mod_name,"
 done
+SOURCE_PATHS=${SOURCE_PATHS%,}
+MODULE_NAMES=${MODULE_NAMES%,}
 
-# Eliminar la última coma de ambas variables
-SOURCE_PATHS=${SOURCE_PATHS::-1}
-MODULE_NAMES=${MODULE_NAMES::-1}
-COVERAGERC_PATH=/home/odoo/.coveragerc
+COVERAGERC_PATH="/home/odoo/.coveragerc"
+# El contenedor Odoo ya trae PGHOST=db-<db_name> seteado como variable de
+# entorno (ver compose_generator.py) porque así es como el propio Odoo se
+# conecta a su base — psql la toma automáticamente, no hace falta -h.
 
-echo "✅ Rutas de origen para coverage: $SOURCE_PATHS"
+echo ""
+echo "  ┌─────────────────────────────────────────┐"
+echo "  │ Container : $ODOO_CONTAINER"
+echo "  │ DB        : $DB_NAME"
+echo "  │ Módulos   : $MODULE_NAMES"
+echo "  │ Tags      : $TEST_TAGS"
+echo "  │ Threshold : ${THRESHOLD}%"
+echo "  └─────────────────────────────────────────┘"
 echo ""
 
-echo "
-    1. Sino sabes el nombre del contenedor, puedes encontrarlo ejecutando 'docker ps' en tu terminal. Recuerda que debe ser el que tenga en la columna service la palabra "Odoo".
-    2. Asegúrate de que el contenedor esté en ejecución antes de ejecutar este script.
-    3. En el argumento --modules recuerda colocar el nombre de la carpeta del proyecto seguido del nombre del modulo, puedes agregar mas de un directorio separado por coma.
+# ── Create temp database ─────────────────────────────────────────────────────
+echo "📦 Creando base de datos temporal '$DB_NAME'..."
+docker_exec bash -c "
+  PGPASSWORD=odoo psql -U odoo -d postgres -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER odoo;\"
+" || {
+  echo "❌ No se pudo crear la base de datos '$DB_NAME'."
+  exit 1
+}
+echo "   ✅ DB '$DB_NAME' creada."
 
-    Ejemplo: --modules=devops-secure-test-integra-a/tests_module_cicd,binaural/tests_module_cicd
+# ── Trap to cleanup temp DB ──────────────────────────────────────────────────
+cleanup() {
+  if [[ "$KEEP_DB" == false && -n "$DB_NAME" ]]; then
+    echo ""
+    echo "🧹 Eliminando base de datos temporal '$DB_NAME'..."
+    docker_exec bash -c "
+      PGPASSWORD=odoo psql -U odoo -d postgres -c \"DROP DATABASE IF EXISTS \\\"$DB_NAME\\\";\" 2>/dev/null
+    " || true
+    echo "   ✅ DB '$DB_NAME' eliminada."
+  fi
+}
+trap cleanup EXIT
 
+# ── Run coverage ─────────────────────────────────────────────────────────────
+echo ""
+echo "🚀 Ejecutando tests con coverage..."
+echo ""
 
-    Argumentos:
-     * --odoo_container: $ODOO_CONTAINER
-     * --test_tags: $TEST_TAGS
-     * --source: $SOURCE_PATHS
-     * --db_name: $DB_NAME
+mkdir -p coverage_data
+TEST_LOG="coverage_data/last_test_run.log"
 
-     rcfile=$COVERAGERC_PATH
-     source=$SOURCE_PATHS
-     MODULE_NAMES=$MODULE_NAMES
-    
-"
-
-
-# 🚀 Ejecutar Coverage dentro del contenedor
-docker exec -u root -it "$ODOO_CONTAINER" bash -c "
-  pip3 install coverage >/dev/null 2>&1 &&
-  python3 -m coverage erase &&
+docker_exec bash -c "
+  pip3 show coverage >/dev/null 2>&1 || pip3 install coverage >/dev/null 2>&1
+  python3 -m coverage erase
   python3 -m coverage run --rcfile=$COVERAGERC_PATH --source=$SOURCE_PATHS /usr/bin/odoo \
     --without-demo=True \
     --stop-after-init \
@@ -89,17 +144,50 @@ docker exec -u root -it "$ODOO_CONTAINER" bash -c "
     --test-tags=$TEST_TAGS \
     --log-level=test \
     --log-handler=odoo.tests:DEBUG \
-    -p 9999
-"
-echo ""
-echo "🚀 Observa el reporte:"
-echo ""
-docker exec -u root -it "$ODOO_CONTAINER" bash -c "python3 -m coverage report -m"
+    --workers 0 \
+    --http-port 9999
+  echo \$? > /tmp/coverage_exit
+" 2>&1 | tee "$TEST_LOG"
+
+EXIT_CODE=$(docker_exec cat /tmp/coverage_exit 2>/dev/null || echo 1)
 
 echo ""
+echo "📊 Reporte de cobertura:"
 echo ""
+docker_exec bash -c "python3 -m coverage report -m --fail-under=$THRESHOLD"
+COV_EXIT=$?
+
 echo ""
-echo '✅ Los resultados del reporte están listos. Ahora manualmente ve a la tarea relacionada he ingresa el valor total del porcentaje de cobertura.'
+echo "📦 Exportando .coverage desde el contenedor..."
+mkdir -p coverage_data
+docker compose -f "$COMPOSE_FILE" cp "$ODOO_CONTAINER":/home/odoo/.coverage ./coverage_data/ 2>/dev/null && \
+  echo "   ✅ .coverage exportado a coverage_data/" || \
+  echo "   ⚠️  No se pudo exportar .coverage"
 echo ""
-echo ""
-echo ""
+
+# Estos dos chequeos son independientes a propósito: la cobertura puede
+# estar completa con tests que igual fallan (un test roto no deja de medir
+# líneas ejecutadas), y viceversa (todos los tests pasan pero cubren poco
+# código). Nunca se combinan en un solo mensaje -- cada uno se informa por
+# separado para que quede claro CUÁL de los dos pasó.
+if [[ "$COV_EXIT" -ne 0 ]]; then
+  echo "❌ Cobertura por debajo del umbral de ${THRESHOLD}%."
+else
+  echo "✅ Cobertura >= ${THRESHOLD}%. Todo OK."
+fi
+
+if [[ "$EXIT_CODE" != "0" ]]; then
+  echo "⚠️  Hubo errores en los tests (exit code: $EXIT_CODE)."
+  SUMMARY=$(grep -oE "[0-9]+ failed, [0-9]+ error\(s\) of [0-9]+ tests.*" "$TEST_LOG" | tail -1)
+  [[ -n "$SUMMARY" ]] && echo "   $SUMMARY"
+  FAILED_TESTS=$(grep -oE "odoo\.[][:alnum:]_.]+: (FAIL|ERROR): .+" "$TEST_LOG" | sed -E 's/^.*: ((FAIL|ERROR): )/\1/' | sort -u)
+  if [[ -n "$FAILED_TESTS" ]]; then
+    echo "   Tests con error/falla:"
+    echo "$FAILED_TESTS" | sed 's/^/     - /'
+  fi
+  echo "   Log completo: $TEST_LOG"
+fi
+
+if [[ "$COV_EXIT" -ne 0 || "$EXIT_CODE" != "0" ]]; then
+  exit 1
+fi

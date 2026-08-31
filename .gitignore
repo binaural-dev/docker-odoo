@@ -1,6 +1,9 @@
 .env
 instances.json
+instances.json.bak
+coverage_data/
 src
+!mcp-server/src
 logs/
 .resources/Dockerfile
 .resources/Dockerfile.*
@@ -10,7 +13,7 @@ logs/
 docker-compose.generated.yml
 **/.vscode/
 *.code-workspace
-*antigractivy*
+*antigravity*
 venv
 __pycache__
 .atl/
@@ -18,3 +21,10 @@ __pycache__
 .ignore
 .DS_Store
 .codegraph
+.tmp_ignored/
+.claude/
+
+# Stray generated files
+click
+os
+sys

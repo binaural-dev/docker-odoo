@@ -4,6 +4,7 @@ Creates services for managed databases, Odoo instances, nginx, and optionally pg
 """
 
 import os
+import re
 
 from .config_loader import (
     resolve_instance_config,
@@ -12,6 +13,7 @@ from .config_loader import (
     get_db_internal_port,
     get_managed_databases,
     get_odoo_minor,
+    is_production_instance,
 )
 
 # Internal ports used by Odoo (never exposed directly; nginx proxies them)
@@ -20,6 +22,27 @@ ODOO_GEVENT_PORT = 8071
 
 NETWORK_NAME = "odoo-multi"
 
+# MailHog defaults (used when config omits the mailhog section or specific fields)
+MAILHOG_SERVICE_NAME = "mailhog"
+MAILHOG_DEFAULT_SMTP_PORT = 1025
+
+
+def _project_slug(base_path):
+    """
+    Derive a stable per-checkout token from the containing directory name.
+
+    Docker image names/tags are a *global* namespace on the host — unlike
+    container names, networks, and volumes, they are never scoped by Docker
+    Compose's project name. Two separate docker-odoo checkouts that reuse the
+    same `database` key or instance name (e.g. both use "v17") would otherwise
+    build and overwrite the exact same local image tag on `./odoo build`.
+    Prefixing with this slug keeps images distinct per checkout, mirroring how
+    Compose already scopes everything else by directory name.
+    """
+    name = os.path.basename(os.path.abspath(base_path))
+    name = re.sub(r"[^a-z0-9_.-]+", "-", name.lower()).strip("-")
+    return name or "docker-odoo"
+
 
 def generate_compose(base_path, config, dockerfile_map):
     """
@@ -27,13 +50,15 @@ def generate_compose(base_path, config, dockerfile_map):
     Returns the output file path.
     """
     lines = _header()
+    project = _project_slug(base_path)
 
     # --- Database services ---
     managed_dbs = get_managed_databases(config)
     for db_name, db_conf in managed_dbs.items():
-        lines += _db_service(db_name, db_conf)
+        lines += _db_service(db_name, db_conf, project)
 
     # --- Odoo instance services ---
+    mailhog_conf = config.get("mailhog", {}) if config.get("mailhog", {}).get("enabled", False) else None
     for inst_name, inst_conf in config["instances"].items():
         odoo_conf = resolve_instance_config(inst_conf, config)
         db_conf = resolve_db_config(inst_conf, config)
@@ -41,7 +66,7 @@ def generate_compose(base_path, config, dockerfile_map):
         odoo_version = inst_conf["odoo_version"]
         dockerfile = dockerfile_map[odoo_version]
         lines += _odoo_service(
-            inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile
+            inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf, project
         )
 
     # --- Nginx service ---
@@ -51,6 +76,11 @@ def generate_compose(base_path, config, dockerfile_map):
     pgadmin_conf = config.get("pgadmin", {})
     if pgadmin_conf.get("enabled", False):
         lines += _pgadmin_service(pgadmin_conf)
+
+    # --- MailHog service (optional) ---
+    mailhog_conf = config.get("mailhog", {})
+    if mailhog_conf.get("enabled", False):
+        lines += _mailhog_service(mailhog_conf)
 
     # --- Volumes ---
     lines += _volumes(config)
@@ -76,7 +106,7 @@ def _header():
     ]
 
 
-def _db_service(db_name, db_conf):
+def _db_service(db_name, db_conf, project):
     pg_version = db_conf["postgres_version"]
     port = db_conf["port"]
     # "user"/"password" are the non-superuser role Odoo actually connects with.
@@ -104,14 +134,13 @@ def _db_service(db_name, db_conf):
 
     lines += [
         "    restart: always",
-        f"    container_name: {container_name}",
         "    shm_size: 512m",
         "    build:",
         "      context: .",
         "      dockerfile: ./.resources/db.Dockerfile",
         "      args:",
         f"        POSTGRES_IMG_VERSION: {pg_version}",
-        f"    image: local_odoo_db_{db_name}:{pg_version}",
+        f"    image: local_odoo_db_{project}_{db_name}:{pg_version}",
     ]
 
     # Host port publishing is opt-in: by default Postgres is only reachable
@@ -141,7 +170,7 @@ def _db_service(db_name, db_conf):
     return lines
 
 
-def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile):
+def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf, project):
     odoo_version = inst_conf["odoo_version"]
     odoo_minor = get_odoo_minor(odoo_version)
     container_name = f"odoo-{inst_name}"
@@ -150,13 +179,13 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     # expose_host_port is set) — not reachable from sibling containers.
     # Odoo always talks to Postgres over the internal Docker network.
     db_port = get_db_internal_port(db_conf)
-    # An instance can optionally connect with its own dedicated Postgres role
-    # (owner of only its own databases, for datdba-based isolation) instead of
-    # the role shared by every instance on this database service. Falls back
-    # to the service-level role when not set, so existing instances are
-    # unaffected.
-    db_user = inst_conf.get("db_user", db_conf["user"])
-    db_password = inst_conf.get("db_password", db_conf["password"])
+    # db_conf["user"]/["password"] are already resolved to the instance's own
+    # dedicated Postgres role when set (see resolve_db_config), falling back
+    # to the service-level role otherwise.
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
+    smtp_server = mailhog_conf.get("service_name", MAILHOG_SERVICE_NAME) if mailhog_conf else MAILHOG_SERVICE_NAME
+    smtp_port = mailhog_conf.get("smtp_port", MAILHOG_DEFAULT_SMTP_PORT) if mailhog_conf else MAILHOG_DEFAULT_SMTP_PORT
 
     # Build addons list for INSTANCE_ADDONS env var
     addons = odoo_conf.get("addons", [])
@@ -167,15 +196,22 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     if db_conf.get("create_container", True):
         depends.append(f"db-{db_name}")
 
+    # --dev=all (Odoo's autoreload/dev mode) is opt-in via odoo_conf's
+    # "dev_mode", but must never reach a production instance. _validate_instance
+    # already rejects that combination at config-load time; the extra check
+    # here is belt-and-suspenders so a future validation bug can't silently
+    # turn dev mode on in production.
+    dev_mode = odoo_conf.get("dev_mode", False) and not is_production_instance(inst_conf)
+    command = "odoo --dev=all" if dev_mode else "odoo"
+
     lines = [
         f"  {container_name}:",
-        "    command: odoo --dev=all",
+        f"    command: {command}",
         "    restart: always",
-        f"    container_name: {container_name}",
         "    build:",
         "      context: .",
         f"      dockerfile: ./{dockerfile}",
-        f"    image: local_odoo_{inst_name}:{odoo_minor}",
+        f"    image: local_odoo_{project}_{inst_name}:{odoo_minor}",
         "    extra_hosts:",
         '      - "host.docker.internal:host-gateway"',
         "    dns:",
@@ -220,8 +256,8 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
         f"      PGHOST: {db_host}",
         f"      PGPORT: {db_port}",
         f"      ADMIN_PASSWORD: {odoo_conf.get('admin_password', 'admin')}",
-        "      SMTP_SERVER: mailhog",
-        "      SMTP_PORT: 1025",
+        f"      SMTP_SERVER: {smtp_server}",
+        f"      SMTP_PORT: {smtp_port}",
         f"      DBFILTER: {odoo_conf.get('db_filter', '')}",
         f"      SERVER_WIDE_MODULES: {odoo_conf.get('server_wide_modules', '')}",
         f"      WORKERS: {odoo_conf.get('workers', 2)}",
@@ -273,9 +309,21 @@ def _nginx_service(config):
         "    extra_hosts:",
         '      - "host.docker.internal:host-gateway"',
         "    ports:",
+        '      - "80:80"',
     ]
     for port in all_ports:
         lines.append(f'      - "{port}:{port}"')
+
+    # Expose optional service ports (pgadmin, mailhog) so users can reach
+    # them via subdomain on port 80.
+    pgadmin_conf = config.get("pgadmin", {})
+    if pgadmin_conf.get("enabled", False):
+        pg_port = pgadmin_conf.get("port", 5050)
+        lines.append(f'      - "{pg_port}:{pg_port}"')
+    mailhog_conf = config.get("mailhog", {})
+    if mailhog_conf.get("enabled", False):
+        mh_port = mailhog_conf.get("http_port", 8025)
+        lines.append(f'      - "{mh_port}:{mh_port}"')
 
     lines += [
         f"    networks:",
@@ -287,6 +335,23 @@ def _nginx_service(config):
     return lines
 
 
+def _mailhog_service(mailhog_conf):
+    """Generate the MailHog service (SMTP catcher for dev environments)."""
+    smtp_port = mailhog_conf.get("smtp_port", 1025)
+    http_port = mailhog_conf.get("http_port", 8025)
+
+    return [
+        "  mailhog:",
+        "    image: mailhog/mailhog:latest",
+        "    restart: always",
+        "    networks:",
+        f"      - {NETWORK_NAME}",
+        "    ports:",
+        f'      - "{http_port}:8025"',
+        "",
+    ]
+
+
 def _pgadmin_service(pgadmin_conf):
     port = pgadmin_conf.get("port", 5050)
     email = pgadmin_conf.get("email", "admin@admin.com")
@@ -295,7 +360,6 @@ def _pgadmin_service(pgadmin_conf):
     return [
         "  pgadmin:",
         "    image: dpage/pgadmin4:latest",
-        "    container_name: odoo-pgadmin",
         "    restart: always",
         "    environment:",
         f"      PGADMIN_DEFAULT_EMAIL: {email}",

@@ -8,6 +8,67 @@ import os
 import sys
 
 
+def _strip_json_comments(text: str) -> str:
+    """Remove ``//`` comments from JSON-like text, preserving them inside strings.
+
+    The team's ``instances.json`` is documented inline with ``//`` comments
+    (like JSON5/JSONC). Python's :func:`json.load` does NOT understand those,
+    so we strip them here before parsing.
+
+    The parser walks the text char-by-char and is aware of:
+
+    * single- and double-quoted strings (``"..."`` and ``'...'``)
+    * escaped quotes inside strings (``\\"``)
+    * line comments starting with ``//`` outside of strings
+
+    Anything between an opening quote and its matching closing quote is kept
+    verbatim, even if it contains ``//`` (e.g. ``"https://example.com"``).
+    """
+    out = []
+    i = 0
+    n = len(text)
+    in_string = False
+    string_char = None
+
+    while i < n:
+        ch = text[i]
+
+        # Start of a string literal.
+        if not in_string and ch in ('"', "'"):
+            in_string = True
+            string_char = ch
+            out.append(ch)
+            i += 1
+            continue
+
+        # Inside a string: handle escapes and end of string.
+        if in_string:
+            if ch == '\\' and i + 1 < n:
+                # Preserve escape sequence (e.g. \" or \\).
+                out.append(ch)
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == string_char:
+                in_string = False
+                string_char = None
+            out.append(ch)
+            i += 1
+            continue
+
+        # Outside a string: detect // line comment.
+        if ch == '/' and i + 1 < n and text[i + 1] == '/':
+            # Skip until end of line (but keep the newline).
+            while i < n and text[i] != '\n':
+                i += 1
+            continue
+
+        out.append(ch)
+        i += 1
+
+    return ''.join(out)
+
+
 def load_config(base_path):
     """Load instances.json from the project root and filter enabled ones."""
     config_path = os.path.join(base_path, "instances.json")
@@ -17,7 +78,8 @@ def load_config(base_path):
         sys.exit(1)
 
     with open(config_path, "r") as f:
-        config = json.load(f)
+        raw = f.read()
+    config = json.loads(_strip_json_comments(raw))
 
     # Filter instances: keep only those with "enabled": true (or without the flag)
     if "instances" in config:
@@ -29,6 +91,49 @@ def load_config(base_path):
 
     _validate_config(config)
     return config
+
+
+def load_full_config(base_path):
+    """Load instances.json from the project root WITHOUT filtering.
+
+    Use this when the caller needs to see / toggle the ``enabled`` flag
+    (e.g. the interactive TUI). For dispatch paths (./odoo CLI, generators)
+    prefer :func:`load_config`, which enforces the enabled filter.
+
+    The same validation as ``load_config`` is applied to the unfiltered
+    structure so that downstream resolvers don't see inconsistent data.
+    """
+    config_path = os.path.join(base_path, "instances.json")
+    if not os.path.exists(config_path):
+        print(f"Error: instances.json no encontrado en {base_path}")
+        print("Copia instances.example.json a instances.json y configúralo.")
+        sys.exit(1)
+
+    with open(config_path, "r") as f:
+        raw = f.read()
+    config = json.loads(_strip_json_comments(raw))
+
+    _validate_config(config)
+    return config
+
+
+def is_instance_enabled(inst_conf) -> bool:
+    """Return whether an instance config block is enabled.
+
+    Defaults to ``True`` when the flag is missing, matching the behaviour
+    of :func:`load_config`.
+    """
+    return inst_conf.get("enabled", True)
+
+
+def is_production_instance(inst_conf) -> bool:
+    """Return whether an instance is flagged as production.
+
+    Defaults to ``False`` (non-production) when the flag is missing.
+    Used to gate destructive CLI actions (see ``remove_odoo``) and to
+    forbid ``dev_mode`` from ever reaching a production container.
+    """
+    return bool(inst_conf.get("production", False))
 
 
 def _validate_config(config):
@@ -88,6 +193,23 @@ def _validate_instance(inst_name, inst_conf, config):
         raise ValueError(
             f"Instancia '{inst_name}': odoo_config '{inst_conf['odoo_config']}' "
             f"no existe en la sección odoo_configs"
+        )
+
+    # Validate 'production' flag type and its interaction with 'dev_mode'.
+    # A typo'd non-bool value here would silently defeat the remove_odoo
+    # safety gate (is_production_instance), so reject it outright rather
+    # than coercing it.
+    if "production" in inst_conf and not isinstance(inst_conf["production"], bool):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'production' debe ser true/false, "
+            f"no {inst_conf['production']!r}"
+        )
+
+    odoo_conf = resolve_instance_config(inst_conf, config)
+    if odoo_conf.get("dev_mode", False) and is_production_instance(inst_conf):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'dev_mode' no puede estar activo junto a "
+            f"'production': true (usá './odoo update' en su lugar)."
         )
 
     # Validate unique external_port
@@ -264,9 +386,26 @@ def resolve_instance_config(inst_conf, config):
 
 
 def resolve_db_config(inst_conf, config):
-    """Resolve the database configuration for an instance."""
+    """Resolve the database configuration for an instance.
+
+    An instance can optionally connect with its own dedicated Postgres role
+    (see 'provision-role') instead of the role shared by every instance on
+    this database service. When 'db_user'/'db_password' are set at the
+    instance's root level, they override the service-level 'user'/'password'
+    here so every consumer (compose generation, 'pw', 'psql', ...) resolves
+    to the same credentials without duplicating this fallback logic. Falls
+    back to the service-level role when not set, so existing instances are
+    unaffected.
+    """
     db_name = inst_conf["database"]
-    return config["databases"][db_name]
+    db_conf = config["databases"][db_name]
+    if "db_user" in inst_conf or "db_password" in inst_conf:
+        db_conf = {
+            **db_conf,
+            "user": inst_conf.get("db_user", db_conf["user"]),
+            "password": inst_conf.get("db_password", db_conf["password"]),
+        }
+    return db_conf
 
 
 def get_db_host(db_name, db_conf):
@@ -289,8 +428,10 @@ def get_db_internal_port(db_conf):
     ``expose_host_port`` is enabled (``ports: "<port>:5432"`` in compose).
     Containers always talk to Postgres over the internal Docker network,
     where the postgres image listens on 5432 regardless of the host
-    mapping. Use this instead of ``db_conf['port']`` for anything that
-    connects to Postgres from another container (Odoo, docker exec, etc).
+    mapping. Use this from CLI helpers (``odoo pw``, ``odoo_restore``,
+    ``psql_connect``) that run ``docker exec`` inside the Odoo container,
+    and anything else that connects to Postgres from another container.
+    External databases may override via ``db_conf['internal_port']``.
     """
     return int(db_conf.get("internal_port", 5432))
 
@@ -304,11 +445,14 @@ def get_unique_odoo_versions(config):
 
 
 def get_managed_databases(config):
-    """Get databases that need a container (create_container=true or default)."""
+    """Get databases that need a container (create_container=true or default),
+    restricted to those actually referenced by an active (enabled) instance.
+    """
+    used_db_names = {inst["database"] for inst in config["instances"].values()}
     return {
         name: conf
         for name, conf in config["databases"].items()
-        if conf.get("create_container", True)
+        if conf.get("create_container", True) and name in used_db_names
     }
 
 

@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""TUI launcher shim — delegates to ``tui.__main__``."""
+import sys
+from tui.__main__ import main
+
+if __name__ == "__main__":
+    sys.exit(main())

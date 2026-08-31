@@ -8,14 +8,28 @@ import re
 import subprocess
 import sys
 
+# Todas las llamadas a Docker van por `docker compose exec`/`docker compose
+# cp` (nunca `docker exec`/`docker cp` con un nombre de contenedor crudo): el
+# nombre real del contenedor esta namespaced por el proyecto de Compose y no
+# esta garantizado que coincida con `--container` (ver
+# tests/test_docker_exec_hygiene.py). Esto sigue sin depender de
+# instances.json -- solo asume que el proyecto tiene un
+# docker-compose.generated.yml al lado de scripts/, como cualquier otro
+# proyecto Odoo+Docker basado en este mismo generador.
+BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+COMPOSE_FILE = os.path.join(BASE_PATH, "docker-compose.generated.yml")
+
 USAGE = """\
 Ejecuta los tests de uno o varios modulos de Odoo (y opcionalmente de todo su
 subarbol de dependientes + dependencias) midiendo cobertura de codigo.
 
 Este script es standalone: no depende de instances.json ni de ningun otro
-archivo de este proyecto (ni siquiera de otro .py). Solo necesita un
-contenedor Docker con Odoo corriendo y accesible via 'docker exec'. Se puede
-copiar a cualquier otro proyecto Odoo+Docker y funciona igual.
+archivo .py de este proyecto. Solo necesita un servicio de Docker Compose
+con Odoo corriendo (--container es el *nombre del servicio*, ej.
+odoo-<instancia>, no un nombre de contenedor crudo -- ver COMPOSE_FILE al
+inicio del archivo) y un docker-compose.generated.yml al lado de scripts/.
+Se puede copiar a cualquier otro proyecto Odoo+Docker que siga esa misma
+convencion y funciona igual.
 
 Se puede indicar mas de un modulo separando los nombres por coma (ej:
 binaural_brand,binaural_mobile): se instalan y testean todos juntos, en la
@@ -400,7 +414,8 @@ def scan_modules_in_container(container, addon_roots):
        reverse:  dict modulo -> set(modulos que dependen de el)
        paths:    dict modulo -> ruta DENTRO DEL CONTENEDOR de la carpeta del modulo"""
     result = subprocess.run(
-        ["docker", "exec", container, "python3", "-c", _SCAN_MODULES_SNIPPET, *addon_roots],
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container,
+         "python3", "-c", _SCAN_MODULES_SNIPPET, *addon_roots],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -427,10 +442,14 @@ def install_test_hook(container):
     """Escribe HOOK_SOURCE (embebido arriba) como sitecustomize.py dentro del
     contenedor, via stdin (sin necesitar ningun archivo local). Se reinstala
     en cada corrida para no depender de que el contenedor ya lo tenga."""
-    subprocess.run(["docker", "exec", "-u", "root", container, "mkdir", "-p", HOOK_CONTAINER_DIR],
-                   check=True)
     subprocess.run(
-        ["docker", "exec", "-i", "-u", "root", container, "tee", f"{HOOK_CONTAINER_DIR}/sitecustomize.py"],
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "-u", "root",
+         container, "mkdir", "-p", HOOK_CONTAINER_DIR],
+        check=True,
+    )
+    subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "-u", "root",
+         container, "tee", f"{HOOK_CONTAINER_DIR}/sitecustomize.py"],
         input=HOOK_SOURCE, text=True, capture_output=True, check=True,
     )
 
@@ -461,7 +480,8 @@ def random_high_port():
 
 def db_exists(container, db_name):
     cmd = [
-        "docker", "exec", container, "psql", "-d", "postgres", "-tAc",
+        "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container,
+        "psql", "-d", "postgres", "-tAc",
         f"SELECT 1 FROM pg_database WHERE datname='{db_name}'",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -470,12 +490,19 @@ def db_exists(container, db_name):
 
 def create_db(container, db_name):
     print(f"→ Creando base de datos '{db_name}' en {container}...")
-    subprocess.run(["docker", "exec", container, "createdb", db_name], check=True)
+    subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container, "createdb", db_name],
+        check=True,
+    )
 
 
 def drop_db(container, db_name):
     print(f"→ Borrando base de datos '{db_name}' en {container}...")
-    subprocess.run(["docker", "exec", container, "dropdb", "--if-exists", db_name], check=False)
+    subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container,
+         "dropdb", "--if-exists", db_name],
+        check=False,
+    )
 
 
 def query_module_states(container, db_name, module_names):
@@ -488,7 +515,8 @@ def query_module_states(container, db_name, module_names):
         return {}
     names_list = ", ".join("'" + m.replace("'", "''") + "'" for m in module_names)
     cmd = [
-        "docker", "exec", container, "psql", "-d", db_name, "-tAc",
+        "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container,
+        "psql", "-d", db_name, "-tAc",
         f"SELECT name || '|' || state FROM ir_module_module WHERE name IN ({names_list})",
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -551,7 +579,7 @@ def export_container_file(container, container_path, dest_path, label):
     if parent:
         os.makedirs(parent, exist_ok=True)
     result = subprocess.run(
-        ["docker", "cp", f"{container}:{container_path}", dest_path],
+        ["docker", "compose", "-f", COMPOSE_FILE, "cp", f"{container}:{container_path}", dest_path],
         capture_output=True, text=True,
     )
     if result.returncode == 0:
@@ -636,7 +664,7 @@ def read_container_json(container, container_json_path):
     Devuelve None si el archivo no existe o no es JSON valido (ej. si el
     hook no llego a cargar por algun motivo)."""
     result = subprocess.run(
-        ["docker", "exec", container, "cat", container_json_path],
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", container, "cat", container_json_path],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -1158,10 +1186,13 @@ def run_command():
         f"/usr/bin/{odoo_cmd}; "
         f"test_rc=$?; python3 -m coverage report -m; {json_step}exit $test_rc"
     )
-    full_cmd = ["docker", "exec", "-u", "root", container, "bash", "-c", inner_cmd]
+    full_cmd = [
+        "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", "-u", "root",
+        container, "bash", "-c", inner_cmd,
+    ]
 
     print("\nComando de ejecucion:")
-    print(f"  docker exec -u root {container} bash -c \"")
+    print(f"  docker compose -f {COMPOSE_FILE} exec -T -u root {container} bash -c \"")
     print(f"    export PYTHONPATH={HOOK_CONTAINER_DIR}:$PYTHONPATH;")
     print(f"    export CICD_TEST_REPORT_PATH={container_test_report_path};")
     print(f"    pip3 install --quiet coverage &&")
