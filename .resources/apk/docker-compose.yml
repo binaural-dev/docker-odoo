@@ -1,0 +1,17 @@
+# Toolchain de build del APK (ver Dockerfile). El host solo necesita Docker:
+# scripts/odoo-apk hace `docker compose ... run --rm apk-builder odoo-apk ...`
+# y los artefactos quedan en el host porque APK_BUILD_ROOT (/work) esta
+# montado sobre .ignore/apk-build/ del repo.
+services:
+  apk-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: docker-odoo-apk-builder:local
+    environment:
+      APK_BUILD_ROOT: /work
+    volumes:
+      # El script se monta, no se hornea: cambiar el script no exige rebuild.
+      - ../../scripts/odoo-apk:/usr/local/bin/odoo-apk:ro
+      # Artefactos (APK, AAB, keystore, assetlinks.json) quedan en el host.
+      - ../../.ignore/apk-build:/work
