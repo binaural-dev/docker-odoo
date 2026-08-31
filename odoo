@@ -84,7 +84,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "submodule-status\n"
             "  Cobertura de tests  coverage-status, coverage\n"
             "  Postgres / roles    provision-role\n"
-            "  Config / infra      new, hosts, validate-instances, tui\n"
+            "  Config / infra      new, hosts, enable, disable, "
+            "validate-instances, tui\n"
             "\n"
             "Ejemplos:\n"
             "  ./odoo start contiflex               levanta sólo esa instancia\n"
@@ -475,6 +476,47 @@ def _build_parser() -> argparse.ArgumentParser:
             "Rama(s) a inspeccionar sin hacer checkout, separadas por "
             "coma (ej: release,staging). Sin esto, muestra lo que está "
             "físicamente checkeado ahora mismo."
+        ),
+    )
+
+    # enable / disable
+    p = subparsers.add_parser(
+        "enable",
+        help="Habilita una o varias instancias (enabled: true) y regenera configs",
+        description=(
+            "Pone 'enabled: true' en instances.json para la(s) instancia(s) "
+            "dada(s) y regenera docker-compose.generated.yml/nginx para que "
+            "vuelvan a aparecer. Equivalente por CLI a apretar Space sobre "
+            "cada instancia en './odoo tui'. No las levanta: usa './odoo "
+            "build && ./odoo start <instancia>' después."
+        ),
+    )
+    p.add_argument(
+        "instances", nargs="?", default=None,
+        help=(
+            "Nombre(s) de instancia separados por coma (ej: a,b,c). "
+            "Opcional: sin esto se elige interactivamente con selección "
+            "múltiple (Espacio para marcar varias)."
+        ),
+    )
+
+    p = subparsers.add_parser(
+        "disable",
+        help="Deshabilita una o varias instancias (enabled: false) y regenera configs",
+        description=(
+            "Pone 'enabled: false' en instances.json para la(s) instancia(s) "
+            "dada(s) y regenera docker-compose.generated.yml/nginx para que "
+            "dejen de aparecer. Equivalente por CLI a apretar Space sobre "
+            "cada instancia en './odoo tui'. No detiene contenedores que ya "
+            "estén corriendo: usa './odoo stop <instancia>' si hace falta."
+        ),
+    )
+    p.add_argument(
+        "instances", nargs="?", default=None,
+        help=(
+            "Nombre(s) de instancia separados por coma (ej: a,b,c). "
+            "Opcional: sin esto se elige interactivamente con selección "
+            "múltiple (Espacio para marcar varias)."
         ),
     )
 

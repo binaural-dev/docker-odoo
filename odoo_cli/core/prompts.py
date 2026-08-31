@@ -354,6 +354,38 @@ def prompt_for_instance(
     )
 
 
+def prompt_for_bulk_instances(
+    runner: "Runner", full_config: dict, action: str
+) -> list[str]:
+    """Ask which instances to enable/disable, with multi-select.
+
+    ``full_config`` must be the UNFILTERED config (``load_full_config``),
+    not the ``enabled``-filtered one — otherwise a disabled instance
+    could never be picked for ``./odoo enable``.
+    """
+    instances = list(full_config.get("instances", {}).keys())
+    if not instances:
+        runner.info("No hay instancias configuradas.")
+        sys.exit(1)
+
+    options = [(f"Todas ({len(instances)})", "__all__")] + [
+        (name, name) for name in instances
+    ]
+    selected = prompt_selection(
+        runner,
+        options,
+        f"Selecciona instancia(s) a {action} "
+        "(Espacio para marcar, Enter para confirmar)",
+        multi=True,
+    )
+    if not selected:
+        runner.info(f"No se seleccionó ninguna instancia para {action}.")
+        sys.exit(0)
+    if "__all__" in selected:
+        return instances
+    return selected
+
+
 def prompt_for_database(
     runner: "Runner", config: dict, instance: str, allow_all: bool = False
 ) -> str:

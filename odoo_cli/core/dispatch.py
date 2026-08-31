@@ -64,12 +64,14 @@ from odoo_cli.core.actions.maintenance import (
     update_tags,
     update_tags_bulk,
 )
+from odoo_cli.core.actions.instance_state import set_instances_enabled
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.actions.postgres import provision_instance_role
 from odoo_cli.core.actions.testing import run_tests
 from odoo_cli.core.prompts import (
     prompt_for_branch,
     prompt_for_bulk_branch_origin,
+    prompt_for_bulk_instances,
     prompt_for_bulk_projects,
     prompt_for_database,
     prompt_for_instance,
@@ -309,6 +311,22 @@ def dispatch(
             args.tag,
             args.branch_origin,
             show=args.v,
+        )
+
+    elif args.action in ("enable", "disable"):
+        # Not in _INSTANCE_AWARE_ACTIONS: that resolution path prompts
+        # over `config`, which load_config() already filtered down to
+        # enabled instances only — exactly the ones "enable" needs to
+        # reach. Reload unfiltered, same as update-tags-bulk does.
+        from generators.config_loader import load_full_config
+
+        if getattr(args, "instances", None):
+            targets = [n.strip() for n in args.instances.split(",") if n.strip()]
+        else:
+            full_config = load_full_config(base_path)
+            targets = prompt_for_bulk_instances(runner, full_config, args.action)
+        set_instances_enabled(
+            runner, base_path, targets, enabled=(args.action == "enable")
         )
 
     elif args.action == "submodule-status":
