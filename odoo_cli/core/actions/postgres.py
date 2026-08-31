@@ -49,6 +49,30 @@ import time
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
+from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
+
+
+def _container_id(service: str) -> str:
+    """Resolve a compose service name to its real container ID.
+
+    ``docker compose`` names containers ``<project>-<service>-<n>``, not
+    the bare service name — raw ``docker exec``/``docker inspect`` calls
+    against the service name fail with 'no such object' whenever the
+    compose project has a name prefix (the normal case). ``docker compose
+    ps -q`` is what actually knows the mapping.
+    """
+    result = subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "ps", "-q", service],
+        capture_output=True, text=True,
+    )
+    container_id = result.stdout.strip()
+    if not container_id:
+        raise RuntimeError(
+            f"No se encontró un contenedor corriendo para el servicio "
+            f"'{service}' (¿está levantado con 'docker compose up'?)."
+        )
+    return container_id
+
 if TYPE_CHECKING:
     from odoo_cli.core.runner import Runner
 
@@ -72,7 +96,7 @@ def _pg_exec(
     quoting."""
     result = subprocess.run(
         [
-            "docker", "exec", "-e", f"PGPASSWORD={pg_password}", db_container,
+            "docker", "exec", "-e", f"PGPASSWORD={pg_password}", _container_id(db_container),
             "psql", "-U", pg_user, "-d", dbname, "-v", "ON_ERROR_STOP=1", "-c", sql,
         ],
         capture_output=True, text=True,
@@ -101,8 +125,12 @@ def _fetch_database_ownership(
     Returns ``None`` when the service is unreachable, so the caller can
     tell "nothing to report" apart from "couldn't look".
     """
+    try:
+        container_id = _container_id(db_container)
+    except RuntimeError:
+        return None
     result = subprocess.run(
-        ["docker", "exec", "-e", f"PGPASSWORD={password}", db_container,
+        ["docker", "exec", "-e", f"PGPASSWORD={password}", container_id,
          "psql", "-U", user, "-d", "postgres", "-tAc",
          "SELECT d.datname, r.rolname, has_database_privilege('public', d.datname, 'CONNECT') "
          "FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE NOT d.datistemplate;"],
@@ -320,7 +348,7 @@ def _bootstrap_needs_breakglass(
     db_container: str, bootstrap_user: str, bootstrap_password: str
 ) -> bool:
     check = subprocess.run(
-        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", db_container,
+        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", _container_id(db_container),
          "psql", "-U", bootstrap_user, "-d", "postgres", "-tAc", "SELECT 1;"],
         capture_output=True,
     )
@@ -334,16 +362,16 @@ def _bootstrap_breakglass_enable(
     ``postgres --single`` (bypasses normal auth — the only way in once
     ``NOLOGIN``, since creating roles needs ``CREATEROLE``), then start it
     back up."""
-    from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
-
     runner.warn(
         f"\n→ Rol bootstrap '{bootstrap_user}' no puede loguear, "
         f"aplicando break-glass en {db_container}..."
     )
     pg_version = db_conf["postgres_version"]
-    image = f"local_odoo_db_{db_name}:{pg_version}"
+    from generators.compose_generator import _project_slug
+
+    image = f"local_odoo_db_{_project_slug('.')}_{db_name}:{pg_version}"
     volume = subprocess.check_output(
-        ["docker", "inspect", db_container, "--format",
+        ["docker", "inspect", _container_id(db_container), "--format",
          '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}']
     ).decode().strip()
     if not volume:
@@ -399,7 +427,7 @@ def provision_role_sql(runner: "Runner", target: dict) -> list[str]:
              f"GRANT {bootstrap_user} TO {db_user};")
 
     list_result = subprocess.run(
-        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", db_container,
+        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", _container_id(db_container),
          "psql", "-U", bootstrap_user, "-d", "postgres", "-tAc",
          f"SELECT datname FROM pg_database WHERE datistemplate=false "
          f"AND datname ~ '{db_filter}';"],

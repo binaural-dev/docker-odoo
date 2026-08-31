@@ -386,9 +386,26 @@ def resolve_instance_config(inst_conf, config):
 
 
 def resolve_db_config(inst_conf, config):
-    """Resolve the database configuration for an instance."""
+    """Resolve the database configuration for an instance.
+
+    An instance can optionally connect with its own dedicated Postgres role
+    (see 'provision-role') instead of the role shared by every instance on
+    this database service. When 'db_user'/'db_password' are set at the
+    instance's root level, they override the service-level 'user'/'password'
+    here so every consumer (compose generation, 'pw', 'psql', ...) resolves
+    to the same credentials without duplicating this fallback logic. Falls
+    back to the service-level role when not set, so existing instances are
+    unaffected.
+    """
     db_name = inst_conf["database"]
-    return config["databases"][db_name]
+    db_conf = config["databases"][db_name]
+    if "db_user" in inst_conf or "db_password" in inst_conf:
+        db_conf = {
+            **db_conf,
+            "user": inst_conf.get("db_user", db_conf["user"]),
+            "password": inst_conf.get("db_password", db_conf["password"]),
+        }
+    return db_conf
 
 
 def get_db_host(db_name, db_conf):

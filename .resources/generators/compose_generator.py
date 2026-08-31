@@ -179,13 +179,11 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
     # expose_host_port is set) — not reachable from sibling containers.
     # Odoo always talks to Postgres over the internal Docker network.
     db_port = get_db_internal_port(db_conf)
-    # An instance can optionally connect with its own dedicated Postgres role
-    # (owner of only its own databases, for datdba-based isolation) instead of
-    # the role shared by every instance on this database service. Falls back
-    # to the service-level role when not set, so existing instances are
-    # unaffected.
-    db_user = inst_conf.get("db_user", db_conf["user"])
-    db_password = inst_conf.get("db_password", db_conf["password"])
+    # db_conf["user"]/["password"] are already resolved to the instance's own
+    # dedicated Postgres role when set (see resolve_db_config), falling back
+    # to the service-level role otherwise.
+    db_user = db_conf["user"]
+    db_password = db_conf["password"]
     smtp_server = mailhog_conf.get("service_name", MAILHOG_SERVICE_NAME) if mailhog_conf else MAILHOG_SERVICE_NAME
     smtp_port = mailhog_conf.get("smtp_port", MAILHOG_DEFAULT_SMTP_PORT) if mailhog_conf else MAILHOG_DEFAULT_SMTP_PORT
 
