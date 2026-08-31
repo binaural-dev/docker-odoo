@@ -344,28 +344,35 @@ publicación nueva debe usar un `--version-code` monotónico mayor.
 A diferencia del resto, aquí el primer argumento NO es una instancia de
 `instances.json`, sino una etiqueta para el directorio de build.
 
-Requisitos (una sola vez, fuera de Docker):
-
 ```bash
-pip install click
-npm i -g @bubblewrap/cli
-brew install openjdk@17
-brew install --cask android-commandlinetools
-sdkmanager --licenses   # aceptar las licencias de Android
+./odoo apk <cliente> --domain vendedores.<cliente>.com \
+    --package com.binaural.<cliente>.ventas \
+    --version 1.2.0 --version-code 12000
 ```
 
-Si `pip install click` falla por PEP 668 (Python de Homebrew): `brew install python-click` o usar un venv.
+**Requisitos: solo Docker.** Todo el toolchain (Node + `@bubblewrap/cli`,
+OpenJDK 17, Android SDK con licencias aceptadas, Python + `click`) vive en
+la imagen que arma `.resources/apk/Dockerfile` (docker-compose en
+`.resources/apk/`). El script levanta el contenedor, ejecuta la build
+adentro y los artefactos quedan en el host vía el volumen montado sobre
+`.ignore/apk-build/`. La primera ejecución baja y construye la imagen
+(varios GB, tarda unos minutos).
 
 Notas:
 - El keystore se genera una sola vez y hay que **RESGUARDARLO**: si se
   pierde no se puede volver a firmar la app y los usuarios deben
   desinstalar y reinstalar. Se pasa con `--storepass` o la variable
-  `APK_STOREPASS`.
-- Los builds quedan en `.ignore/apk-build/<cliente>/` (ignorados por git).
+  `APK_STOREPASS` (se reenvía al contenedor automáticamente). Vive en
+  `.ignore/apk-build/<cliente>/android.keystore` y `keytool` está dentro
+  del contenedor:
+  ```bash
+  docker compose -f .resources/apk/docker-compose.yml run --rm \
+    apk-builder keytool -genkeypair -v -keystore /work/android.keystore -alias app \
+    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=<app>, O=<empresa>, C=VE"
+  ```
 - Al terminar genera `assetlinks.json` (huella SHA-256 del certificado)
   para pegarlo en Ajustes → Aplicación instalable del sitio; sin eso la
   TWA arranca con la barra de URL de Chrome encima.
-- Rutas del JDK/SDK fijas a `/opt/homebrew` (Apple Silicon).
 
 ### `scripts/precommit` — Linting sobre módulos Odoo
 
