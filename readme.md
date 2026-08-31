@@ -350,6 +350,66 @@ A diferencia del resto, aquí el primer argumento NO es una instancia de
     --version 1.2.0 --version-code 12000
 ```
 
+**Configuración por archivo `pwa.json`** (raíz del repo, gitignored):
+para no repetir el comando largo, los valores se dejan en `pwa.json`
+(plantilla llena con datos de prueba en `pwa.example.json`) y se invoca
+solo `./odoo apk`. Precedencia: **flag CLI > env `APK_STOREPASS` >
+`pwa.json` > default del script**.
+
+Cada key equivale a un flag (sin guiones):
+
+| Key | Equivale a | Qué va |
+|-----|-----------|--------|
+| `instance` | (argumento) | Etiqueta del directorio de build, p.ej. `maxcam` |
+| `scheme` | `--scheme` | `http` o `https` (por defecto https) |
+| `domain` | `--domain` | Host (o `ip:puerto`) de la app, sin esquema |
+| `package` | `--package` | Package name Android, p.ej. `com.binaural.maxcam.ventas` |
+| `version` | `--version` | Versión visible, p.ej. `1.2.0` |
+| `version_code` | `--version-code` | Entero monotónico (se hornea en el start_url) |
+| `start_path` | `--start-path` | Ruta de arranque (por defecto `/payments`) |
+| `app_name` / `short_name` | `--app-name` / `--short-name` | Nombres del APK (null → los del manifest) |
+| `target_sdk` | `--target-sdk` | targetSdkVersion (null → el de Bubblewrap, hoy 36) |
+| `keystore` | `--keystore` | **Ruta del keystore DENTRO del contenedor** (`/work/...` = `.ignore/apk-build/...` del host; null → `.ignore/apk-build/<instance>/android.keystore`) |
+| `alias` | `--alias` | Alias de la clave (por defecto `app`) |
+| `rebuild` | `--rebuild` | `true` regenera el proyecto Android desde cero |
+| `storepass` | `--storepass` | Contraseña del keystore (preferible en `APK_STOREPASS`) |
+
+Ejemplo (la plantilla `pwa.example.json` trae datos de prueba):
+
+```json
+{
+  "instance": "maxcam",
+  "scheme": "http",
+  "domain": "192.168.1.226:9001",
+  "package": "com.binaural.maxcam.ventas",
+  "version": "0.0.1",
+  "version_code": 1,
+  "start_path": "/payments",
+  "app_name": "Maxcam Ventas",
+  "short_name": "Maxcam",
+  "target_sdk": 36,
+  "keystore": "/work/maxcam/android.keystore",
+  "alias": "app",
+  "rebuild": false,
+  "storepass": "tu-contraseña-del-keystore"
+}
+```
+
+Nota sobre `keystore`: las rutas se resuelven **dentro del contenedor**, donde
+`/work` está montado sobre `.ignore/apk-build/` del host. O sea, la key de
+arriba apunta a `.ignore/apk-build/maxcam/android.keystore` en tu máquina.
+Con `null` (o sin la key) usa esa misma ubicación por defecto.
+
+`--scheme` permite apuntar a instancias locales por HTTP
+(`http://ip:puerto`), aunque Android solo corre una TWA real sobre HTTPS:
+con HTTP el APK abre el sitio en una pestaña de Chrome, no como app
+fullscreen. Los overrides puntuales siguen funcionando:
+
+```bash
+./odoo apk                                    # todo desde pwa.json
+./odoo apk --version 1.1.0 --version-code 11000   # solo subir la versión
+```
+
 **Requisitos: solo Docker.** Todo el toolchain (Node + `@bubblewrap/cli`,
 OpenJDK 17, Android SDK con licencias aceptadas, Python + `click`) vive en
 la imagen que arma `.resources/apk/Dockerfile` (docker-compose en
@@ -361,10 +421,10 @@ adentro y los artefactos quedan en el host vía el volumen montado sobre
 Notas:
 - El keystore se genera una sola vez y hay que **RESGUARDARLO**: si se
   pierde no se puede volver a firmar la app y los usuarios deben
-  desinstalar y reinstalar. Se pasa con `--storepass` o la variable
-  `APK_STOREPASS` (se reenvía al contenedor automáticamente). Vive en
-  `.ignore/apk-build/<cliente>/android.keystore` y `keytool` está dentro
-  del contenedor:
+  desinstalar y reinstalar. Se pasa con `--storepass`, la variable
+  `APK_STOREPASS` o `storepass` en `pwa.json` (se reenvía al contenedor
+  automáticamente). Vive en `.ignore/apk-build/<cliente>/android.keystore`
+  y `keytool` está dentro del contenedor:
   ```bash
   docker compose -f .resources/apk/docker-compose.yml run --rm \
     apk-builder keytool -genkeypair -v -keystore /work/android.keystore -alias app \
