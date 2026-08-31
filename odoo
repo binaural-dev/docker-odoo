@@ -1371,7 +1371,7 @@ def main():
     # apk
     apk_p = subparsers.add_parser(
         "apk",
-        help="Genera el APK/AAB de la app (TWA) desde el manifest PWA de una instancia",
+        help="Genera el APK/AAB de la app (TWA) en un contenedor (toolchain en .resources/apk)",
         add_help=False,
     )
     apk_p.add_argument(
