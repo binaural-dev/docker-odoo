@@ -17,11 +17,11 @@ Requisitos (una sola vez):
     brew install --cask android-commandlinetools
 
 Uso:
-    scripts/odoo-apk maxcam-ext --domain vendedores.maxcam.com \\
-        --package com.binaural.maxcam.ventas --version 1.2.0 --version-code 12000
+    scripts/odoo-apk cliente-ext --domain vendedores.cliente.com \\
+        --package com.binaural.cliente.ventas --version 1.2.0 --version-code 12000
 
     # Reconstruir la misma versión tras cambiar algo del sitio
-    scripts/odoo-apk maxcam-ext --domain ... --package ... \\
+    scripts/odoo-apk cliente-ext --domain ... --package ... \\
         --version 1.2.0 --version-code 12000 --rebuild
 """
 
@@ -36,7 +36,7 @@ from pathlib import Path
 import click
 
 BASE_PATH = Path(__file__).resolve().parent.parent
-BUILD_ROOT = BASE_PATH / ".tmp_ignored" / "apk-build"
+BUILD_ROOT = BASE_PATH / ".ignore" / "apk-build"
 
 #: Bubblewrap valida que el SDK tenga <sdk>/tools o <sdk>/bin. Homebrew lo
 #: instala con cmdline-tools/latest/bin, así que hay que armar una raíz con
