@@ -326,7 +326,46 @@ scripts/odoo-test <instance> [-d dbname] [-t test_tags] [-i modules]
 
 # Pre-commit on modules
 scripts/precommit <instance> -m <modules>
+
+# Generar el APK/AAB de la app
+./odoo apk <cliente> --domain vendedores.<cliente>.com \
+    --package com.binaural.<cliente>.ventas \
+    --version 1.2.0 --version-code 12000
 ```
+
+### `./odoo apk` — Generar el APK/AAB de la app (Trusted Web Activity)
+
+Empaqueta la PWA de una instancia como APK/AAB de Android a partir de su
+manifest (`https://<dominio>/pwa/manifest.json`), usando Bubblewrap. El
+`version_code` se hornea en el `start_url` del APK: es el mecanismo con el
+que la app reporta la versión instalada de cada vendedor, así que cada
+publicación nueva debe usar un `--version-code` monotónico mayor.
+
+A diferencia del resto, aquí el primer argumento NO es una instancia de
+`instances.json`, sino una etiqueta para el directorio de build.
+
+Requisitos (una sola vez, fuera de Docker):
+
+```bash
+pip install click
+npm i -g @bubblewrap/cli
+brew install openjdk@17
+brew install --cask android-commandlinetools
+sdkmanager --licenses   # aceptar las licencias de Android
+```
+
+Si `pip install click` falla por PEP 668 (Python de Homebrew): `brew install python-click` o usar un venv.
+
+Notas:
+- El keystore se genera una sola vez y hay que **RESGUARDARLO**: si se
+  pierde no se puede volver a firmar la app y los usuarios deben
+  desinstalar y reinstalar. Se pasa con `--storepass` o la variable
+  `APK_STOREPASS`.
+- Los builds quedan en `.ignore/apk-build/<cliente>/` (ignorados por git).
+- Al terminar genera `assetlinks.json` (huella SHA-256 del certificado)
+  para pegarlo en Ajustes → Aplicación instalable del sitio; sin eso la
+  TWA arranca con la barra de URL de Chrome encima.
+- Rutas del JDK/SDK fijas a `/opt/homebrew` (Apple Silicon).
 
 ### `scripts/precommit` — Linting sobre módulos Odoo
 
