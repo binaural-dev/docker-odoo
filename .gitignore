@@ -1,5 +1,6 @@
 .env
 instances.json
+pwa.json
 src
 logs/
 .resources/Dockerfile
