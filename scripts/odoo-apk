@@ -23,9 +23,17 @@ Requisitos:
     Solo Docker. Todo el toolchain (Node + @bubblewrap/cli, OpenJDK 17,
     Android SDK con licencias aceptadas, Python + click) vive en la imagen.
 
+Configuración:
+    Los valores de los flags se pueden dejar en pwa.json (raíz del repo,
+    gitignored; ver pwa.example.json). Precedencia: flag CLI > env
+    APK_STOREPASS > pwa.json > default del script.
+
 Uso:
     scripts/odoo-apk cliente-ext --domain vendedores.cliente.com \\
         --package com.binaural.cliente.ventas --version 1.2.0 --version-code 12000
+
+    # Todo desde pwa.json
+    scripts/odoo-apk
 
     # Reconstruir la misma versión tras cambiar algo del sitio
     scripts/odoo-apk cliente-ext --domain ... --package ... \\
@@ -152,6 +160,18 @@ def fingerprint(keystore, alias, storepass, env):
 DOCKER_COMPOSE = BASE_PATH / ".resources" / "apk" / "docker-compose.yml"
 
 
+def load_pwa_config():
+    """Lee pwa.json de la raiz del repo (modo host). Devuelve {} si no existe."""
+    path = BASE_PATH / "pwa.json"
+    if not path.exists():
+        return {}
+    try:
+        cfg = json.loads(path.read_text())
+    except ValueError:
+        fail(f"{path} no es JSON válido.")
+    return cfg if isinstance(cfg, dict) else {}
+
+
 def run_in_container(argv):
     """Modo host: levanta el contenedor con el toolchain (imagen definida en
     .resources/apk) y re-ejecuta este mismo script adentro. Los artefactos
@@ -168,10 +188,28 @@ def run_in_container(argv):
         BASE_PATH, env=os.environ.copy())
 
     cmd = ["docker", "compose", "-f", str(DOCKER_COMPOSE), "run", "--rm"]
+    cfg = load_pwa_config()
+    if cfg:
+        cmd += ["-e", f"PWA_CONFIG={json.dumps(cfg)}"]
     if os.environ.get("APK_STOREPASS"):
         cmd += ["-e", "APK_STOREPASS"]
     cmd += ["apk-builder", "odoo-apk"] + list(argv)
     run(cmd, BASE_PATH, env=os.environ.copy())
+
+
+def config_value(key, fallback=None):
+    """Valor de configuracion (pwa.json) dentro del contenedor: el modo host
+    pasa el JSON por la env PWA_CONFIG. Los flags CLI tienen prioridad por
+    encima de esto (click los evalua antes que el default)."""
+    raw = os.environ.get("PWA_CONFIG")
+    if not raw:
+        return fallback
+    try:
+        cfg = json.loads(raw)
+    except ValueError:
+        return fallback
+    value = cfg.get(key)
+    return fallback if value is None else value
 
 
 def container_main():
@@ -180,44 +218,65 @@ def container_main():
     import click
 
     @click.command()
-    @click.argument("instance")
-    @click.option("--domain", required=True,
-                  help="Dominio donde corre la app, sin esquema. El host queda "
-                       "horneado en el APK: cambiarlo obliga a recompilar.")
-    @click.option("--package", required=True,
+    @click.argument("instance", required=False)
+    @click.option("--scheme", type=click.Choice(["http", "https"]),
+                  default=lambda: config_value("scheme", "https"),
+                  help="Esquema de las URLs (manifest, icono, scope). Por defecto https.")
+    @click.option("--domain", default=lambda: config_value("domain"),
+                  help="Dominio (o ip:puerto) donde corre la app, sin esquema. El host "
+                       "queda horneado en el APK: cambiarlo obliga a recompilar.")
+    @click.option("--package", default=lambda: config_value("package"),
                   help="Package name Android, p.ej. com.binaural.cliente.ventas. "
                        "Debe coincidir con el del assetlinks.json del sitio.")
-    @click.option("--version", "version_name", required=True, help="Versión visible, p.ej. 1.2.0")
-    @click.option("--version-code", type=int, required=True,
+    @click.option("--version", "version_name", default=lambda: config_value("version"),
+                  help="Versión visible, p.ej. 1.2.0")
+    @click.option("--version-code", type=int, default=lambda: config_value("version_code"),
                   help="Entero monotónico. Es el que se hornea en el start_url y "
                        "el que compara binaural_app_version contra la mínima.")
-    @click.option("--start-path", default="/payments",
+    @click.option("--start-path", default=lambda: config_value("start_path", "/payments"),
                   help="Ruta de arranque, antes del parámetro de versión.")
-    @click.option("--app-name", default=None, help="Nombre completo (por defecto, el del manifest).")
-    @click.option("--short-name", default=None, help="Nombre bajo el icono.")
-    @click.option("--target-sdk", type=int, default=None,
+    @click.option("--app-name", default=lambda: config_value("app_name"),
+                  help="Nombre completo (por defecto, el del manifest).")
+    @click.option("--short-name", default=lambda: config_value("short_name"),
+                  help="Nombre bajo el icono.")
+    @click.option("--target-sdk", type=int, default=lambda: config_value("target_sdk"),
                   help="targetSdkVersion. Play Store sube el mínimo exigido todos "
                        "los años; es lo que Bubblewrap permite fijar y PWABuilder no.")
-    @click.option("--keystore", default=None, help="Ruta del keystore (por defecto, el del directorio de build).")
-    @click.option("--alias", default="app", help="Alias de la clave.")
-    @click.option("--storepass", envvar="APK_STOREPASS", default=None,
+    @click.option("--keystore", default=lambda: config_value("keystore"),
+                  help="Ruta del keystore (por defecto, el del directorio de build).")
+    @click.option("--alias", default=lambda: config_value("alias", "app"), help="Alias de la clave.")
+    @click.option("--storepass", envvar="APK_STOREPASS", default=lambda: config_value("storepass"),
                   help="Contraseña del keystore. Preferible por la variable APK_STOREPASS.")
     @click.option("--jdk", default=lambda: default_jdk(),
                   help="Ruta del JDK. Por defecto JAVA_HOME o el javac del PATH (en el contenedor).")
     @click.option("--sdk", default=lambda: os.environ.get("ANDROID_HOME", str(DEFAULT_SDK_LINK)),
                   help="Ruta del SDK de Android. Por defecto ANDROID_HOME (en el contenedor).")
     @click.option("--rebuild", is_flag=True, help="Regenerar el proyecto Android desde cero.")
-    def run_command(instance, domain, package, version_name, version_code, start_path,
+    def run_command(instance, scheme, domain, package, version_name, version_code, start_path,
                     app_name, short_name, target_sdk, keystore, alias, storepass,
                     jdk, sdk, rebuild):
+        # Los valores pueden venir de pwa.json (via PWA_CONFIG): se completan
+        # aca los obligatorios con mensajes claros.
+        instance = instance or config_value("instance")
+        if not instance:
+            fail("Falta la instancia (primer argumento o 'instance' en pwa.json).")
+        if not domain:
+            fail("Falta --domain (o 'domain' en pwa.json).")
+        if not package:
+            fail("Falta --package (o 'package' en pwa.json).")
+        if not version_name:
+            fail("Falta --version (o 'version' en pwa.json).")
+        if version_code is None:
+            fail("Falta --version-code (o 'version_code' en pwa.json).")
         if not storepass:
-            fail("Falta la contraseña del keystore: usar --storepass o la variable APK_STOREPASS.")
+            fail("Falta la contraseña del keystore: usar --storepass, APK_STOREPASS o 'storepass' en pwa.json.")
+        rebuild = rebuild or bool(config_value("rebuild", False))
 
         workdir = BUILD_ROOT / instance
         workdir.mkdir(parents=True, exist_ok=True)
         keystore = Path(keystore) if keystore else workdir / "android.keystore"
 
-        out(f"→ Instancia {instance} · {domain} · {version_name} ({version_code})", "cyan")
+        out(f"→ Instancia {instance} · {scheme}://{domain} · {version_name} ({version_code})", "cyan")
 
         ensure_toolchain(jdk, sdk)
         env = build_env(jdk)
@@ -236,7 +295,7 @@ def container_main():
                 "    -keyalg RSA -keysize 2048 -validity 10000 -dname \"CN=<app>, O=<empresa>, C=VE\""
             )
 
-        manifest_url = f"https://{domain}/pwa/manifest.json"
+        manifest_url = f"{scheme}://{domain}/pwa/manifest.json"
         out(f"  manifest: {manifest_url}")
         remote = subprocess.run(["curl", "-s", "-m", "30", manifest_url],
                                 capture_output=True, text=True).stdout
@@ -248,7 +307,7 @@ def container_main():
         # El start_url lleva el version_code: es lo que permite saber después qué
         # versión tiene instalada cada vendedor.
         start_url = f"{start_path}?app_version={version_code}"
-        icon = f"https://{domain}/web/image/website/1/pwa_icon_512/512x512"
+        icon = f"{scheme}://{domain}/web/image/website/1/pwa_icon_512/512x512"
 
         twa = {
             "packageId": package,
@@ -280,7 +339,7 @@ def container_main():
             "enableSiteSettingsShortcut": True,
             "isChromeOSOnly": False,
             "isMetaQuest": False,
-            "fullScopeUrl": f"https://{domain}/",
+            "fullScopeUrl": f"{scheme}://{domain}/",
             "minSdkVersion": 23,
             "orientation": "default",
             "fingerprints": [],
