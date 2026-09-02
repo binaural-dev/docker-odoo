@@ -1,7 +1,7 @@
 .env
 instances.json
 src
-!mcp-server/src
+logs/
 .resources/Dockerfile
 .resources/Dockerfile.*
 !.resources/Dockerfile.template
@@ -17,5 +17,4 @@ __pycache__
 .windsurf/
 .ignore
 .DS_Store
-openspec
 .codegraph

@@ -1,32 +1,13 @@
 {
   "odoo_configs": {
-    "19.0_default": {
+    "default": {
       "admin_password": "admin",
       "workers": 2,
       "without_demo": true,
       "list_db": true,
       "proxy_mode": true,
-      "limit_memory_soft": 16000000000,
-      "limit_memory_hard": 17000000000,
-      "max_cron_threads": 1,
-      "limit_time_real_cron": 0,
-      "limit_time_real": 3600,
-      "limit_time_cpu": 60,
-      "db_maxconn": 200,
-      "unaccent": false,
-      "server_wide_modules": "",
-      "addons": [
-        "src/enterprise"
-      ]
-    },
-    "17.0_default": {
-      "admin_password": "admin",
-      "workers": 2,
-      "without_demo": true,
-      "list_db": true,
-      "proxy_mode": true,
-      "limit_memory_soft": 16000000000,
-      "limit_memory_hard": 17000000000,
+      "limit_memory_soft": 12000000000,
+      "limit_memory_hard": 13000000000,
       "max_cron_threads": 1,
       "limit_time_real_cron": 0,
       "limit_time_real": 3600,
@@ -43,8 +24,11 @@
     "pg16": {
       "postgres_version": 16,
       "port": 5432,
+      "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
+      "bootstrap_user": "odoo_bootstrap",
+      "bootstrap_password": "cambiar-esto",
       "config": "postgresql.conf"
     }
   },
@@ -53,28 +37,30 @@
       "odoo_version": "19.0",
       "external_port": 8070,
       "database": "pg16",
-      "odoo_config": "19.0_default",
+      "odoo_config": "default",
+      "db_user": "app_client_a",
+      "db_password": "odoo",
       "overwrite_odoo_config": {
-        "workers": 4,
-        "limit_memory_soft": 32000000000,
-        "limit_memory_hard": 34000000000,
         "addons": [
-          "src/enterprise",
+          "src/enterprise-19.0",
           "src/custom/client-a"
         ],
-        "db_name": "prod"
+        "db_filter": "^client-a_"
       }
     },
-    "client-b": {
-      "odoo_version": "17.0",
+    "client-a-maintenance": {
+      "odoo_version": "19.0",
       "external_port": 8071,
-      "database": "external_pg16",
-      "odoo_config": "17.0_default",
+      "database": "pg16",
+      "odoo_config": "default",
+      "db_user": "app_client_a_maintenance",
+      "db_password": "odoo",
       "overwrite_odoo_config": {
         "addons": [
-          "src/enterprise",
-          "src/custom/client-b"
-        ]
+          "src/enterprise-19.0",
+          "src/custom/client-a-maintenance"
+        ],
+        "db_filter": "^client-a-maintenance_"
       }
     }
   },
