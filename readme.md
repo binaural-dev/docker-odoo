@@ -410,6 +410,20 @@ fullscreen. Los overrides puntuales siguen funcionando:
 ./odoo apk --version 1.1.0 --version-code 11000   # solo subir la versión
 ```
 
+**Instalar la APK en un dispositivo por USB** (`./odoo apk usb-install`):
+instala `adb` si falta (macOS: `brew install --cask android-platform-tools`; Linux:
+`apt`/`snap` con sudo), espera el dispositivo autorizado por USB, instala la
+APK generada y abre la app. Si todavía no hay APK (o se pasa `--rebuild`),
+primero la genera.
+
+```bash
+./odoo apk usb-install          # instala la APK de pwa.json en el celular conectado
+./odoo apk usb-install --rebuild   # regenera y reinstala
+```
+
+Requisitos del teléfono: modo desarrollador + Depuración USB activada, cable
+conectado, y aceptar el diálogo "Permitir depuración USB" la primera vez.
+
 **Requisitos: solo Docker.** Todo el toolchain (Node + `@bubblewrap/cli`,
 OpenJDK 17, Android SDK con licencias aceptadas, Python + `click`) vive en
 la imagen que arma `.resources/apk/Dockerfile` (docker-compose en

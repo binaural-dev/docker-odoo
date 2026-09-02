@@ -212,6 +212,120 @@ def config_value(key, fallback=None):
     return fallback if value is None else value
 
 
+def install_adb():
+    """Instala adb segun el SO del host (macOS: Homebrew, Linux: apt/snap)."""
+    if shutil.which("adb"):
+        return
+
+    if sys.platform.startswith("darwin"):
+        if not shutil.which("brew"):
+            fail(
+                "Falta adb y no se encontro Homebrew.\n"
+                "  Instalar Homebrew (https://brew.sh) y volver a correr."
+            )
+        out("→ Instalando adb con Homebrew...")
+        run(["brew", "install", "--cask", "android-platform-tools"],
+            BASE_PATH, env=os.environ.copy())
+    elif sys.platform.startswith("linux"):
+        if shutil.which("apt-get"):
+            out("→ Instalando adb con apt (puede pedir contraseña de sudo)...")
+            run(["sudo", "apt-get", "update"], BASE_PATH, env=os.environ.copy())
+            run(["sudo", "apt-get", "install", "-y", "android-tools-adb"],
+                BASE_PATH, env=os.environ.copy())
+        elif shutil.which("snap"):
+            out("→ Instalando adb con snap (puede pedir contraseña de sudo)...")
+            run(["sudo", "snap", "install", "adb"], BASE_PATH, env=os.environ.copy())
+        else:
+            fail(
+                "Falta adb y no se encontro ni apt-get ni snap.\n"
+                "  Instalar las Android Platform Tools a mano y volver a correr."
+            )
+    else:
+        fail(f"SO no soportado para instalar adb: {sys.platform}")
+
+    if not shutil.which("adb"):
+        fail("La instalación de adb terminó pero no quedó disponible en el PATH.")
+
+
+def wait_for_device(timeout=30):
+    """Espera un dispositivo autorizado conectado por USB."""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        proc = subprocess.run(["adb", "devices"], capture_output=True, text=True)
+        lines = proc.stdout.strip().splitlines()[1:]
+        devices = [line.split()[0] for line in lines if line.strip()]
+        states = {}
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 2:
+                states[parts[0]] = parts[1]
+        authorized = [d for d, st in states.items() if st == "device"]
+        if authorized:
+            return authorized[0]
+        unauthorized = [d for d, st in states.items() if st == "unauthorized"]
+        offline = [d for d, st in states.items() if st == "offline"]
+        if unauthorized:
+            out("  El teléfono está 'unauthorized': aceptá el diálogo 'Permitir depuración USB' en la pantalla...")
+        elif offline:
+            out("  El teléfono está 'offline': desconectá y reconectá el cable USB...")
+        else:
+            out("  Esperando dispositivo en modo USB Debugging...")
+        time.sleep(2)
+    fail(
+        "No se detectó un dispositivo autorizado.\n"
+        "  - Conectá el celular por USB y activá 'Depuración USB' (Opciones de desarrollador).\n"
+        "  - Aceptá el diálogo 'Permitir depuración USB' cuando aparezca.\n"
+        "  - Probar con: adb devices"
+    )
+
+
+def usb_install(argv):
+    """Instala la APK generada en un dispositivo Android conectado por USB.
+    Se ejecuta en el host (adb corre aca, no en el contenedor). Si la APK
+    no existe todavia, la genera primero con el flujo docker."""
+    install_adb()
+
+    # Si no hay APK generada todavia, la creamos (todo sale de pwa.json).
+    cfg = load_pwa_config()
+    instance = cfg.get("instance")
+    if not instance:
+        fail("Falta 'instance' en pwa.json para saber dónde está la APK generada.")
+    apk_path = BUILD_ROOT / instance / "app-release-signed.apk"
+    if not apk_path.exists() or "--rebuild" in argv:
+        out("→ No hay APK generada: corriendo la build primero...")
+        run_in_container([a for a in argv if a != "--rebuild"])
+        if not apk_path.exists():
+            fail(f"No se encontró la APK generada en {apk_path}.\n"
+                 "  Revisá que se haya completado la build correctamente.")
+
+    out(f"→ Dispositivo destino: instalando {apk_path}...")
+    serial = wait_for_device()
+    out(f"  Dispositivo detectado: {serial}")
+
+    result = subprocess.run(["adb", "-s", serial, "install", "-r", str(apk_path)],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        out(result.stdout or "")
+        out(result.stderr or "")
+        fail("Falló la instalación del APK. Verificá que el teléfono permita instalar "
+             "por USB y que la firma no sea conflictiva (adb install -r).")
+    if "Success" not in result.stdout:
+        out(result.stdout or "")
+        out(result.stderr or "")
+
+    package = cfg.get("package")
+    if package:
+        out("→ Abriendo la app...")
+        subprocess.run(["adb", "-s", serial, "shell", "am", "start",
+                        "-n", f"{package}/.LauncherActivity"],
+                       capture_output=True, text=True)
+
+    out("\n✓ APK instalada en el dispositivo.", "green")
+    out("  Verificá que cargue correctamente la app.")
+
+
 def container_main():
     """Modo contenedor: toda la logica de build, definida aca para que el
     host pueda ejecutar este archivo sin tener click instalado."""
@@ -423,4 +537,8 @@ if __name__ == "__main__":
     if os.environ.get("APK_IN_CONTAINER"):
         container_main()
     else:
-        run_in_container(sys.argv[1:])
+        argv = sys.argv[1:]
+        if argv and argv[0] == "usb-install":
+            usb_install(argv[1:])
+        else:
+            run_in_container(argv)
