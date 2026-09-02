@@ -1,0 +1,544 @@
+#!/usr/bin/env python3
+"""Genera el APK/AAB de la app de ventas a partir del manifest de una instancia.
+
+Envuelve a Bubblewrap, que empaqueta la PWA como Trusted Web Activity.
+
+Lo importante que resuelve este script, y que es fácil de olvidar haciéndolo
+a mano: **hornea el version_code dentro del start_url del APK**. Bubblewrap
+fija el start_url al compilar, así que una build generada con
+``start_url = /payments?app_version=11000`` reporta esa versión en cada
+arranque. Ese es el mecanismo con el que ``binaural_app_version`` sabe qué
+versión tiene instalada cada vendedor. Si una build sale sin ese parámetro,
+esa gente queda invisible en el catálogo.
+
+Dos modos:
+- Host (sin click, solo stdlib): levanta el contenedor con el toolchain
+  (imagen .resources/apk/Dockerfile) y re-ejecuta este script adentro,
+  dejando los artefactos en el host vía el volumen montado en
+  .ignore/apk-build/ (APK_BUILD_ROOT=/work).
+- Contenedor (APK_IN_CONTAINER=1, click ya instalado en la imagen): corre
+  la build real con Bubblewrap.
+
+Requisitos:
+    Solo Docker. Todo el toolchain (Node + @bubblewrap/cli, OpenJDK 17,
+    Android SDK con licencias aceptadas, Python + click) vive en la imagen.
+
+Configuración:
+    Los valores de los flags se pueden dejar en pwa.json (raíz del repo,
+    gitignored; ver pwa.example.json). Precedencia: flag CLI > env
+    APK_STOREPASS > pwa.json > default del script.
+
+Uso:
+    scripts/odoo-apk cliente-ext --domain vendedores.cliente.com \\
+        --package com.binaural.cliente.ventas --version 1.2.0 --version-code 12000
+
+    # Todo desde pwa.json
+    scripts/odoo-apk
+
+    # Reconstruir la misma versión tras cambiar algo del sitio
+    scripts/odoo-apk cliente-ext --domain ... --package ... \\
+        --version 1.2.0 --version-code 12000 --rebuild
+"""
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+try:
+    import click
+except ModuleNotFoundError:
+    # En el host click no está instalado: el modo host solo orquesta docker
+    # (stdlib). Click solo se necesita dentro del contenedor (container_main).
+    click = None
+
+BASE_PATH = Path(__file__).resolve().parent.parent
+#: Dentro del contenedor lo fija el Dockerfile (.resources/apk) a /work, que
+#: esta montado sobre .ignore/apk-build/ del host.
+BUILD_ROOT = Path(os.environ.get("APK_BUILD_ROOT") or BASE_PATH / ".ignore" / "apk-build")
+
+#: Bubblewrap valida que el SDK tenga <sdk>/tools o <sdk>/bin. Homebrew lo
+#: instala con cmdline-tools/latest/bin, así que hay que armar una raíz con
+#: enlaces simbólicos: tocar el árbol de Homebrew se pierde en cada upgrade.
+DEFAULT_SDK_LINK = Path.home() / ".bubblewrap" / "android-sdk"
+BREW_SDK = Path("/opt/homebrew/share/android-commandlinetools")
+BREW_JDK = Path("/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk")
+
+
+def out(msg, style=None):
+    if click is not None:
+        click.echo(click.style(msg, fg=style) if style else msg)
+    else:
+        print(msg, flush=True)
+
+
+def fail(msg):
+    out(f"✗ {msg}", "red")
+    sys.exit(1)
+
+
+def default_jdk():
+    """JDK por defecto: JAVA_HOME del entorno, o el javac del PATH (dentro del
+    contenedor apunta al JDK instalado por apt), o el de Homebrew."""
+    if os.environ.get("JAVA_HOME"):
+        return os.environ["JAVA_HOME"]
+    javac = shutil.which("javac")
+    if javac:
+        return str(Path(os.path.realpath(javac)).parent.parent)
+    return str(BREW_JDK)
+
+
+def ensure_toolchain(jdk, sdk):
+    """Deja el SDK con la forma que Bubblewrap espera y escribe su config.
+
+    Dentro del contenedor el SDK ya tiene el layout correcto (el Dockerfile
+    arma /opt/android-sdk con cmdline-tools/latest/bin y un enlace bin/), así
+    que el armado de enlaces simbólicos es solo para el modo Homebrew.
+    """
+    if not Path(jdk).exists():
+        fail(f"No existe el JDK en {jdk}. Instalar con: brew install openjdk@17")
+    if sdk == str(DEFAULT_SDK_LINK):
+        if not BREW_SDK.exists():
+            fail(
+                f"No existe el SDK de Android en {BREW_SDK}. "
+                "Instalar con: brew install --cask android-commandlinetools"
+            )
+        DEFAULT_SDK_LINK.parent.mkdir(parents=True, exist_ok=True)
+        DEFAULT_SDK_LINK.mkdir(exist_ok=True)
+        for name in ("platforms", "build-tools", "platform-tools",
+                     "licenses", "cmdline-tools"):
+            link = DEFAULT_SDK_LINK / name
+            if not link.exists():
+                link.symlink_to(BREW_SDK / name)
+        binlink = DEFAULT_SDK_LINK / "bin"
+        if not binlink.exists():
+            binlink.symlink_to(BREW_SDK / "cmdline-tools" / "latest" / "bin")
+
+    config = Path.home() / ".bubblewrap" / "config.json"
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"jdkPath": str(jdk), "androidSdkPath": str(sdk)}, indent=2))
+
+
+def build_env(jdk):
+    env = os.environ.copy()
+    java_home = Path(jdk)
+    mac_home = java_home / "Contents" / "Home"
+    if mac_home.exists():
+        java_home = mac_home
+    env["JAVA_HOME"] = str(java_home)
+    env["PATH"] = f"{java_home / 'bin'}:{env['PATH']}"
+    return env
+
+
+def run(cmd, cwd, env, quiet=False):
+    result = subprocess.run(
+        cmd, cwd=cwd, env=env, shell=isinstance(cmd, str),
+        capture_output=quiet, text=True,
+    )
+    if result.returncode != 0:
+        if quiet:
+            out(result.stdout or "")
+            out(result.stderr or "")
+        fail(f"Falló: {cmd if isinstance(cmd, str) else ' '.join(cmd)}")
+    return result
+
+
+def fingerprint(keystore, alias, storepass, env):
+    """SHA-256 del certificado, que es lo que va en el assetlinks.json."""
+    out_proc = subprocess.run(
+        ["keytool", "-list", "-v", "-keystore", str(keystore),
+         "-alias", alias, "-storepass", storepass],
+        capture_output=True, text=True, env=env,
+    ).stdout
+    m = re.search(r"SHA256:\s*([0-9A-F:]{95})", out_proc)
+    return m.group(1) if m else None
+
+
+DOCKER_COMPOSE = BASE_PATH / ".resources" / "apk" / "docker-compose.yml"
+
+
+def load_pwa_config():
+    """Lee pwa.json de la raiz del repo (modo host). Devuelve {} si no existe."""
+    path = BASE_PATH / "pwa.json"
+    if not path.exists():
+        return {}
+    try:
+        cfg = json.loads(path.read_text())
+    except ValueError:
+        fail(f"{path} no es JSON válido.")
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def run_in_container(argv):
+    """Modo host: levanta el contenedor con el toolchain (imagen definida en
+    .resources/apk) y re-ejecuta este mismo script adentro. Los artefactos
+    quedan en el host porque /work (APK_BUILD_ROOT) está montado sobre
+    .ignore/apk-build/ del repo."""
+    if not shutil.which("docker"):
+        fail(
+            "Se necesita Docker para generar el APK.\n"
+            "  Instalar Docker Desktop y asegurarse de que 'docker compose' esté disponible."
+        )
+
+    out("→ Preparando el contenedor con el toolchain (la primera vez tarda unos minutos)...")
+    run(["docker", "compose", "-f", str(DOCKER_COMPOSE), "build"],
+        BASE_PATH, env=os.environ.copy())
+
+    cmd = ["docker", "compose", "-f", str(DOCKER_COMPOSE), "run", "--rm"]
+    cfg = load_pwa_config()
+    if cfg:
+        cmd += ["-e", f"PWA_CONFIG={json.dumps(cfg)}"]
+    if os.environ.get("APK_STOREPASS"):
+        cmd += ["-e", "APK_STOREPASS"]
+    cmd += ["apk-builder", "odoo-apk"] + list(argv)
+    run(cmd, BASE_PATH, env=os.environ.copy())
+
+
+def config_value(key, fallback=None):
+    """Valor de configuracion (pwa.json) dentro del contenedor: el modo host
+    pasa el JSON por la env PWA_CONFIG. Los flags CLI tienen prioridad por
+    encima de esto (click los evalua antes que el default)."""
+    raw = os.environ.get("PWA_CONFIG")
+    if not raw:
+        return fallback
+    try:
+        cfg = json.loads(raw)
+    except ValueError:
+        return fallback
+    value = cfg.get(key)
+    return fallback if value is None else value
+
+
+def install_adb():
+    """Instala adb segun el SO del host (macOS: Homebrew, Linux: apt/snap)."""
+    if shutil.which("adb"):
+        return
+
+    if sys.platform.startswith("darwin"):
+        if not shutil.which("brew"):
+            fail(
+                "Falta adb y no se encontro Homebrew.\n"
+                "  Instalar Homebrew (https://brew.sh) y volver a correr."
+            )
+        out("→ Instalando adb con Homebrew...")
+        run(["brew", "install", "--cask", "android-platform-tools"],
+            BASE_PATH, env=os.environ.copy())
+    elif sys.platform.startswith("linux"):
+        if shutil.which("apt-get"):
+            out("→ Instalando adb con apt (puede pedir contraseña de sudo)...")
+            run(["sudo", "apt-get", "update"], BASE_PATH, env=os.environ.copy())
+            run(["sudo", "apt-get", "install", "-y", "android-tools-adb"],
+                BASE_PATH, env=os.environ.copy())
+        elif shutil.which("snap"):
+            out("→ Instalando adb con snap (puede pedir contraseña de sudo)...")
+            run(["sudo", "snap", "install", "adb"], BASE_PATH, env=os.environ.copy())
+        else:
+            fail(
+                "Falta adb y no se encontro ni apt-get ni snap.\n"
+                "  Instalar las Android Platform Tools a mano y volver a correr."
+            )
+    else:
+        fail(f"SO no soportado para instalar adb: {sys.platform}")
+
+    if not shutil.which("adb"):
+        fail("La instalación de adb terminó pero no quedó disponible en el PATH.")
+
+
+def wait_for_device(timeout=30):
+    """Espera un dispositivo autorizado conectado por USB."""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        proc = subprocess.run(["adb", "devices"], capture_output=True, text=True)
+        lines = proc.stdout.strip().splitlines()[1:]
+        devices = [line.split()[0] for line in lines if line.strip()]
+        states = {}
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 2:
+                states[parts[0]] = parts[1]
+        authorized = [d for d, st in states.items() if st == "device"]
+        if authorized:
+            return authorized[0]
+        unauthorized = [d for d, st in states.items() if st == "unauthorized"]
+        offline = [d for d, st in states.items() if st == "offline"]
+        if unauthorized:
+            out("  El teléfono está 'unauthorized': aceptá el diálogo 'Permitir depuración USB' en la pantalla...")
+        elif offline:
+            out("  El teléfono está 'offline': desconectá y reconectá el cable USB...")
+        else:
+            out("  Esperando dispositivo en modo USB Debugging...")
+        time.sleep(2)
+    fail(
+        "No se detectó un dispositivo autorizado.\n"
+        "  - Conectá el celular por USB y activá 'Depuración USB' (Opciones de desarrollador).\n"
+        "  - Aceptá el diálogo 'Permitir depuración USB' cuando aparezca.\n"
+        "  - Probar con: adb devices"
+    )
+
+
+def usb_install(argv):
+    """Instala la APK generada en un dispositivo Android conectado por USB.
+    Se ejecuta en el host (adb corre aca, no en el contenedor). Si la APK
+    no existe todavia, la genera primero con el flujo docker."""
+    install_adb()
+
+    # Si no hay APK generada todavia, la creamos (todo sale de pwa.json).
+    cfg = load_pwa_config()
+    instance = cfg.get("instance")
+    if not instance:
+        fail("Falta 'instance' en pwa.json para saber dónde está la APK generada.")
+    apk_path = BUILD_ROOT / instance / "app-release-signed.apk"
+    if not apk_path.exists() or "--rebuild" in argv:
+        out("→ No hay APK generada: corriendo la build primero...")
+        run_in_container([a for a in argv if a != "--rebuild"])
+        if not apk_path.exists():
+            fail(f"No se encontró la APK generada en {apk_path}.\n"
+                 "  Revisá que se haya completado la build correctamente.")
+
+    out(f"→ Dispositivo destino: instalando {apk_path}...")
+    serial = wait_for_device()
+    out(f"  Dispositivo detectado: {serial}")
+
+    result = subprocess.run(["adb", "-s", serial, "install", "-r", str(apk_path)],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        out(result.stdout or "")
+        out(result.stderr or "")
+        fail("Falló la instalación del APK. Verificá que el teléfono permita instalar "
+             "por USB y que la firma no sea conflictiva (adb install -r).")
+    if "Success" not in result.stdout:
+        out(result.stdout or "")
+        out(result.stderr or "")
+
+    package = cfg.get("package")
+    if package:
+        out("→ Abriendo la app...")
+        subprocess.run(["adb", "-s", serial, "shell", "am", "start",
+                        "-n", f"{package}/.LauncherActivity"],
+                       capture_output=True, text=True)
+
+    out("\n✓ APK instalada en el dispositivo.", "green")
+    out("  Verificá que cargue correctamente la app.")
+
+
+def container_main():
+    """Modo contenedor: toda la logica de build, definida aca para que el
+    host pueda ejecutar este archivo sin tener click instalado."""
+    import click
+
+    @click.command()
+    @click.argument("instance", required=False)
+    @click.option("--scheme", type=click.Choice(["http", "https"]),
+                  default=lambda: config_value("scheme", "https"),
+                  help="Esquema de las URLs (manifest, icono, scope). Por defecto https.")
+    @click.option("--domain", default=lambda: config_value("domain"),
+                  help="Dominio (o ip:puerto) donde corre la app, sin esquema. El host "
+                       "queda horneado en el APK: cambiarlo obliga a recompilar.")
+    @click.option("--package", default=lambda: config_value("package"),
+                  help="Package name Android, p.ej. com.binaural.cliente.ventas. "
+                       "Debe coincidir con el del assetlinks.json del sitio.")
+    @click.option("--version", "version_name", default=lambda: config_value("version"),
+                  help="Versión visible, p.ej. 1.2.0")
+    @click.option("--version-code", type=int, default=lambda: config_value("version_code"),
+                  help="Entero monotónico. Es el que se hornea en el start_url y "
+                       "el que compara binaural_app_version contra la mínima.")
+    @click.option("--start-path", default=lambda: config_value("start_path", "/payments"),
+                  help="Ruta de arranque, antes del parámetro de versión.")
+    @click.option("--app-name", default=lambda: config_value("app_name"),
+                  help="Nombre completo (por defecto, el del manifest).")
+    @click.option("--short-name", default=lambda: config_value("short_name"),
+                  help="Nombre bajo el icono.")
+    @click.option("--target-sdk", type=int, default=lambda: config_value("target_sdk"),
+                  help="targetSdkVersion. Play Store sube el mínimo exigido todos "
+                       "los años; es lo que Bubblewrap permite fijar y PWABuilder no.")
+    @click.option("--keystore", default=lambda: config_value("keystore"),
+                  help="Ruta del keystore (por defecto, el del directorio de build).")
+    @click.option("--alias", default=lambda: config_value("alias", "app"), help="Alias de la clave.")
+    @click.option("--storepass", envvar="APK_STOREPASS", default=lambda: config_value("storepass"),
+                  help="Contraseña del keystore. Preferible por la variable APK_STOREPASS.")
+    @click.option("--jdk", default=lambda: default_jdk(),
+                  help="Ruta del JDK. Por defecto JAVA_HOME o el javac del PATH (en el contenedor).")
+    @click.option("--sdk", default=lambda: os.environ.get("ANDROID_HOME", str(DEFAULT_SDK_LINK)),
+                  help="Ruta del SDK de Android. Por defecto ANDROID_HOME (en el contenedor).")
+    @click.option("--rebuild", is_flag=True, help="Regenerar el proyecto Android desde cero.")
+    def run_command(instance, scheme, domain, package, version_name, version_code, start_path,
+                    app_name, short_name, target_sdk, keystore, alias, storepass,
+                    jdk, sdk, rebuild):
+        # Los valores pueden venir de pwa.json (via PWA_CONFIG): se completan
+        # aca los obligatorios con mensajes claros.
+        instance = instance or config_value("instance")
+        if not instance:
+            fail("Falta la instancia (primer argumento o 'instance' en pwa.json).")
+        if not domain:
+            fail("Falta --domain (o 'domain' en pwa.json).")
+        if not package:
+            fail("Falta --package (o 'package' en pwa.json).")
+        if not version_name:
+            fail("Falta --version (o 'version' en pwa.json).")
+        if version_code is None:
+            fail("Falta --version-code (o 'version_code' en pwa.json).")
+        if not storepass:
+            fail("Falta la contraseña del keystore: usar --storepass, APK_STOREPASS o 'storepass' en pwa.json.")
+        rebuild = rebuild or bool(config_value("rebuild", False))
+
+        workdir = BUILD_ROOT / instance
+        workdir.mkdir(parents=True, exist_ok=True)
+        keystore = Path(keystore) if keystore else workdir / "android.keystore"
+
+        out(f"→ Instancia {instance} · {scheme}://{domain} · {version_name} ({version_code})", "cyan")
+
+        ensure_toolchain(jdk, sdk)
+        env = build_env(jdk)
+
+        if not keystore.exists():
+            fail(
+                f"No existe el keystore en {keystore}.\n"
+                "  Generarlo una sola vez y RESGUARDARLO: si se pierde, no se puede\n"
+                "  volver a firmar la app y los usuarios deben desinstalar y reinstalar.\n\n"
+                f"  keytool -genkeypair -v -keystore {keystore} -alias {alias} \\\n"
+                "    -keyalg RSA -keysize 2048 -validity 10000 \\\n"
+                "    -dname \"CN=<app>, O=<empresa>, C=VE\"\n\n"
+                "  keytool ya está dentro del contenedor:\n"
+                "  docker compose -f .resources/apk/docker-compose.yml run --rm \\\n"
+                "    apk-builder keytool -genkeypair -v -keystore /work/android.keystore -alias app \\\n"
+                "    -keyalg RSA -keysize 2048 -validity 10000 -dname \"CN=<app>, O=<empresa>, C=VE\""
+            )
+
+        manifest_url = f"{scheme}://{domain}/pwa/manifest.json"
+        out(f"  manifest: {manifest_url}")
+        remote = subprocess.run(["curl", "-s", "-m", "30", manifest_url],
+                                capture_output=True, text=True).stdout
+        try:
+            remote_manifest = json.loads(remote)
+        except ValueError:
+            fail(f"El manifest no respondió JSON válido. ¿Está el sitio publicado como PWA en {domain}?")
+
+        # El start_url lleva el version_code: es lo que permite saber después qué
+        # versión tiene instalada cada vendedor.
+        start_url = f"{start_path}?app_version={version_code}"
+        icon = f"{scheme}://{domain}/web/image/website/1/pwa_icon_512/512x512"
+
+        twa = {
+            "packageId": package,
+            "host": domain,
+            "name": app_name or remote_manifest.get("name") or instance,
+            "launcherName": short_name or remote_manifest.get("short_name") or instance,
+            "display": "standalone",
+            "themeColor": remote_manifest.get("theme_color", "#000000"),
+            "themeColorDark": remote_manifest.get("theme_color", "#000000"),
+            "navigationColor": remote_manifest.get("theme_color", "#000000"),
+            "navigationColorDark": remote_manifest.get("theme_color", "#000000"),
+            "navigationDividerColor": remote_manifest.get("theme_color", "#000000"),
+            "navigationDividerColorDark": remote_manifest.get("theme_color", "#000000"),
+            "backgroundColor": remote_manifest.get("background_color", "#FFFFFF"),
+            "enableNotifications": False,
+            "startUrl": start_url,
+            "iconUrl": icon,
+            "maskableIconUrl": icon,
+            "splashScreenFadeOutDuration": 300,
+            "signingKey": {"path": str(keystore), "alias": alias},
+            "appVersion": version_name,
+            "appVersionCode": version_code,
+            "shortcuts": [],
+            "generatorApp": "odoo-apk",
+            "webManifestUrl": manifest_url,
+            "fallbackType": "customtabs",
+            "features": {},
+            "alphaDependencies": {"enabled": False},
+            "enableSiteSettingsShortcut": True,
+            "isChromeOSOnly": False,
+            "isMetaQuest": False,
+            "fullScopeUrl": f"{scheme}://{domain}/",
+            "minSdkVersion": 23,
+            "orientation": "default",
+            "fingerprints": [],
+            "additionalTrustedOrigins": [],
+            "retainedBundles": [],
+            "protocolHandlers": [],
+            "fileHandlers": [],
+            "launchHandlerClientMode": "",
+        }
+        (workdir / "twa-manifest.json").write_text(json.dumps(twa, indent=2))
+        out(f"  start_url horneado: {start_url}")
+
+        if rebuild:
+            for path in ("app", "gradle", "build.gradle", "settings.gradle",
+                         "gradlew", "gradlew.bat", "manifest-checksum.txt"):
+                target = workdir / path
+                if target.is_dir():
+                    shutil.rmtree(target)
+                elif target.exists():
+                    target.unlink()
+
+        out("  generando el proyecto Android...")
+        run(["bubblewrap", "update", "--skipVersionUpgrade"], workdir, env, quiet=True)
+
+        gradle = workdir / "app" / "build.gradle"
+        text = gradle.read_text()
+
+        # Bubblewrap hornea "https://" + host en el launchUrl (la URL que la
+        # app abre al arrancar). Con scheme http (instancias locales) hay que
+        # corregirlo; si no, la app arranca contra https y falla.
+        updated = re.sub(r'"https://" \+ twaManifest\.hostName',
+                         f'"{scheme}://" + twaManifest.hostName', text)
+        if updated != text:
+            out(f"  launchUrl con scheme {scheme}:// en build.gradle")
+
+        if target_sdk:
+            updated = re.sub(r"targetSdkVersion \d+", f"targetSdkVersion {target_sdk}", updated)
+            updated = re.sub(r"compileSdkVersion \d+", f"compileSdkVersion {target_sdk}", updated)
+            out(f"  targetSdkVersion fijado en {target_sdk}")
+
+        gradle.write_text(updated)
+
+        out("  compilando (la primera vez Gradle descarga bastante)...")
+        env["BUBBLEWRAP_KEYSTORE_PASSWORD"] = storepass
+        env["BUBBLEWRAP_KEY_PASSWORD"] = storepass
+        run(["bubblewrap", "build", "--skipPwaValidation"], workdir, env, quiet=True)
+
+        apk = workdir / "app-release-signed.apk"
+        aab = workdir / "app-release-bundle.aab"
+        if not apk.exists():
+            fail("Bubblewrap terminó sin generar el APK.")
+
+        out("\n✓ Listo", "green")
+        out("  (las rutas siguientes son las del host: .ignore/apk-build/ está montado en /work)")
+        out(f"  APK: {apk}  ({apk.stat().st_size // 1024} KB)")
+        if aab.exists():
+            out(f"  AAB: {aab}  ({aab.stat().st_size // 1024} KB)")
+
+        fp = fingerprint(keystore, alias, storepass, env)
+        if fp:
+            assetlinks = [{
+                "relation": ["delegate_permission/common.handle_all_urls"],
+                "target": {"namespace": "android_app", "package_name": package,
+                           "sha256_cert_fingerprints": [fp]},
+            }]
+            asset_file = workdir / "assetlinks.json"
+            asset_file.write_text(json.dumps(assetlinks, indent=2))
+            out(f"\n  assetlinks.json generado en {asset_file}")
+            out("  Pegarlo en Ajustes → Aplicación instalable → assetlinks.json del website.")
+            out("  Sin eso la TWA arranca con la barra de URL de Chrome encima.")
+
+        out("\nFalta cargar la versión en Odoo:", "yellow")
+        out(f"  Aplicación móvil → Versiones → nueva: {version_name} / código {version_code},")
+        out("  adjuntar el APK y publicarla. Sin registrarla, quien la instale")
+        out("  reporta una versión que no está en el catálogo y queda sin seguimiento.")
+
+    run_command()
+
+
+if __name__ == "__main__":
+    if os.environ.get("APK_IN_CONTAINER"):
+        container_main()
+    else:
+        argv = sys.argv[1:]
+        if argv and argv[0] == "usb-install":
+            usb_install(argv[1:])
+        else:
+            run_in_container(argv)

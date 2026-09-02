@@ -242,6 +242,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `stop [instance]` | Detiene instancia(s). Si la DB no es usada por otras, también se detiene. |
 | `restart [instance]` | Reinicia instancia(s). |
 | `bash <instance>` | Abre bash (como root) en el contenedor de la instancia. |
+| `shell <instance> <subcomando> ...` | Shell operativo de Odoo contra una instancia: `search`, `read`/`browse`, `count`, `create`, `write`, `unlink`, `method` (llama métodos, incluidos privados) y REPL interactivo (`shell`). Basado en `click-odoo` (ya instalado en las imágenes). Ver `./odoo shell --help`. |
 | `logs [instance]` | Muestra logs en tiempo real. |
 | `list` | Lista contenedores en ejecución. |
 | `remove [instance]` | Elimina contenedores y volúmenes. |
@@ -304,6 +305,71 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 
 En el comando `update`, el selector de bases incluye una opción visible de `all (todas las bases de datos)`.
 
+### `./odoo shell` — Shell operativo de Odoo
+
+Corre operaciones one-shot contra una instancia (y base) usando `click-odoo`
+dentro del contenedor, o abre un REPL interactivo. La instancia es opcional
+(se elige del menú si no se pasa); la base también (se detectan las que
+matchean el `db_filter` de la instancia). Los métodos se llaman por `getattr`,
+así que **también ejecuta métodos privados** (`_prefijados`).
+
+Un ejemplo por subcomando:
+
+```bash
+# REPL interactivo (ipython) en la instancia y base elegidas
+./odoo shell
+
+# REPL contra una instancia/base puntuales
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 shell
+
+# search: registros que matchean un dominio, con campos, límite y orden
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 search \
+    -m res.partner --domain "[['id','>',5]]" --fields "name,id" --limit 10 --order "name asc"
+
+# read / browse: leer registros por id (con '*' trae todos los campos)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 read \
+    -m res.partner -i 10,1 -f "name,email"
+
+# count: cuántos registros matchean un dominio
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 count \
+    -m res.partner --domain "[['id','>',0]]"
+
+# create: crear un registro (devuelve el id)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 create \
+    -m res.partner --values "{'name': 'Cliente de prueba'}"
+
+# write: escribir valores en registros
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 write \
+    -m res.partner -i 10 --values "{'name': 'Nuevo nombre'}"
+
+# unlink: eliminar registros (exige confirmación --yes)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 unlink \
+    -m res.partner -i 10 --yes
+
+# method: llamar un método del modelo sobre registros puntuales (browse)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n _compute_display_name --ids 10,1
+
+# method: llamar un método sobre registros buscados (sin ids = todos; --limit limita)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n _compute_display_name --limit 10 --order "id asc"
+
+# method: pasar argumentos posicionales (-a) y kwargs (-k, formato clave:valor)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n algun_metodo -a "[1,2]" -k "multiplier:3,clave:valor"
+
+# Operaciones que modifican datos: --no-commit hace rollback al final (dry-run)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 --no-commit \
+    write -m res.partner -i 10 --values "{'name': 'Prueba sin persistir'}"
+```
+
+Detalles:
+- Los subcomandos se delegan a `scripts/odoo-shell` (standalone, recibe
+  `--container` y `-d`). Se puede invocar directo si se conoce el contenedor.
+- `--domain`, `--values`, `-a`/`-k` se parsean como literales Python
+  (listas/dicts); `-k` además acepta `clave:valor,clave2:valor2`.
+- Salida en JSON pretty por defecto; `--json` la deja compacta.
+
 ## Scripts auxiliares
 
 En la carpeta `scripts/` se encuentran herramientas de administración. Todos requieren el nombre de instancia como primer argumento:
@@ -326,7 +392,127 @@ scripts/odoo-test <instance> [-d dbname] [-t test_tags] [-i modules]
 
 # Pre-commit on modules
 scripts/precommit <instance> -m <modules>
+
+# Generar el APK/AAB de la app
+./odoo apk <cliente> --domain vendedores.<cliente>.com \
+    --package com.binaural.<cliente>.ventas \
+    --version 1.2.0 --version-code 12000
 ```
+
+### `./odoo apk` — Generar el APK/AAB de la app (Trusted Web Activity)
+
+Empaqueta la PWA de una instancia como APK/AAB de Android a partir de su
+manifest (`https://<dominio>/pwa/manifest.json`), usando Bubblewrap. El
+`version_code` se hornea en el `start_url` del APK: es el mecanismo con el
+que la app reporta la versión instalada de cada vendedor, así que cada
+publicación nueva debe usar un `--version-code` monotónico mayor.
+
+A diferencia del resto, aquí el primer argumento NO es una instancia de
+`instances.json`, sino una etiqueta para el directorio de build.
+
+```bash
+./odoo apk <cliente> --domain vendedores.<cliente>.com \
+    --package com.binaural.<cliente>.ventas \
+    --version 1.2.0 --version-code 12000
+```
+
+**Configuración por archivo `pwa.json`** (raíz del repo, gitignored):
+para no repetir el comando largo, los valores se dejan en `pwa.json`
+(plantilla llena con datos de prueba en `pwa.example.json`) y se invoca
+solo `./odoo apk`. Precedencia: **flag CLI > env `APK_STOREPASS` >
+`pwa.json` > default del script**.
+
+Cada key equivale a un flag (sin guiones):
+
+| Key | Equivale a | Qué va |
+|-----|-----------|--------|
+| `instance` | (argumento) | Etiqueta del directorio de build, p.ej. `maxcam` |
+| `scheme` | `--scheme` | `http` o `https` (por defecto https) |
+| `domain` | `--domain` | Host (o `ip:puerto`) de la app, sin esquema |
+| `package` | `--package` | Package name Android, p.ej. `com.binaural.maxcam.ventas` |
+| `version` | `--version` | Versión visible, p.ej. `1.2.0` |
+| `version_code` | `--version-code` | Entero monotónico (se hornea en el start_url) |
+| `start_path` | `--start-path` | Ruta de arranque (por defecto `/payments`) |
+| `app_name` / `short_name` | `--app-name` / `--short-name` | Nombres del APK (null → los del manifest) |
+| `target_sdk` | `--target-sdk` | targetSdkVersion (null → el de Bubblewrap, hoy 36) |
+| `keystore` | `--keystore` | **Ruta del keystore DENTRO del contenedor** (`/work/...` = `.ignore/apk-build/...` del host; null → `.ignore/apk-build/<instance>/android.keystore`) |
+| `alias` | `--alias` | Alias de la clave (por defecto `app`) |
+| `rebuild` | `--rebuild` | `true` regenera el proyecto Android desde cero |
+| `storepass` | `--storepass` | Contraseña del keystore (preferible en `APK_STOREPASS`) |
+
+Ejemplo (la plantilla `pwa.example.json` trae datos de prueba):
+
+```json
+{
+  "instance": "maxcam",
+  "scheme": "http",
+  "domain": "192.168.1.226:9001",
+  "package": "com.binaural.maxcam.ventas",
+  "version": "0.0.1",
+  "version_code": 1,
+  "start_path": "/payments",
+  "app_name": "Maxcam Ventas",
+  "short_name": "Maxcam",
+  "target_sdk": 36,
+  "keystore": "/work/maxcam/android.keystore",
+  "alias": "app",
+  "rebuild": false,
+  "storepass": "tu-contraseña-del-keystore"
+}
+```
+
+Nota sobre `keystore`: las rutas se resuelven **dentro del contenedor**, donde
+`/work` está montado sobre `.ignore/apk-build/` del host. O sea, la key de
+arriba apunta a `.ignore/apk-build/maxcam/android.keystore` en tu máquina.
+Con `null` (o sin la key) usa esa misma ubicación por defecto.
+
+`--scheme` permite apuntar a instancias locales por HTTP
+(`http://ip:puerto`), aunque Android solo corre una TWA real sobre HTTPS:
+con HTTP el APK abre el sitio en una pestaña de Chrome, no como app
+fullscreen. Los overrides puntuales siguen funcionando:
+
+```bash
+./odoo apk                                    # todo desde pwa.json
+./odoo apk --version 1.1.0 --version-code 11000   # solo subir la versión
+```
+
+**Instalar la APK en un dispositivo por USB** (`./odoo apk usb-install`):
+instala `adb` si falta (macOS: `brew install --cask android-platform-tools`; Linux:
+`apt`/`snap` con sudo), espera el dispositivo autorizado por USB, instala la
+APK generada y abre la app. Si todavía no hay APK (o se pasa `--rebuild`),
+primero la genera.
+
+```bash
+./odoo apk usb-install          # instala la APK de pwa.json en el celular conectado
+./odoo apk usb-install --rebuild   # regenera y reinstala
+```
+
+Requisitos del teléfono: modo desarrollador + Depuración USB activada, cable
+conectado, y aceptar el diálogo "Permitir depuración USB" la primera vez.
+
+**Requisitos: solo Docker.** Todo el toolchain (Node + `@bubblewrap/cli`,
+OpenJDK 17, Android SDK con licencias aceptadas, Python + `click`) vive en
+la imagen que arma `.resources/apk/Dockerfile` (docker-compose en
+`.resources/apk/`). El script levanta el contenedor, ejecuta la build
+adentro y los artefactos quedan en el host vía el volumen montado sobre
+`.ignore/apk-build/`. La primera ejecución baja y construye la imagen
+(varios GB, tarda unos minutos).
+
+Notas:
+- El keystore se genera una sola vez y hay que **RESGUARDARLO**: si se
+  pierde no se puede volver a firmar la app y los usuarios deben
+  desinstalar y reinstalar. Se pasa con `--storepass`, la variable
+  `APK_STOREPASS` o `storepass` en `pwa.json` (se reenvía al contenedor
+  automáticamente). Vive en `.ignore/apk-build/<cliente>/android.keystore`
+  y `keytool` está dentro del contenedor:
+  ```bash
+  docker compose -f .resources/apk/docker-compose.yml run --rm \
+    apk-builder keytool -genkeypair -v -keystore /work/android.keystore -alias app \
+    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=<app>, O=<empresa>, C=VE"
+  ```
+- Al terminar genera `assetlinks.json` (huella SHA-256 del certificado)
+  para pegarlo en Ajustes → Aplicación instalable del sitio; sin eso la
+  TWA arranca con la barra de URL de Chrome encima.
 
 ### `scripts/precommit` — Linting sobre módulos Odoo
 
