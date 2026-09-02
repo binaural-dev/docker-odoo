@@ -15,3 +15,8 @@ services:
       - ../../scripts/odoo-apk:/usr/local/bin/odoo-apk:ro
       # Artefactos (APK, AAB, keystore, assetlinks.json) quedan en el host.
       - ../../.ignore/apk-build:/work
+      # Caché de Gradle persistente: la primera build descarga ~15min; las
+      # siguientes la reusan en vez de volver a bajar el distro + dependencias.
+      - apk-gradle-cache:/root/.gradle
+volumes:
+  apk-gradle-cache:
