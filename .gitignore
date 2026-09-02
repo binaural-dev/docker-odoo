@@ -1,5 +1,6 @@
 .env
 instances.json
+pwa.json
 src
 logs/
 .resources/Dockerfile
@@ -18,7 +19,5 @@ __pycache__
 .ignore
 .DS_Store
 .codegraph
-# Temporales de scripts (restore, builds). Nunca versionar:
-# aca terminan dumps de clientes y claves de firma de APK.
+# Temporales de odoo_restore (odoo-apk usa .ignore/). Nunca versionar.
 .tmp_ignored/
-backups/

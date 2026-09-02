@@ -1,0 +1,16 @@
+{
+  "instance": "maxcam",
+  "scheme": "http",
+  "domain": "192.168.1.226:9001",
+  "package": "com.binaural.maxcam.ventas",
+  "version": "0.0.1",
+  "version_code": 1,
+  "start_path": "/payments",
+  "app_name": "Maxcam Ventas",
+  "short_name": "Maxcam",
+  "target_sdk": 36,
+  "keystore": "/work/maxcam/android.keystore",
+  "alias": "app",
+  "rebuild": false,
+  "storepass": "tu-contraseña-del-keystore"
+}
