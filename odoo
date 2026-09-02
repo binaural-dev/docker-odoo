@@ -1213,6 +1213,14 @@ def prompt_for_test_modules(config, instance):
 def main():
     os.chdir(BASE_PATH)
 
+    # Passthrough directo del subcomando apk: scripts/odoo-apk usa click y
+    # acepta flags que argparse de aca no conoce (--scheme, --rebuild, etc.).
+    # Se delega antes de parsear para que no los rechace.
+    if len(sys.argv) >= 2 and sys.argv[1] == "apk":
+        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-apk")] + sys.argv[2:]
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
     parser = argparse.ArgumentParser(
         description="Multi-instance Odoo Docker management CLI."
     )
@@ -1368,19 +1376,11 @@ def main():
              "uno (test_report.json, coverage.json, test_run.log)."
     )
 
-    # apk
-    apk_p = subparsers.add_parser(
+    # apk: passthrough directo a scripts/odoo-apk antes de argparse (en main()).
+    # El subparser solo queda para listar el comando en el help.
+    subparsers.add_parser(
         "apk",
         help="Genera el APK/AAB de la app (TWA) en un contenedor (toolchain en .resources/apk)",
-        add_help=False,
-    )
-    apk_p.add_argument(
-        "-h", "--help", action="store_true",
-        help="Muestra la ayuda completa de scripts/odoo-apk",
-    )
-    apk_p.add_argument(
-        "args", nargs=argparse.REMAINDER,
-        help="Argumentos para scripts/odoo-apk (ver ./odoo apk --help)",
     )
 
     args = parser.parse_args()
@@ -1472,15 +1472,6 @@ def main():
         if args.b is None:
             args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
         sync(args.r, args.b, show=args.v)
-    elif args.action == "apk":
-        # scripts/odoo-apk es standalone (usa click, no lee instances.json):
-        # se pasan sus argumentos tal cual, sin duplicar sus options en argparse.
-        apk_args = list(args.args)
-        if getattr(args, "help", False):
-            apk_args.insert(0, "--help")
-        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-apk")] + apk_args
-        result = subprocess.run(cmd)
-        sys.exit(result.returncode)
     elif args.action == "test":
         if args.module is None:
             args.module = prompt_for_test_modules(config, args.instance)
