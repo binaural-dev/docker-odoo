@@ -364,13 +364,23 @@ def container_main():
         out("  generando el proyecto Android...")
         run(["bubblewrap", "update", "--skipVersionUpgrade"], workdir, env, quiet=True)
 
+        gradle = workdir / "app" / "build.gradle"
+        text = gradle.read_text()
+
+        # Bubblewrap hornea "https://" + host en el launchUrl (la URL que la
+        # app abre al arrancar). Con scheme http (instancias locales) hay que
+        # corregirlo; si no, la app arranca contra https y falla.
+        updated = re.sub(r'"https://" \+ twaManifest\.hostName',
+                         f'"{scheme}://" + twaManifest.hostName', text)
+        if updated != text:
+            out(f"  launchUrl con scheme {scheme}:// en build.gradle")
+
         if target_sdk:
-            gradle = workdir / "app" / "build.gradle"
-            text = gradle.read_text()
-            text = re.sub(r"targetSdkVersion \d+", f"targetSdkVersion {target_sdk}", text)
-            text = re.sub(r"compileSdkVersion \d+", f"compileSdkVersion {target_sdk}", text)
-            gradle.write_text(text)
+            updated = re.sub(r"targetSdkVersion \d+", f"targetSdkVersion {target_sdk}", updated)
+            updated = re.sub(r"compileSdkVersion \d+", f"compileSdkVersion {target_sdk}", updated)
             out(f"  targetSdkVersion fijado en {target_sdk}")
+
+        gradle.write_text(updated)
 
         out("  compilando (la primera vez Gradle descarga bastante)...")
         env["BUBBLEWRAP_KEYSTORE_PASSWORD"] = storepass
