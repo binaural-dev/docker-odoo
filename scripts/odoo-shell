@@ -1,0 +1,485 @@
+#!/usr/bin/env python3
+"""
+Shell operativo de Odoo contra una instancia Docker.
+
+Corre operaciones one-shot (search/read/count/create/write/unlink/method) o
+abre un shell interactivo dentro del contenedor, usando `click-odoo` (que ya
+viene instalado en las imagenes) como motor: genera un snippet Python y lo
+inyecta por stdin.
+
+Este script NO lee instances.json -- recibe todo por flags. El launcher
+`./odoo shell <instance> <subcomando> ...` resuelve la instancia (y la base)
+y delega aca con --container y -d.
+
+Ejemplos:
+  ./odoo-shell --container odoo-binaural -d db shell
+  ./odoo-shell --container odoo-binaural -d db search -m res.partner --domain "[['id','>',5]]" --fields "name,id"
+  ./odoo-shell --container odoo-binaural -d db method -m res.partner -n _compute_display_name --ids 1,2
+"""
+
+import argparse
+import ast
+import json
+import os
+import subprocess
+import sys
+
+MARKER_RESULT = "__ODOO_SHELL_RESULT__"
+MARKER_ERROR = "__ODOO_SHELL_ERROR__"
+
+SNIPPET_TEMPLATE = """\
+import json
+from ast import literal_eval
+
+_user = {user!r}
+if _user:
+    env = env.with_user(_user)
+
+def _normalize(value):
+    if hasattr(value, "ids"):
+        return value.ids
+    if isinstance(value, dict):
+        return {{k: _normalize(v) for k, v in value.items()}}
+    if isinstance(value, (list, tuple)):
+        return [_normalize(v) for v in value]
+    return value
+
+try:
+    result = {body}
+    print("{marker_result}")
+    print(json.dumps(_normalize(result), default=str))
+except Exception:
+    import traceback
+    import sys
+    print("{marker_error}")
+    print(json.dumps({{"error": traceback.format_exc()}}, default=str))
+    sys.exit(1)
+"""
+
+
+class OdooShellError(Exception):
+    pass
+
+
+def _ensure_container(container):
+    """Guarda: el contenedor Odoo debe existir y estar corriendo."""
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", container],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        raise OdooShellError(
+            f"No se pudo inspeccionar el contenedor '{container}' (docker disponible?)."
+        )
+    if out.returncode != 0 or out.stdout.strip() != "true":
+        raise OdooShellError(
+            f"El contenedor '{container}' no está en ejecución.\n"
+            f"Prueba iniciando la instancia con: ./odoo start"
+        )
+
+
+def _parse_literal(raw, what):
+    """Parsea un literal Python seguro (listas/dicts/valores)."""
+    raw = (raw or "").strip()
+    if not raw:
+        raise OdooShellError(f"'{what}' vacío")
+    try:
+        return ast.literal_eval(raw)
+    except (ValueError, SyntaxError) as exc:
+        raise OdooShellError(f"No se pudo parsear {what}: {raw!r} ({exc})")
+
+
+def _parse_domain(raw):
+    domain = _parse_literal(raw, "--domain")
+    if not isinstance(domain, list):
+        raise OdooShellError("--domain debe ser una lista estilo [[...]] o [...]")
+    return domain
+
+
+def _parse_fields(raw):
+    """'*' -> leer todos los campos; 'a,b,c' -> lista de campos."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    if raw == "*":
+        return []
+    return [f.strip() for f in raw.split(",") if f.strip()]
+
+
+def _parse_ids(raw):
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    ids = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ids.append(int(part))
+        except ValueError:
+            raise OdooShellError(f"id inválido: {part!r}")
+    return ids or None
+
+
+def _parse_kwargs(raw):
+    """Acepta '{...}' (literal dict) o 'k:v,k2:v2'."""
+    raw = (raw or "").strip()
+    if not raw:
+        return {}
+    if raw.startswith("{"):
+        parsed = _parse_literal(raw, "kwargs")
+        if not isinstance(parsed, dict):
+            raise OdooShellError("kwargs debe ser un dict")
+        return parsed
+    kwargs = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if ":" not in pair:
+            raise OdooShellError(f"par de kwargs inválido: {pair!r} (esperado clave:valor)")
+        key, _, value = pair.partition(":")
+        try:
+            kwargs[key.strip()] = ast.literal_eval(value.strip())
+        except (ValueError, SyntaxError):
+            kwargs[key.strip()] = value.strip()
+    return kwargs
+
+
+def _parse_args(raw):
+    """'[1, 2]' -> lista; '1, x' -> lista de valores individuales."""
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        parsed = _parse_literal(raw, "args")
+        if not isinstance(parsed, list):
+            raise OdooShellError("args debe ser una lista")
+        return parsed
+    args = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            args.append(ast.literal_eval(token))
+        except (ValueError, SyntaxError):
+            args.append(token)
+    return args
+
+
+def _build_snippet(body, user):
+    return SNIPPET_TEMPLATE.format(
+        body=body,
+        user=user,
+        marker_result=MARKER_RESULT,
+        marker_error=MARKER_ERROR,
+    )
+
+
+def _run_script(container, db, body, user, rollback):
+    """Corre el snippet via click-odoo por stdin y devuelve el resultado parseado."""
+    _ensure_container(container)
+    snippet = _build_snippet(body, user)
+
+    cmd = [
+        "docker", "exec", "-i", container,
+        "click-odoo", "-d", db, "--log-level=error",
+    ]
+    if rollback:
+        cmd.append("--rollback")
+    cmd.append("--no-interactive")
+
+    proc = subprocess.run(cmd, input=snippet, capture_output=True, text=True)
+
+    if MARKER_ERROR in proc.stdout:
+        payload = proc.stdout.split(MARKER_ERROR, 1)[1].strip()
+        try:
+            data = json.loads(payload)
+            sys.stderr.write(data.get("error", payload))
+        except json.JSONDecodeError:
+            sys.stderr.write(payload)
+        sys.exit(1)
+
+    if MARKER_RESULT in proc.stdout:
+        payload = proc.stdout.split(MARKER_RESULT, 1)[1].strip()
+        try:
+            return json.loads(payload)
+        except json.JSONDecodeError as exc:
+            raise OdooShellError(f"Respuesta inesperada de Odoo: {payload[:300]} ({exc})")
+
+    if proc.returncode != 0:
+        err = proc.stderr.strip() or proc.stdout.strip()
+        raise OdooShellError(f"Fallo ejecutando click-odoo (exit {proc.returncode}):\n{err}")
+    return proc.stdout.strip()
+
+
+def _print_result(data, json_compact):
+    if json_compact:
+        print(json.dumps(data, default=str))
+    else:
+        print(json.dumps(data, indent=2, default=str))
+
+
+def _order_args(order):
+    return f", order={order!r}" if order else ""
+
+
+def _limit_args(limit):
+    return f", limit={int(limit)}" if limit is not None else ""
+
+
+def _search_body(model, domain, fields, limit, order):
+    search = f"env[{model!r}].search({domain!r}{_limit_args(limit)}{_order_args(order)})"
+    if fields is None:
+        return f"{search}.ids"
+    return f"{search}.read({fields!r})"
+
+
+def _cmd_search(container, db, user, rollback, json_compact, model, domain, fields, limit, order):
+    body = _search_body(model, domain, fields, limit, order)
+    _print_result(_run_script(container, db, body, user, rollback), json_compact)
+
+
+def _cmd_read(container, db, user, rollback, json_compact, model, ids, fields):
+    if not ids:
+        raise OdooShellError("--ids es obligatorio para read/browse")
+    body = f"env[{model!r}].browse({ids!r}).read({fields!r})"
+    _print_result(_run_script(container, db, body, user, rollback), json_compact)
+
+
+def _cmd_count(container, db, user, rollback, model, domain):
+    body = f"env[{model!r}].search_count({domain!r})"
+    result = _run_script(container, db, body, user, rollback)
+    print(result if isinstance(result, str) else json.dumps(result))
+
+
+def _cmd_create(container, db, user, rollback, model, values):
+    body = f"env[{model!r}].create({values!r}).id"
+    print(json.dumps(_run_script(container, db, body, user, rollback), default=str))
+
+
+def _cmd_write(container, db, user, rollback, model, ids, values):
+    if not ids:
+        raise OdooShellError("--ids es obligatorio para write")
+    body = f"env[{model!r}].browse({ids!r}).write({values!r})"
+    result = _run_script(container, db, body, user, rollback)
+    print("True" if result is True else json.dumps(result, default=str))
+
+
+def _cmd_unlink(container, db, user, rollback, model, ids, yes):
+    if not ids:
+        raise OdooShellError("--ids es obligatorio para unlink")
+    if not yes:
+        raise OdooShellError(
+            "Operación destructiva: confirmá con --yes (o -y). "
+            "Con --no-commit podés además probar sin persistir."
+        )
+    body = f"env[{model!r}].browse({ids!r}).unlink()"
+    result = _run_script(container, db, body, user, rollback)
+    print("True" if result is True else json.dumps(result, default=str))
+
+
+def _cmd_method(container, db, user, rollback, json_compact, model, name, ids, domain, limit, order, args, kwargs):
+    if ids:
+        if domain or limit is not None or order:
+            print(
+                f"⚠️  Con --ids se ignora --domain/--limit/--order "
+                f"(browse directo de {ids}).",
+                file=sys.stderr,
+            )
+        recs = f"env[{model!r}].browse({ids!r})"
+    else:
+        recs = f"env[{model!r}].search({domain!r}{_limit_args(limit)}{_order_args(order)})"
+    body = f"getattr({recs}, {name!r})(*{args!r}, **{kwargs!r})"
+    _print_result(_run_script(container, db, body, user, rollback), json_compact)
+
+
+def _cmd_shell(container, db, user):
+    """REPL interactivo (ipython) dentro del contenedor."""
+    _ensure_container(container)
+    if user:
+        print(
+            "⚠️  --user se ignora en modo interactivo: adentro del shell usá "
+            "`env = env.with_user('...')` para cambiar de usuario.",
+            file=sys.stderr,
+        )
+    print(f"\n\033[1;34m=== 🐚 ODOO SHELL: {container} (DB: {db}) ===\033[0m\n")
+    os.system(
+        f"docker exec -it {container} click-odoo -d {db} --shell-interface ipython"
+    )
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="odoo-shell",
+        description="Shell operativo de Odoo contra una instancia Docker (usa click-odoo).",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Subcomandos:\n"
+            "  shell                           REPL interactivo (ipython)\n"
+            "  search   -m MODELO [--domain D] [-f CAMPOS] [--limit N] [--order S]\n"
+            "  read     -m MODELO -i IDS [-f CAMPOS]          (alias: browse)\n"
+            "  count    -m MODELO [--domain D]\n"
+            "  create   -m MODELO --values VALS\n"
+            "  write    -m MODELO -i IDS --values VALS\n"
+            "  unlink   -m MODELO -i IDS --yes\n"
+            "  method   -m MODELO -n METODO [-i IDS] [--domain D] [--limit N]\n"
+            "           [--order S] [-a ARGS] [-k KWARGS]\n"
+            "\n"
+            "Ejemplos:\n"
+            "  odoo-shell --container odoo-binaural -d db search -m res.partner \\\n"
+            "      --domain \"[['id','>',5]]\" --fields \"name,id\"\n"
+            "  odoo-shell --container odoo-binaural -d db method -m res.partner \\\n"
+            "      -n _compute_display_name --ids 10,1\n"
+            "  odoo-shell --container odoo-binaural -d db method -m res.partner \\\n"
+            "      -n _compute_display_name --limit 10 --order \"id asc\"\n"
+        ),
+    )
+    parser.add_argument("--container", required=True, help="Nombre del contenedor Odoo (ej: odoo-binaural)")
+    parser.add_argument("-d", "--db", required=True, help="Nombre de la base de datos")
+    parser.add_argument("--user", default=None, help="Login de usuario para correr las operaciones (opcional)")
+    parser.add_argument("--no-commit", action="store_true", help="Rollback al final (no persiste cambios)")
+    parser.add_argument("--json", dest="json_compact", action="store_true", help="Salida JSON compacta (una línea)")
+    parser.add_argument("--version", action="version", version="odoo-shell 1.0")
+
+    sub = parser.add_subparsers(dest="cmd")
+
+    p = sub.add_parser("shell", help="REPL interactivo (ipython) dentro del contenedor")
+    p.set_defaults(func=_cmd_shell)
+
+    p = sub.add_parser("search", help="Buscar registros de un modelo")
+    p.add_argument("-m", "--model", required=True)
+    p.add_argument("--domain", default="[]")
+    p.add_argument("-f", "--fields", default=None)
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--order", default=None)
+    p.set_defaults(func=_cmd_search)
+
+    p = sub.add_parser("read", help="Leer registros por id")
+    p.add_argument("-m", "--model", required=True)
+    p.add_argument("-i", "--ids", required=True)
+    p.add_argument("-f", "--fields", default="*")
+    p.set_defaults(func=_cmd_read)
+
+    p = sub.add_parser("browse", help="Alias de read")
+    p.add_argument("-m", "--model", required=True)
+    p.add_argument("-i", "--ids", required=True)
+    p.add_argument("-f", "--fields", default="*")
+    p.set_defaults(func=_cmd_read)
+
+    p = sub.add_parser("count", help="Contar registros que matchean un dominio")
+    p.add_argument("-m", "--model", required=True)
+    p.add_argument("--domain", default="[]")
+    p.set_defaults(func=_cmd_count)
+
+    p = sub.add_parser("create", help="Crear un registro")
+    p.add_argument("-m", "--model", required=True)
+    p.add_argument("--values", required=True)
+    p.set_defaults(func=_cmd_create)
+
+    p = sub.add_parser("write", help="Escribir valores en registros")
+    p.add_argument("-m", "--model", required=True)
+    p.add_argument("-i", "--ids", required=True)
+    p.add_argument("--values", required=True)
+    p.set_defaults(func=_cmd_write)
+
+    p = sub.add_parser("unlink", help="Eliminar registros")
+    p.add_argument("-m", "--model", required=True)
+    p.add_argument("-i", "--ids", required=True)
+    p.add_argument("-y", "--yes", action="store_true", help="Confirmar la eliminación")
+    p.set_defaults(func=_cmd_unlink)
+
+    p = sub.add_parser("method", help="Llamar un método del modelo sobre registros")
+    p.add_argument("-m", "--model", required=True)
+    p.add_argument("-n", "--name", required=True, help="Nombre del método (puede ser privado, ej. _compute_name)")
+    p.add_argument("-i", "--ids", default=None, help="Registros puntuales (browse). Sin esto se busca.")
+    p.add_argument("--domain", default="[]")
+    p.add_argument("--limit", type=int, default=None)
+    p.add_argument("--order", default=None)
+    p.add_argument("-a", "--args", default=None, help="Argumentos posicionales: '[1, 2]' o '1, x'")
+    p.add_argument("-k", "--kwargs", default=None, help="Kwargs: '{...}' o 'clave:valor,clave2:valor2'")
+    p.set_defaults(func=_cmd_method)
+
+    return parser
+
+
+def main():
+    args = build_parser().parse_args()
+
+    common = {
+        "container": args.container,
+        "db": args.db,
+        "user": args.user,
+        "rollback": args.no_commit,
+    }
+
+    try:
+        if not hasattr(args, "func"):
+            _cmd_shell(container=args.container, db=args.db, user=args.user)
+            return
+
+        if args.cmd == "shell":
+            _cmd_shell(container=args.container, db=args.db, user=args.user)
+        elif args.cmd == "search":
+            _cmd_search(
+                **common,
+                json_compact=args.json_compact,
+                model=args.model,
+                domain=_parse_domain(args.domain),
+                fields=_parse_fields(args.fields),
+                limit=args.limit,
+                order=args.order,
+            )
+        elif args.cmd in ("read", "browse"):
+            _cmd_read(
+                **common,
+                json_compact=args.json_compact,
+                model=args.model,
+                ids=_parse_ids(args.ids),
+                fields=_parse_fields(args.fields),
+            )
+        elif args.cmd == "count":
+            _cmd_count(
+                **common,
+                model=args.model,
+                domain=_parse_domain(args.domain),
+            )
+        elif args.cmd == "create":
+            _cmd_create(**common, model=args.model, values=_parse_kwargs(args.values))
+        elif args.cmd == "write":
+            _cmd_write(
+                **common,
+                model=args.model,
+                ids=_parse_ids(args.ids),
+                values=_parse_kwargs(args.values),
+            )
+        elif args.cmd == "unlink":
+            _cmd_unlink(
+                **common,
+                model=args.model,
+                ids=_parse_ids(args.ids),
+                yes=args.yes,
+            )
+        elif args.cmd == "method":
+            _cmd_method(
+                **common,
+                json_compact=args.json_compact,
+                model=args.model,
+                name=args.name,
+                ids=_parse_ids(args.ids),
+                domain=_parse_domain(args.domain),
+                limit=args.limit,
+                order=args.order,
+                args=_parse_args(args.args),
+                kwargs=_parse_kwargs(args.kwargs),
+            )
+    except OdooShellError as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

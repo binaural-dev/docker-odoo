@@ -844,6 +844,20 @@ def sync(repo_names, branch, show=False):
 # ============================================================
 
 
+def _instance_db_credentials(inst_conf, db_conf):
+    """Credenciales para consultar Postgres de una instancia.
+
+    Prefiere el rol dedicado de la instancia (`db_user`/`db_password` a nivel
+    raiz, el que usa el hardening de 2026-08-15) y cae al rol compartido del
+    servicio como fallback. Sin esto, get_databases()/get_users() fallan en
+    instancias endurecidas: el rol del servicio quedo en NOLOGIN y no puede
+    autenticarse.
+    """
+    db_user = inst_conf.get("db_user") or db_conf["user"]
+    db_password = inst_conf.get("db_password") or db_conf["password"]
+    return db_user, db_password
+
+
 def get_databases(config, instance):
     """Fetch database names from the postgres container of an instance.
 
@@ -857,8 +871,7 @@ def get_databases(config, instance):
         inst_conf = config["instances"][instance]
         db_conf = resolve_db_config(inst_conf, config)
         db_host = get_db_host(inst_conf["database"], db_conf)
-        db_user = db_conf["user"]
-        db_password = db_conf["password"]
+        db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
         db_port = get_db_internal_port(db_conf)
         container = f"odoo-{instance}"
 
@@ -896,8 +909,7 @@ def get_users(config, instance, dbname):
         inst_conf = config["instances"][instance]
         db_conf = resolve_db_config(inst_conf, config)
         db_host = get_db_host(inst_conf["database"], db_conf)
-        db_user = db_conf["user"]
-        db_password = db_conf["password"]
+        db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
         db_port = get_db_internal_port(db_conf)
         container = f"odoo-{instance}"
 
@@ -1139,11 +1151,20 @@ def prompt_selection(options, title, multi=False):
             sys.stdout.write(f"\033[{lines_to_clear}F")
             render_menu()
 
-        # Al salir, limpiar el menú de la pantalla para no ensuciar el log
-        sys.stdout.write(f"\033[{lines_to_clear}A") # Subir al inicio del menú
-        for _ in range(lines_to_clear + 1):
+        # Al salir, limpiar el menú de la pantalla para no ensuciar la salida.
+        # Se limpia TODO el bloque (blank + titulo + grid + ayuda): con
+        # `lines_to_clear` solo se borraba la grid/ayuda y quedaban el blanco
+        # y el titulo colgando encima del resultado del comando siguiente.
+        menu_total = num_rows + 3
+        sys.stdout.write(f"\033[{menu_total}A") # Subir al inicio del menú
+        for _ in range(menu_total):
             sys.stdout.write("\033[K\n") # Limpiar línea y bajar
-        sys.stdout.write(f"\033[{lines_to_clear + 1}F") # Regresar arriba de todo
+        sys.stdout.write(f"\033[{menu_total}F") # Regresar arriba de todo
+        # CRITICO: flush ANTES de devolver. Sin esto las secuencias ANSI
+        # quedan bufferizadas en el stdout de Python y se imprimen DESPUÉS de
+        # la salida del subproceso siguiente (subcomandos shell, update, etc.),
+        # moviendo el cursor sobre ella y "cortando" la salida visible.
+        sys.stdout.flush()
 
     except (Exception, KeyboardInterrupt):
         sys.stdout.write("\n\033[?25hOperación cancelada.\n")
@@ -1249,6 +1270,42 @@ def main():
     # bash
     bash_p = subparsers.add_parser("bash", help="Abre bash en un contenedor Odoo")
     bash_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+
+    # shell
+    shell_p = subparsers.add_parser(
+        "shell",
+        help="Shell operativo de Odoo: search/read/count/create/write/unlink/method "
+             "o REPL interactivo, contra una instancia. Ver ./odoo shell --help",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Subcomandos (delegados a scripts/odoo-shell):\n"
+            "  shell                          REPL interactivo (ipython)\n"
+            "  search   -m MODELO [--domain D] [-f CAMPOS] [--limit N] [--order S]\n"
+            "  read     -m MODELO -i IDS [-f CAMPOS]         (alias: browse)\n"
+            "  count    -m MODELO [--domain D]\n"
+            "  create   -m MODELO --values VALS\n"
+            "  write    -m MODELO -i IDS --values VALS\n"
+            "  unlink   -m MODELO -i IDS --yes\n"
+            "  method   -m MODELO -n METODO [-i IDS] [--domain D] [--limit N]\n"
+            "           [--order S] [-a ARGS] [-k KWARGS]\n"
+            "Ejemplos:\n"
+            "  ./odoo shell\n"
+            "  ./odoo shell search -m res.partner --domain \"[['id','>',5]]\" --fields \"name,id\"\n"
+            "  ./odoo shell method -m res.partner -n _compute_display_name --ids 10,1\n"
+            "  ./odoo shell method -m res.partner -n _compute_display_name --limit 10 --order \"id asc\"\n"
+        ),
+    )
+    shell_p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional, se elige interactivamente). "
+             "Debe ir antes del subcomando.",
+    )
+    shell_p.add_argument("-d", dest="shell_db", default=None, help="Nombre de la base de datos (opcional)")
+    shell_p.add_argument("--user", dest="shell_user", default=None, help="Login de usuario para las operaciones (opcional)")
+    shell_p.add_argument(
+        "args", nargs=argparse.REMAINDER,
+        help="Subcomando y argumentos para scripts/odoo-shell (ver ./odoo shell --help)",
+    )
 
     # logs
     logs_p = subparsers.add_parser("logs", help="Muestra logs en tiempo real")
@@ -1398,7 +1455,7 @@ def main():
 
     actions_with_instance = {
         "start", "stop", "restart", "logs", "remove",
-        "fix-files", "init", "bash", "psql", "pw", "update", "test"
+        "fix-files", "init", "bash", "psql", "pw", "update", "test", "shell"
     }
     
     if args.action in actions_with_instance and getattr(args, "instance", None) is None:
@@ -1415,6 +1472,46 @@ def main():
         restart_odoo(config, args.instance)
     elif args.action == "bash":
         run_bash(config, args.instance)
+    elif args.action == "shell":
+        shell_args = list(args.args)
+        instance = args.instance
+        # El posicional es ambigüo entre "instancia" y el subcomando. Si no es
+        # una instancia conocida, se trata como primer argumento del script.
+        if instance is not None and instance not in config["instances"]:
+            shell_args.insert(0, instance)
+            instance = None
+        if instance is None:
+            instance = prompt_for_instance(config, "shell")
+        # `-d <db>` después de la instancia cae en REMAINDER; se extrae acá
+        # para no volver a preguntar la base (el script también lo acepta).
+        shell_db = args.shell_db
+        filtered_args = []
+        skip_next = False
+        for i, token in enumerate(shell_args):
+            if skip_next:
+                skip_next = False
+                continue
+            if token in ("-d", "--db") and i + 1 < len(shell_args):
+                shell_db = shell_db or shell_args[i + 1]
+                skip_next = True
+                continue
+            if token.startswith("--db=") or token.startswith("-d="):
+                shell_db = shell_db or token.split("=", 1)[1]
+                continue
+            filtered_args.append(token)
+        shell_args = filtered_args
+        if shell_db is None:
+            shell_db = prompt_for_database(config, instance)
+        cmd = [
+            str(Path(BASE_PATH) / "scripts" / "odoo-shell"),
+            "--container", f"odoo-{instance}",
+            "-d", shell_db,
+        ]
+        if args.shell_user:
+            cmd += ["--user", args.shell_user]
+        cmd += shell_args
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
     elif args.action == "logs":
         show_logs(config, args.instance)
     elif args.action == "list":

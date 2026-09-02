@@ -242,6 +242,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `stop [instance]` | Detiene instancia(s). Si la DB no es usada por otras, también se detiene. |
 | `restart [instance]` | Reinicia instancia(s). |
 | `bash <instance>` | Abre bash (como root) en el contenedor de la instancia. |
+| `shell <instance> <subcomando> ...` | Shell operativo de Odoo contra una instancia: `search`, `read`/`browse`, `count`, `create`, `write`, `unlink`, `method` (llama métodos, incluidos privados) y REPL interactivo (`shell`). Basado en `click-odoo` (ya instalado en las imágenes). Ver `./odoo shell --help`. |
 | `logs [instance]` | Muestra logs en tiempo real. |
 | `list` | Lista contenedores en ejecución. |
 | `remove [instance]` | Elimina contenedores y volúmenes. |
@@ -303,6 +304,71 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 ```
 
 En el comando `update`, el selector de bases incluye una opción visible de `all (todas las bases de datos)`.
+
+### `./odoo shell` — Shell operativo de Odoo
+
+Corre operaciones one-shot contra una instancia (y base) usando `click-odoo`
+dentro del contenedor, o abre un REPL interactivo. La instancia es opcional
+(se elige del menú si no se pasa); la base también (se detectan las que
+matchean el `db_filter` de la instancia). Los métodos se llaman por `getattr`,
+así que **también ejecuta métodos privados** (`_prefijados`).
+
+Un ejemplo por subcomando:
+
+```bash
+# REPL interactivo (ipython) en la instancia y base elegidas
+./odoo shell
+
+# REPL contra una instancia/base puntuales
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 shell
+
+# search: registros que matchean un dominio, con campos, límite y orden
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 search \
+    -m res.partner --domain "[['id','>',5]]" --fields "name,id" --limit 10 --order "name asc"
+
+# read / browse: leer registros por id (con '*' trae todos los campos)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 read \
+    -m res.partner -i 10,1 -f "name,email"
+
+# count: cuántos registros matchean un dominio
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 count \
+    -m res.partner --domain "[['id','>',0]]"
+
+# create: crear un registro (devuelve el id)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 create \
+    -m res.partner --values "{'name': 'Cliente de prueba'}"
+
+# write: escribir valores en registros
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 write \
+    -m res.partner -i 10 --values "{'name': 'Nuevo nombre'}"
+
+# unlink: eliminar registros (exige confirmación --yes)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 unlink \
+    -m res.partner -i 10 --yes
+
+# method: llamar un método del modelo sobre registros puntuales (browse)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n _compute_display_name --ids 10,1
+
+# method: llamar un método sobre registros buscados (sin ids = todos; --limit limita)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n _compute_display_name --limit 10 --order "id asc"
+
+# method: pasar argumentos posicionales (-a) y kwargs (-k, formato clave:valor)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n algun_metodo -a "[1,2]" -k "multiplier:3,clave:valor"
+
+# Operaciones que modifican datos: --no-commit hace rollback al final (dry-run)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 --no-commit \
+    write -m res.partner -i 10 --values "{'name': 'Prueba sin persistir'}"
+```
+
+Detalles:
+- Los subcomandos se delegan a `scripts/odoo-shell` (standalone, recibe
+  `--container` y `-d`). Se puede invocar directo si se conoce el contenedor.
+- `--domain`, `--values`, `-a`/`-k` se parsean como literales Python
+  (listas/dicts); `-k` además acepta `clave:valor,clave2:valor2`.
+- Salida en JSON pretty por defecto; `--json` la deja compacta.
 
 ## Scripts auxiliares
 
