@@ -1,5 +1,6 @@
 .env
 instances.json
+pwa.json
 src
 logs/
 .resources/Dockerfile
@@ -17,5 +18,6 @@ __pycache__
 .windsurf/
 .ignore
 .DS_Store
-openspec
 .codegraph
+# Temporales de odoo_restore (odoo-apk usa .ignore/). Nunca versionar.
+.tmp_ignored/

@@ -68,6 +68,8 @@ Define las conexiones a PostgreSQL. `create_container` (default: `true`) control
       "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
+      "bootstrap_user": "odoo_bootstrap",
+      "bootstrap_password": "cambiar-esto",
       "config": "postgresql.conf"
     },
     "external_pg16": {
@@ -86,6 +88,17 @@ Las bases de datos gestionadas (`create_container: true`) **no publican su puert
 
 Si necesitas conectarte a la base de datos desde el host (por ejemplo con un cliente de escritorio), agrega `"expose_host_port": true` para que se publique `port` en `docker-compose.generated.yml`. Para uso normal (`./odoo psql`, `./odoo bash`, backups, restores, pgAdmin) no hace falta: todos corren dentro de los contenedores y usan la red interna.
 
+#### `user`/`password` vs `bootstrap_user`/`bootstrap_password`
+
+Cada base de datos gestionada tiene dos identidades de Postgres:
+
+- **`user`/`password`**: el rol que **Odoo usa para todo**. No es superusuario (tiene `LOGIN` y `CREATEDB`, nada más), aunque sí puede crear/alterar/borrar tablas de módulos vía herencia de privilegios del rol bootstrap. Es el único que debería usarse desde `./odoo psql`, backups, restores, etc.
+- **`bootstrap_user`/`bootstrap_password`**: el rol que Postgres crea automáticamente al inicializar el volumen (`initdb`). Postgres nunca permite quitarle el atributo de superusuario a este rol específico ni reasignarle la propiedad de sus objetos — es una restricción del motor, no de configuración. Por eso no se usa directamente: en un volumen nuevo, el rol de `user` se crea aparte (no-superusuario) heredando los privilegios del bootstrap vía `GRANT`, y el bootstrap queda con `NOLOGIN` — existe porque es dueño de los objetos, pero nadie puede autenticarse con él.
+
+Ambos campos son opcionales: si se omiten, se usa el mismo valor de `user`/`password` para el bootstrap (comportamiento anterior a este esquema, con el rol de Odoo siendo superusuario — no recomendado, pero sigue funcionando para no romper configs existentes).
+
+Existe una **tercera** identidad opcional, a nivel de instancia (no de `databases`): `db_user`/`db_password`, para cuando varias instancias comparten un mismo servicio de Postgres. Ver "Instancias que comparten un mismo servicio de Postgres" más abajo.
+
 ### `instances` — Instancias de Odoo
 
 Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`.
@@ -101,7 +114,8 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
       "overwrite_odoo_config": {
         "workers": 4,
         "addons": ["src/enterprise", "src/custom/bananera"],
-        "db_name": "bananera_prod"
+        "db_name": "bananera_prod",
+        "db_filter": "^bananera_"
       }
     },
     "client-b": {
@@ -116,6 +130,77 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
   }
 }
 ```
+
+`db_filter` es el patrón de regex que Odoo usa en runtime para decidir qué bases de datos le pertenecen (ej. `^bananera_` matcheará `bananera_prod`, `bananera_staging`, etc.), y también lo respeta el CLI de gestión: `./odoo update -d all` para una instancia solo actualiza las bases que matchean su `db_filter`, no todas las del servicio de Postgres que comparte con otras instancias. Si una instancia no define `db_filter` (o es `"*"`), `-d all` sigue trayendo todas las bases del servicio, con una advertencia explícita en pantalla.
+
+⚠️ **Importante**: `db_filter` solo rige el ruteo HTTP (selector de bases en `/web/database/manager`, sesión) y el `-d all` del CLI. **El cron interno de Odoo (`ir.cron`) nunca lo consulta** — es un mecanismo puramente de request web, confirmado leyendo el código fuente real de Odoo 14.0/16.0/17.0/19.0. Si dos instancias comparten un mismo servicio de Postgres, el cron de una puede terminar procesando (y modificando) datos de la base de la OTRA — esto ya pasó en producción una vez. Ver la sección siguiente para el aislamiento real.
+
+### Instancias que comparten un mismo servicio de Postgres
+
+Cuando **más de una** instancia usa el mismo `database` (mismo servicio de Postgres) y alguna de ellas corre cron (`max_cron_threads` distinto de `0`, que es el default), `./odoo` **exige** que cada una de esas instancias tenga, además de un `db_filter` específico:
+
+```json
+{
+  "instances": {
+    "bananera": {
+      "odoo_version": "19.0",
+      "external_port": 8070,
+      "database": "pg16",
+      "odoo_config": "19.0_default",
+      "db_user": "app_bananera",
+      "db_password": "<password dedicado>",
+      "overwrite_odoo_config": {
+        "db_filter": "^bananera_"
+      }
+    }
+  }
+}
+```
+
+`db_user`/`db_password` van en la **raíz** de la instancia (hermano de `database`/`overwrite_odoo_config`), no dentro de `overwrite_odoo_config`. Son las credenciales de un rol de Postgres **dedicado a esa instancia**, dueño únicamente de sus propias bases — es la protección real contra el problema del cron descrito arriba: cada rol solo ve/puede tocar lo suyo (`list_dbs()` de Odoo ya filtra por `datdba = current_user`), y además se revoca `CONNECT` de `PUBLIC` sobre esas bases, así que ni siquiera una conexión directa con otro rol puede abrirlas.
+
+Si falta cualquiera de los dos requisitos (`db_filter` específico o `db_user`/`db_password`) en alguna instancia de un grupo así, **cualquier comando `./odoo` falla de entrada** con un error detallado listando qué instancia(s) y qué les falta. Escape hatch legítimo: poner `"max_cron_threads": 0` explícito en `overwrite_odoo_config` para una instancia que de verdad no necesita cron (por ejemplo, una copia de solo lectura) — deja constancia de que es intencional, no un olvido.
+
+La validación también exige que `db_user` sea **realmente distinto** entre instancias del mismo grupo, y distinto del rol de servicio compartido (`databases.<nombre>.user`) — si dos instancias apuntan al mismo `db_user` (por ejemplo, copiando una instancia y olvidando cambiarlo), Postgres ve un solo rol dueño de la unión de bases de ambas, y el aislamiento no existe aunque cada una tenga su `db_filter` "propio". Este chequeo aplica siempre, incluso si una de las dos tiene `max_cron_threads: 0` — el problema es de identidad de rol, no de cron.
+
+**Cómo aplicar credenciales nuevas a una instancia que ya tiene bases de datos creadas:**
+
+```bash
+# 1. Agregar db_user/db_password (raíz de la instancia) y un db_filter específico
+#    (overwrite_odoo_config) en instances.json
+
+# 2. Aprovisionar: crea el rol si no existe, transfiere el ownership de toda
+#    base que matchee el db_filter, y revoca CONNECT de PUBLIC sobre ellas
+./odoo provision-role bananera
+
+# 3. Regenerar compose y recrear el contenedor para que use las credenciales nuevas
+./odoo build
+docker compose -f docker-compose.generated.yml up -d --no-deps odoo-bananera
+```
+
+`provision-role` puede requerir una ventana breve de mantenimiento de **todo** el servicio de Postgres (no solo de esa instancia) si el rol bootstrap del servicio está en `NOLOGIN` (lo normal) — el comando lo maneja solo y pide confirmación explícita antes de tocar nada.
+
+⚠️ Cambiar `db_filter` en `instances.json` **no** re-dispara nada de esto automáticamente — ver la auditoría a continuación.
+
+### Auditoría automática: `db_filter` vs. ownership real
+
+Cada `./odoo build` corre, además de generar la configuración, una auditoría de solo lectura que compara el `db_filter` de cada instancia contra el estado real en Postgres (nunca modifica nada) y avisa si encuentra:
+
+- Una base que matchea el `db_filter` de una instancia pero pertenece a otro rol (falta correr `provision-role`).
+- Una base ya del rol correcto, pero con `CONNECT` de `PUBLIC` todavía sin revocar.
+- Una base que dejó de matchear el `db_filter` actual de la instancia dueña (el filtro cambió después de aprovisionar — revisar si es intencional).
+- Una base que matchea el `db_filter` de **más de una** instancia a la vez (regex solapados — riesgo real: correr `provision-role` en ese estado puede robarle la base a la instancia que ya la tenía).
+
+No bloquea el build — solo informa, con el comando exacto a correr para resolver cada aviso.
+
+**Corrección automática (solo para los avisos sin ambigüedad):** cuando la auditoría detecta bases con dueño incorrecto o con `CONNECT` sin revocar (los primeros dos casos de la lista), `./odoo build` pregunta al final si querés correr `provision-role` para esas instancias ahora mismo (agrupando por servicio de Postgres, igual que una migración manual). Los otros dos casos (filtro que cambió, filtros solapados) **nunca** se ofrecen para autocorrección — son ambiguos y requieren revisión humana antes de tocar ownership.
+
+```
+2 instancia(s) con diferencias que 'provision-role' puede corregir automaticamente: inst_a, inst_b
+¿Correr 'provision-role' para todas ellas ahora? [y/N]:
+```
+
+Para correr `./odoo build` en un contexto no interactivo (CI, automatización), usá `--no-confirm`: se salta esta pregunta (y cualquier otra sin entrada de teclado) sin corregir nada automáticamente, dejando el aviso igual en pantalla para que alguien lo resuelva a mano después.
 
 ### `pgadmin` (opcional)
 
@@ -152,20 +237,22 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 
 | Comando | Descripción |
 |---------|-------------|
-| `build [--no-cache]` | Genera Dockerfiles, docker-compose y nginx config. Construye imágenes. |
+| `build [--no-cache] [--no-confirm]` | Genera Dockerfiles, docker-compose y nginx config. Audita `db_filter` vs. ownership real y ofrece corregirlo (ver más abajo). Construye imágenes. `--no-confirm` salta esa pregunta para uso en CI/automatización. |
 | `start [instance]` | Inicia instancia(s), DB(s) managed y nginx. |
 | `stop [instance]` | Detiene instancia(s). Si la DB no es usada por otras, también se detiene. |
 | `restart [instance]` | Reinicia instancia(s). |
 | `bash <instance>` | Abre bash (como root) en el contenedor de la instancia. |
+| `shell <instance> <subcomando> ...` | Shell operativo de Odoo contra una instancia: `search`, `read`/`browse`, `count`, `create`, `write`, `unlink`, `method` (llama métodos, incluidos privados) y REPL interactivo (`shell`). Basado en `click-odoo` (ya instalado en las imágenes). Ver `./odoo shell --help`. |
 | `logs [instance]` | Muestra logs en tiempo real. |
 | `list` | Lista contenedores en ejecución. |
 | `remove [instance]` | Elimina contenedores y volúmenes. |
 | `fix-files [instance]` | Corrige permisos del filestore. |
 | `psql <instance> -d <db>` | Conecta a PostgreSQL. |
-| `update <instance> [-d <db\|all>] [-m modules]` | Actualiza módulos de Odoo (una base o todas). |
+| `update <instance> [-d <db\|all>] [-m modules] [-f]` | Actualiza módulos de Odoo (una base o todas). Sin `-m`, actualiza todos los módulos usando `click-odoo-update` (solo los que cambiaron desde la última actualización); con `-f`/`--force` fuerza un upgrade completo de todos, sin importar qué cambió. Un módulo puntual (`-m modulo`) siempre se actualiza directo, sin pasar por ninguno de los dos caminos anteriores. |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
+| `provision-role <instance>` | Aprovisiona el rol de Postgres dedicado de una instancia: crea el rol si no existe, transfiere el ownership de toda base que matchee su `db_filter`, y revoca `CONNECT` de `PUBLIC` sobre ellas. Requiere `db_user`/`db_password` y un `db_filter` específico ya definidos en `instances.json`. Puede pedir una ventana breve de mantenimiento de todo el servicio de Postgres (pide confirmación antes). Ver "Instancias que comparten un mismo servicio de Postgres" arriba. |
 
 ### Ejemplos
 
@@ -194,8 +281,11 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 # Actualizar módulos
 ./odoo update bananera -d bananera_prod -m sale,purchase
 
-# Actualizar todas las bases de datos de una instancia
+# Actualizar todas las bases de datos de una instancia (solo lo que cambio, via click-odoo-update)
 ./odoo update bananera -d all
+
+# Forzar un upgrade completo de todos los modulos, sin importar que cambio
+./odoo update bananera -d all -f
 
 # Correr tests con cobertura de un modulo
 ./odoo test bananera sale_extension
@@ -208,9 +298,77 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 
 # Reiniciar todo
 ./odoo restart
+
+# Aprovisionar el rol dedicado de una instancia (ver seccion de instances.json)
+./odoo provision-role bananera
 ```
 
 En el comando `update`, el selector de bases incluye una opción visible de `all (todas las bases de datos)`.
+
+### `./odoo shell` — Shell operativo de Odoo
+
+Corre operaciones one-shot contra una instancia (y base) usando `click-odoo`
+dentro del contenedor, o abre un REPL interactivo. La instancia es opcional
+(se elige del menú si no se pasa); la base también (se detectan las que
+matchean el `db_filter` de la instancia). Los métodos se llaman por `getattr`,
+así que **también ejecuta métodos privados** (`_prefijados`).
+
+Un ejemplo por subcomando:
+
+```bash
+# REPL interactivo (ipython) en la instancia y base elegidas
+./odoo shell
+
+# REPL contra una instancia/base puntuales
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 shell
+
+# search: registros que matchean un dominio, con campos, límite y orden
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 search \
+    -m res.partner --domain "[['id','>',5]]" --fields "name,id" --limit 10 --order "name asc"
+
+# read / browse: leer registros por id (con '*' trae todos los campos)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 read \
+    -m res.partner -i 10,1 -f "name,email"
+
+# count: cuántos registros matchean un dominio
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 count \
+    -m res.partner --domain "[['id','>',0]]"
+
+# create: crear un registro (devuelve el id)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 create \
+    -m res.partner --values "{'name': 'Cliente de prueba'}"
+
+# write: escribir valores en registros
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 write \
+    -m res.partner -i 10 --values "{'name': 'Nuevo nombre'}"
+
+# unlink: eliminar registros (exige confirmación --yes)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 unlink \
+    -m res.partner -i 10 --yes
+
+# method: llamar un método del modelo sobre registros puntuales (browse)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n _compute_display_name --ids 10,1
+
+# method: llamar un método sobre registros buscados (sin ids = todos; --limit limita)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n _compute_display_name --limit 10 --order "id asc"
+
+# method: pasar argumentos posicionales (-a) y kwargs (-k, formato clave:valor)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 method \
+    -m res.partner -n algun_metodo -a "[1,2]" -k "multiplier:3,clave:valor"
+
+# Operaciones que modifican datos: --no-commit hace rollback al final (dry-run)
+./odoo shell binaural -d binaural-dev-binaural-release-10413381 --no-commit \
+    write -m res.partner -i 10 --values "{'name': 'Prueba sin persistir'}"
+```
+
+Detalles:
+- Los subcomandos se delegan a `scripts/odoo-shell` (standalone, recibe
+  `--container` y `-d`). Se puede invocar directo si se conoce el contenedor.
+- `--domain`, `--values`, `-a`/`-k` se parsean como literales Python
+  (listas/dicts); `-k` además acepta `clave:valor,clave2:valor2`.
+- Salida en JSON pretty por defecto; `--json` la deja compacta.
 
 ## Scripts auxiliares
 
@@ -234,7 +392,127 @@ scripts/odoo-test <instance> [-d dbname] [-t test_tags] [-i modules]
 
 # Pre-commit on modules
 scripts/precommit <instance> -m <modules>
+
+# Generar el APK/AAB de la app
+./odoo apk <cliente> --domain vendedores.<cliente>.com \
+    --package com.binaural.<cliente>.ventas \
+    --version 1.2.0 --version-code 12000
 ```
+
+### `./odoo apk` — Generar el APK/AAB de la app (Trusted Web Activity)
+
+Empaqueta la PWA de una instancia como APK/AAB de Android a partir de su
+manifest (`https://<dominio>/pwa/manifest.json`), usando Bubblewrap. El
+`version_code` se hornea en el `start_url` del APK: es el mecanismo con el
+que la app reporta la versión instalada de cada vendedor, así que cada
+publicación nueva debe usar un `--version-code` monotónico mayor.
+
+A diferencia del resto, aquí el primer argumento NO es una instancia de
+`instances.json`, sino una etiqueta para el directorio de build.
+
+```bash
+./odoo apk <cliente> --domain vendedores.<cliente>.com \
+    --package com.binaural.<cliente>.ventas \
+    --version 1.2.0 --version-code 12000
+```
+
+**Configuración por archivo `pwa.json`** (raíz del repo, gitignored):
+para no repetir el comando largo, los valores se dejan en `pwa.json`
+(plantilla llena con datos de prueba en `pwa.example.json`) y se invoca
+solo `./odoo apk`. Precedencia: **flag CLI > env `APK_STOREPASS` >
+`pwa.json` > default del script**.
+
+Cada key equivale a un flag (sin guiones):
+
+| Key | Equivale a | Qué va |
+|-----|-----------|--------|
+| `instance` | (argumento) | Etiqueta del directorio de build, p.ej. `maxcam` |
+| `scheme` | `--scheme` | `http` o `https` (por defecto https) |
+| `domain` | `--domain` | Host (o `ip:puerto`) de la app, sin esquema |
+| `package` | `--package` | Package name Android, p.ej. `com.binaural.maxcam.ventas` |
+| `version` | `--version` | Versión visible, p.ej. `1.2.0` |
+| `version_code` | `--version-code` | Entero monotónico (se hornea en el start_url) |
+| `start_path` | `--start-path` | Ruta de arranque (por defecto `/payments`) |
+| `app_name` / `short_name` | `--app-name` / `--short-name` | Nombres del APK (null → los del manifest) |
+| `target_sdk` | `--target-sdk` | targetSdkVersion (null → el de Bubblewrap, hoy 36) |
+| `keystore` | `--keystore` | **Ruta del keystore DENTRO del contenedor** (`/work/...` = `.ignore/apk-build/...` del host; null → `.ignore/apk-build/<instance>/android.keystore`) |
+| `alias` | `--alias` | Alias de la clave (por defecto `app`) |
+| `rebuild` | `--rebuild` | `true` regenera el proyecto Android desde cero |
+| `storepass` | `--storepass` | Contraseña del keystore (preferible en `APK_STOREPASS`) |
+
+Ejemplo (la plantilla `pwa.example.json` trae datos de prueba):
+
+```json
+{
+  "instance": "maxcam",
+  "scheme": "http",
+  "domain": "192.168.1.226:9001",
+  "package": "com.binaural.maxcam.ventas",
+  "version": "0.0.1",
+  "version_code": 1,
+  "start_path": "/payments",
+  "app_name": "Maxcam Ventas",
+  "short_name": "Maxcam",
+  "target_sdk": 36,
+  "keystore": "/work/maxcam/android.keystore",
+  "alias": "app",
+  "rebuild": false,
+  "storepass": "tu-contraseña-del-keystore"
+}
+```
+
+Nota sobre `keystore`: las rutas se resuelven **dentro del contenedor**, donde
+`/work` está montado sobre `.ignore/apk-build/` del host. O sea, la key de
+arriba apunta a `.ignore/apk-build/maxcam/android.keystore` en tu máquina.
+Con `null` (o sin la key) usa esa misma ubicación por defecto.
+
+`--scheme` permite apuntar a instancias locales por HTTP
+(`http://ip:puerto`), aunque Android solo corre una TWA real sobre HTTPS:
+con HTTP el APK abre el sitio en una pestaña de Chrome, no como app
+fullscreen. Los overrides puntuales siguen funcionando:
+
+```bash
+./odoo apk                                    # todo desde pwa.json
+./odoo apk --version 1.1.0 --version-code 11000   # solo subir la versión
+```
+
+**Instalar la APK en un dispositivo por USB** (`./odoo apk usb-install`):
+instala `adb` si falta (macOS: `brew install --cask android-platform-tools`; Linux:
+`apt`/`snap` con sudo), espera el dispositivo autorizado por USB, instala la
+APK generada y abre la app. Si todavía no hay APK (o se pasa `--rebuild`),
+primero la genera.
+
+```bash
+./odoo apk usb-install          # instala la APK de pwa.json en el celular conectado
+./odoo apk usb-install --rebuild   # regenera y reinstala
+```
+
+Requisitos del teléfono: modo desarrollador + Depuración USB activada, cable
+conectado, y aceptar el diálogo "Permitir depuración USB" la primera vez.
+
+**Requisitos: solo Docker.** Todo el toolchain (Node + `@bubblewrap/cli`,
+OpenJDK 17, Android SDK con licencias aceptadas, Python + `click`) vive en
+la imagen que arma `.resources/apk/Dockerfile` (docker-compose en
+`.resources/apk/`). El script levanta el contenedor, ejecuta la build
+adentro y los artefactos quedan en el host vía el volumen montado sobre
+`.ignore/apk-build/`. La primera ejecución baja y construye la imagen
+(varios GB, tarda unos minutos).
+
+Notas:
+- El keystore se genera una sola vez y hay que **RESGUARDARLO**: si se
+  pierde no se puede volver a firmar la app y los usuarios deben
+  desinstalar y reinstalar. Se pasa con `--storepass`, la variable
+  `APK_STOREPASS` o `storepass` en `pwa.json` (se reenvía al contenedor
+  automáticamente). Vive en `.ignore/apk-build/<cliente>/android.keystore`
+  y `keytool` está dentro del contenedor:
+  ```bash
+  docker compose -f .resources/apk/docker-compose.yml run --rm \
+    apk-builder keytool -genkeypair -v -keystore /work/android.keystore -alias app \
+    -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=<app>, O=<empresa>, C=VE"
+  ```
+- Al terminar genera `assetlinks.json` (huella SHA-256 del certificado)
+  para pegarlo en Ajustes → Aplicación instalable del sitio; sin eso la
+  TWA arranca con la barra de URL de Chrome encima.
 
 ### `scripts/precommit` — Linting sobre módulos Odoo
 
