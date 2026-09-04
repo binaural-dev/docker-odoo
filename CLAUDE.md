@@ -10,7 +10,7 @@ sharing a common pool of addon repos, generated into Docker Compose via Python g
 
 **Before doing anything else, read the two authoritative rules files — do not duplicate their content here:**
 - `/home/binlp011/sources/docker-multi/AGENTS.md` — repo-root rules: workspace structure, skill inventory summary,
-  Docker instance docs, ~83 numbered "Reglas Clave" (versioning, module-reuse search order, JS `_t()` conventions,
+  Docker instance docs, ~184 numbered "Reglas Clave" (versioning, module-reuse search order, JS `_t()` conventions,
   `warehouse_id` context, `float_compare`, recordset safety), **FIX-032 to FIX-057** paired code-review lessons
   (17.0/19.0), **core-modification guardrails** (never edit `odoo-*.0/` or `enterprise-*.0/`, enforced by CI
   git-diff check), MCP server docs, multi-currency/l10n_ve rules, compute-cache/xpath rules. The tail of the file
@@ -76,6 +76,7 @@ via the `INSTANCE_ADDONS` env var.
 - `src/comandos_tests_farming.txt` is a manual command cookbook for `binaural_farming*` modules; it itself
   recommends using `scripts/run_tests.sh` instead of copy-pasting from it. `--http-tests` has a known caveat of
   3 expected `at_install` HttpCase failures.
+- **Higiene de bases de datos**: el clúster Postgres (`db-pg16`) es compartido entre casi todas las instancias y contiene bases reales de otros clientes junto a las de test — ver AGENTS.md regla 139 antes de borrar cualquier base.
 
 ## Linting / pre-commit
 
@@ -106,7 +107,7 @@ Codebase Memory section — connect to them rather than re-implementing equivale
   back to `grep`/`glob` only for: literal strings/error messages, non-code files (Dockerfiles, shell scripts,
   configs), or when the MCP tools return insufficient results.
 - **`postgres-db`** — `scripts/mcp_servers/postgres_server.py`, connects to `postgresql://odoo:odoo@localhost:5432/postgres`,
-  read-only (`MCP_ALLOW_WRITE=false`). Tools: query/execute/list_databases/list_tables/describe_table/search_tables/explain.
+  read-only (`MCP_ALLOW_WRITE=false`). Tools: query/execute/list_databases/list_tables/describe_table/search_tables/explain. Nota: si el contenedor `db-pg16` no publica el puerto 5432 al host (`docker port db-pg16` vacío), este MCP no puede conectar — ver AGENTS.md regla 188 y skill `postgresql-db-work` para el fallback (`docker exec db-pg16 psql`) y para escrituras vía ORM (`odoo shell`).
 - **`openrag`** — proxies to an externally-run RAG stack (Ollama, OpenSearch, Langflow, Docling Serve — none of
   which are started by `./odoo`; see AGENTS.md's "Stack Tercerizado" notes) for semantic search. Also hosts the
   long-tail skill catalog — see "Skills: where to look" below.
@@ -116,19 +117,33 @@ Don't confuse these with the unrelated Odoo addon module named `mcp_server` foun
 
 ## Skills: where to look
 
-`~/.claude/skills` intentionally holds only the ~70 highest-frequency skills (Binaural/Odoo-19 project skills,
-SDD multi-agent skills, and the `*-master-reference`/`*-core-guardrails`/`oca-1{7,9}-index` synthesis skills) —
-these auto-discover normally. The other **614 skills** (deep versioned 17.0/19.0 catalogs — including two full
-PostgreSQL/BD deep-dive series, one per Odoo version (`odoo-db-*-17.0` and `odoo-db-*-19.0`, ~20 skills each) —
-OCA phase skills F0-VIII, per-module view-pattern analyses like `account-a/b/c-mods-*` and
-`sale-subscription-views-*`, and generic non-Odoo patterns like React/Angular/AWS) were deliberately moved out
-of the always-loaded skill listing and into `openrag`'s `documents` OpenSearch index (filenames prefixed
-`odoo-skills/<name>.md`) to avoid an ~8-15K token/turn recurring cost from listing all ~684 skills every turn.
-New skill batches should follow the same one-by-one ingestion pattern (see `openrag`'s ingestion notes below)
-rather than being added to `~/.claude/skills` directly, unless they're core/high-frequency enough to earn a
-spot in the ~70-skill kept set. `odoo-combo-product-validation-19.0` (2026-08-03, combo-product tax-validation
-bug class) earned a core spot: it's a cross-module recurring pattern referenced from `odoo-code-review-19.0`
-(FIX-059) and `l10n-ve-accountant`, likely to recur on any future PR touching `taxes_id`/`supplier_taxes_id`.
+**Current state (verified 2026-08-11) diverges from the original design below**: `skill-sync-daemon.sh`
+currently symlinks ALL 5 sources unconditionally (project, 17.0, 19.0, 16.0, global — ~807 skills total,
+including ~324 versioned 17.0/19.0/16.0 catalogs) into `~/.claude/skills`, with no exclusion mechanism.
+The curation described in the rest of this section — a small always-loaded kept set plus a long-tail
+ingested only into OpenRAG — is **not actually enforced today**; it remains the intended target design
+(and still describes correctly which skills the OpenRAG `odoo-skills-long-tail` filter covers), but
+`~/.claude/skills` is not currently pruned to match it. Fixing the daemon/pruning is a separate
+infrastructure task, not something to assume has already happened. See AGENTS.md rule 125 for the
+verified-current daemon behavior.
+
+Original/intended design: `~/.claude/skills` should hold only the ~70 highest-frequency skills
+(Binaural/Odoo-19 project skills, SDD multi-agent skills, and the
+`*-master-reference`/`*-core-guardrails`/`oca-1{7,9}-index` synthesis skills) that auto-discover normally.
+The other ~614+ skills (deep versioned 17.0/19.0 catalogs — including two full PostgreSQL/BD deep-dive
+series, one per Odoo version (`odoo-db-*-17.0` and `odoo-db-*-19.0`, ~20 skills each) — OCA phase skills
+F0-VIII, per-module view-pattern analyses like `account-a/b/c-mods-*` and `sale-subscription-views-*`, and
+generic non-Odoo patterns like React/Angular/AWS) are meant to live only in `openrag`'s `documents`
+OpenSearch index (filenames prefixed `odoo-skills/<name>.md`) to avoid an ~8-15K token/turn recurring cost
+from listing hundreds of skills every turn. New skill batches should still follow the same one-by-one
+ingestion pattern (see `openrag`'s ingestion notes below) rather than being added to `~/.claude/skills`
+directly, unless they're core/high-frequency enough to earn a spot in the kept set — and unversioned
+project skills (`src/.opencode/skills/`) and global skills (`~/.config/opencode/skills/`) are, by daemon
+design, always in the kept set regardless of frequency (e.g. `binaural-docker-odoo`,
+`binaural-submodule-maintenance-merge`). `odoo-combo-product-validation-19.0` (2026-08-03, combo-product
+tax-validation bug class) earned a core spot: it's a cross-module recurring pattern referenced from
+`odoo-code-review-19.0` (FIX-059) and `l10n-ve-accountant`, likely to recur on any future PR touching
+`taxes_id`/`supplier_taxes_id`.
 
 **Before assuming a very specific skill doesn't exist, search for it with `mcp__openrag__openrag_search`** —
 a knowledge filter named `odoo-skills-long-tail` (id `94ecfff6-a584-4772-a8df-cdae572ad5e2`) scopes searches to
@@ -139,6 +154,39 @@ field the stock `~/openrag/scripts/ingest_document.py` naively computes for `EMB
 (`chunk_embedding_nomic_embed_text`, which is mistakenly mapped as a plain `float`, not `knn_vector`, in this
 index) — and documents need `owner_email`/`connector_type`/`allowed_users`/`allowed_groups` fields matching the
 "anonymous/local" shape or the backend's search silently excludes them.
+
+## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
+
+`src/sudolang-cache-engine/` (git submodule) is a local Claude Code plugin with authoring guidance for
+cache-friendly agent system prompts and `Task()`/dispatch handoffs — Frente Estable/Fondo Volátil
+templates, stigmergic file-based coordination (`rules/stigmergic-coordination.sudo.md`), progressive
+disclosure (`rules/progressive-disclosure.sudo.md`), fork-agent usage
+(`rules/fork-agent-patterns.sudo.md`), and corrected TTL/append-only mechanics
+(`rules/ttl-management.sudo.md`) — see `src/Agents.md`'s "Plugin local: `sudolang-cache-engine`" section
+for the full component table and AGENTS.md rule 155 for how it's applied to the SDD delegations
+(`sdd-builder`→`binaural-fn-programador:senior-dev`, `sdd-qc`→`binaural-fn-programador:code-reviewer`,
+both now using a fixed `Context {}` block instead of free prose).
+
+**Two copies exist — keep them in sync manually.** The repo submodule at `src/sudolang-cache-engine/` is
+the source of truth for editing, but Claude Code actually loads plugin content from an installed copy at
+`~/.claude/plugins/cache/local/sudolang-cache-engine/1.0.0/` (a real copy, not a symlink — confirmed via
+`readlink -f`, which resolves to itself). Editing only the submodule has **no runtime effect**: verified
+2026-08-24 by invoking the `sudolang-cache-engine:cache-engine` skill right after editing
+`skills/cache-engine/SKILL.md` in the submodule — it returned the stale pre-edit content. Fix: after
+editing anything under `src/sudolang-cache-engine/{agents,commands,rules,skills}/`, `settings.json`, or
+`.claude-plugin/plugin.json`, copy those same paths over the installed copy (`cp -r`; no `claude plugin
+update`-style command was found that does this automatically) before relying on the change taking effect
+in a Claude Code session.
+
+## SDD delegation: optional tmux job viewer
+
+`scripts/sdd_opencode_view.sh` opens a separate OS terminal window attached to a delegated OpenCode
+job's detached tmux session (the one `scripts/sdd_opencode_run.sh` creates) — useful to watch the
+agent work live without taking over the terminal running Claude Code. The emulator is configurable
+(`SDD_TMUX_TERMINAL=<binary>` to force one, otherwise autodetected from PATH), and auto-opening on
+dispatch is opt-in only (`SDD_TMUX_AUTO_VIEW=1`, unset by default so headless/CI dispatches are
+unaffected). See AGENTS.md rule 156 for the `tee`-vs-`>` pipe detail that makes the pane's output
+actually visible live, and skill `sdd-opencode-delegate-agent` for the full error-handling table.
 
 ## LSP: odoo-lsp
 
@@ -151,3 +199,13 @@ project's existing `src/.odoo_lsp` config for addon-path roots (`odoo-19.0`, `en
 that file doesn't need to change. `odoo-lsp` itself has no standalone CLI diagnostics mode (only
 `init`/`tsconfig`/`self-update` subcommands plus the bare stdio LSP server), so this plugin registration is the
 only way to get its diagnostics into Claude Code.
+
+**Falsos positivos conocidos (confirmados 2026-08-21)**: el diagnóstico puede marcar
+`"<modelo> is not a valid model name"` o `"Model '<modelo>' has no property '<campo>'"` para
+modelos/campos que SÍ existen pero viven en `enterprise-17.0`/`enterprise-19.0` o en addons
+`l10n_ve_*` que el índice local de `odoo-lsp` no alcanza a resolver completamente (ej.
+`sale.subscription.pricing` de `enterprise-17.0/sale_subscription`, o
+`res.company.currency_foreign_id` de `odoo-venezuela-17.0/l10n_ve_rate`). Antes de "corregir" código
+que ya funciona en runtime por un error de este tipo, confirmar con
+`grep -rn "_name = '<modelo>'"` en el addon-pool correspondiente — si el modelo/campo existe en el
+código fuente real, es un hueco del índice del LSP, no un bug.

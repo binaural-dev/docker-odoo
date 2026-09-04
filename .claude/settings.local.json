@@ -20,7 +20,16 @@
       "Bash(bash -n ~/.claude/skills/claude-dcp/hooks/track-usage.sh)",
       "mcp__postgres-db__list_databases",
       "Bash(docker exec *)",
-      "Bash(docker cp *)"
+      "Bash(docker cp *)",
+      "mcp__postgres-db__query",
+      "mcp__plugin_core_odoo__search_records",
+      "mcp__plugin_core_odoo__get_record",
+      "mcp__plugin_core_odoo__list_models",
+      "mcp__plugin_core_onyx__search_indexed_documents",
+      "mcp__claude_ai_Binaural_MCP__get_record",
+      "mcp__claude_ai_Binaural_MCP__ping",
+      "mcp__claude_ai_Binaural_MCP__search_records",
+      "Bash(mkdir -p /tmp/claude-1000/-home-binlp011-sources-docker-multi/2520ad3c-5e86-470c-afc1-ba0bf3196357/scratchpad/docchunks)"
     ]
   }
 }
