@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # sdd_opencode_cleanup.sh — reap stale SDD OpenCode jobs.
 #
-# Kills orphaned tmux sessions on the SDD socket and prunes /tmp/sdd-jobs/*
-# directories older than the TTL. Cheap and safe to run at the start of every
+# Kills orphaned tmux sessions on the SDD socket and prunes stale job
+# directories (src/.sdd/logs/jobs/*, overridable via SDD_LOG_ROOT) older
+# than the TTL. metrics.jsonl lives one level up and is never touched here. Cheap and safe to run at the start of every
 # sdd-lead Modo Delegación run — this repo has one job type and one workdir,
 # so unlike swarm-forge's per-role watchdog there is nothing to reconcile
 # beyond "is this job dir/session older than the TTL".
@@ -14,7 +15,9 @@
 set -euo pipefail
 
 TMUX_SOCKET="/tmp/sdd-tmux/sdd.sock"
-JOBS_DIR="/tmp/sdd-jobs"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SDD_LOG_ROOT="${SDD_LOG_ROOT:-$REPO_ROOT/src/.sdd/logs}"
+JOBS_DIR="$SDD_LOG_ROOT/jobs"
 TTL_HOURS=6
 REAP_ALL=0
 

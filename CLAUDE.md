@@ -157,7 +157,7 @@ index) — and documents need `owner_email`/`connector_type`/`allowed_users`/`al
 
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 
-`src/sudolang-cache-engine/` (git submodule) is a local Claude Code plugin with authoring guidance for
+`sudolang-cache-engine/` (repo root — NOT under `src/`, corrected 2026-09-05) is a local Claude Code plugin, a git submodule, with authoring guidance for
 cache-friendly agent system prompts and `Task()`/dispatch handoffs — Frente Estable/Fondo Volátil
 templates, stigmergic file-based coordination (`rules/stigmergic-coordination.sudo.md`), progressive
 disclosure (`rules/progressive-disclosure.sudo.md`), fork-agent usage
@@ -167,13 +167,13 @@ for the full component table and AGENTS.md rule 155 for how it's applied to the 
 (`sdd-builder`→`binaural-fn-programador:senior-dev`, `sdd-qc`→`binaural-fn-programador:code-reviewer`,
 both now using a fixed `Context {}` block instead of free prose).
 
-**Two copies exist — keep them in sync manually.** The repo submodule at `src/sudolang-cache-engine/` is
+**Two copies exist — keep them in sync manually.** The repo submodule at `sudolang-cache-engine/` (repo root) is
 the source of truth for editing, but Claude Code actually loads plugin content from an installed copy at
 `~/.claude/plugins/cache/local/sudolang-cache-engine/1.0.0/` (a real copy, not a symlink — confirmed via
 `readlink -f`, which resolves to itself). Editing only the submodule has **no runtime effect**: verified
 2026-08-24 by invoking the `sudolang-cache-engine:cache-engine` skill right after editing
 `skills/cache-engine/SKILL.md` in the submodule — it returned the stale pre-edit content. Fix: after
-editing anything under `src/sudolang-cache-engine/{agents,commands,rules,skills}/`, `settings.json`, or
+editing anything under `sudolang-cache-engine/{agents,commands,rules,skills}/`, `settings.json`, or
 `.claude-plugin/plugin.json`, copy those same paths over the installed copy (`cp -r`; no `claude plugin
 update`-style command was found that does this automatically) before relying on the change taking effect
 in a Claude Code session.

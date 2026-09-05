@@ -20,7 +20,10 @@ if [[ -z "$JOB_ID" ]]; then
 fi
 
 TMUX_SOCKET="/tmp/sdd-tmux/sdd.sock"
-JOB_DIR="/tmp/sdd-jobs/$JOB_ID"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SDD_LOG_ROOT="${SDD_LOG_ROOT:-$REPO_ROOT/src/.sdd/logs}"
+JOB_DIR="$SDD_LOG_ROOT/jobs/$JOB_ID"
+METRICS_FILE="$SDD_LOG_ROOT/metrics.jsonl"
 
 if [[ ! -d "$JOB_DIR" ]]; then
   printf '{"job":"%s","status":"unknown","error":"job dir not found"}\n' "$JOB_ID"
@@ -50,6 +53,10 @@ if [[ "$STATUS" == "running" ]] && ! session_alive; then
   # distinctly so sdd-lead retries instead of polling a dead job forever.
   echo "orphaned" > "$STATUS_FILE"
   STATUS="orphaned"
+  # Guarded by the running->orphaned transition above, so this only fires
+  # once per job no matter how many times status.sh is polled afterwards.
+  printf '{"ts":"%s","job":"%s","event":"orphaned"}\n' \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$JOB_ID" >> "$METRICS_FILE"
 fi
 
 case "$STATUS" in

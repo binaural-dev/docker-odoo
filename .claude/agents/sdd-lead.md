@@ -122,7 +122,8 @@ manual/E2E".
 
 Antes de dispatchar un job nuevo, invoca `Task(sdd-opencode-runner)` con el comando de limpieza
 (`bash scripts/sdd_opencode_cleanup.sh`, TTL default 6h) para reaper jobs/sesiones tmux huérfanas de corridas
-anteriores — barato, evita acumulación en `/tmp/sdd-jobs/` y `/tmp/sdd-tmux/`.
+anteriores — barato, evita acumulación en `src/.sdd/logs/jobs/` (persistente, sobrevive reinicios —
+overridable con `SDD_LOG_ROOT`) y en la sesión tmux `/tmp/sdd-tmux/`.
 
 **Modo Manual (fallback)** — el flujo original fase-por-fase con los sub-agentes Claude (`sdd-spec`,
 `sdd-architect`, `sdd-pm`, `sdd-builder`, `sdd-qc`) descrito arriba. Actívalo solo si:

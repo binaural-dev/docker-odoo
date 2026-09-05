@@ -42,14 +42,21 @@ en una sola. Es el modo preferido para cualquier chequeo posterior al primero.
 
 ## Modo 1 — Dispatch (primera invocación, prompt nuevo)
 
-Recibes de `sdd-lead` un prompt ya armado (módulo, versión, spec/contexto) **y también el `cwd`** que
-`sdd-lead` calculó (el repo/worktree acotado, ej. `src/integra-addons-19.0` o un worktree como
+Recibes de `sdd-lead` **la ruta a un archivo** con el prompt ya armado (módulo, versión, spec/contexto),
+NUNCA el texto del prompt embebido directamente en tu instrucción — y también el `cwd` que `sdd-lead` calculó
+(el repo/worktree acotado, ej. `src/integra-addons-19.0` o un worktree como
 `src/.worktrees/integra-addons-19.0/<job>`). Pasás los cuatro argumentos posicionales tal cual, en este orden
 — `[model]` queda vacío (`""`) casi siempre, nunca se omite porque desplazaría `cwd` a la posición 3:
 
 ```bash
-bash /home/binlp011/sources/docker-multi/scripts/sdd_opencode_run.sh "<prompt exacto recibido>" sdd-lead "" "<cwd exacto recibido de sdd-lead>"
+bash /home/binlp011/sources/docker-multi/scripts/sdd_opencode_run.sh "@<ruta al archivo de prompt>" sdd-lead "" "<cwd exacto recibido de sdd-lead>"
 ```
+
+**Nunca retipees el contenido del prompt vos mismo.** El primer argumento es literalmente `@` seguido de la
+ruta del archivo — el script lo lee del archivo. Si `sdd-lead` te pasó el prompt como texto plano en vez de
+una ruta de archivo, tratalo como error de armado de la delegación (reportalo, no lo ejecutes) — ver skill
+`sdd-opencode-delegate-agent`, sección "El prompt SIEMPRE va por archivo", para el incidente concreto que
+motivó esta regla.
 
 **El 4º argumento (`cwd`) es obligatorio, nunca opcional para vos** aunque el `usage` del script lo muestre
 entre corchetes: `sdd_opencode_run.sh` valida mecánicamente que `cwd` contenga el `repo` declarado en el
@@ -76,7 +83,8 @@ bash /home/binlp011/sources/docker-multi/scripts/sdd_opencode_status.sh <job_id>
 ```
 
 Esto es una excepción explícita a la regla "no leer archivos" — el script solo lee el propio directorio de
-estado del job (`/tmp/sdd-jobs/<job_id>/`), no código del repo.
+estado del job (`src/.sdd/logs/jobs/<job_id>/`, persistente entre reinicios — antes era `/tmp/sdd-jobs/`), no
+código del repo.
 
 El script imprime una de estas formas de JSON:
 - `status:"running"` — sigue corriendo, incluye un `tail` de las últimas líneas de log.

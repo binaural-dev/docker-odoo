@@ -24,11 +24,34 @@
 # completion, and sdd_opencode_cleanup.sh to reap old jobs/sessions.
 #
 # Usage: bash sdd_opencode_run.sh "<prompt>" [agent] [model] [cwd]
+#        bash sdd_opencode_run.sh "@<path-to-prompt-file>" [agent] [model] [cwd]
 #   agent defaults to "sdd-lead"; cwd defaults to the repo's src/ directory.
+#
+# The "@<path>" form reads the prompt from a file instead of the positional
+# argument. Prefer it whenever the caller is itself an LLM relaying this
+# dispatch on someone else's behalf (e.g. sdd-opencode-runner, invoked via
+# Task by sdd-lead): a long multi-paragraph prompt embedded directly in a
+# relay's own tool call is something the relay model has to *retype*, and it
+# has been observed to silently truncate/paraphrase it instead of reproducing
+# it verbatim (confirmed 2026-09-05: a real dispatch's dispatch.handoff ended
+# up containing only the Context{} block, with the entire task description
+# after it dropped, no error surfaced anywhere). Writing the prompt to a
+# scratch file first and passing "@<path>" means the relay only has to copy a
+# short file path into its command — nothing left for it to paraphrase.
 
 set -euo pipefail
 
-PROMPT="${1:-}"
+RAW_PROMPT="${1:-}"
+if [[ "$RAW_PROMPT" == @* ]]; then
+  PROMPT_FILE="${RAW_PROMPT#@}"
+  if [[ ! -f "$PROMPT_FILE" ]]; then
+    printf '{"error":"prompt file not found: %s","status":"failed"}\n' "$PROMPT_FILE"
+    exit 1
+  fi
+  PROMPT="$(cat "$PROMPT_FILE")"
+else
+  PROMPT="$RAW_PROMPT"
+fi
 AGENT="${2:-sdd-lead}"
 MODEL="${3:-}"
 # WORK_DIR defaults to the whole src/ workspace only as a fallback for ad-hoc
@@ -59,12 +82,21 @@ fi
 # design: cheap enough to run on every dispatch, good enough to catch the
 # "forgot to declare scope" case that made OpenCode's operating context a
 # free-text convention instead of an enforced contract).
+# The tmux socket is fine to live in /tmp: it's only meaningful while the
+# tmux server process is alive, which itself doesn't survive a reboot either.
+# Job artifacts (dispatch/result handoffs, output.log, metrics) are the part
+# that needs to survive a system restart to be worth anything for post-hoc
+# analysis or the metrics reporter — /tmp/sdd-jobs was getting wiped on every
+# host reset (2026-09-02 incidents), silently destroying the only record of
+# what happened. SDD_LOG_ROOT is overridable for tests.
 TMUX_SOCKET_DIR="/tmp/sdd-tmux"
 TMUX_SOCKET="$TMUX_SOCKET_DIR/sdd.sock"
-JOBS_DIR="/tmp/sdd-jobs"
-LOG_DIR="/tmp/swarm-code-logs"
-LOG="$LOG_DIR/sdd-opencode.log"
-mkdir -p "$TMUX_SOCKET_DIR" "$JOBS_DIR" "$LOG_DIR"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SDD_LOG_ROOT="${SDD_LOG_ROOT:-$REPO_ROOT/src/.sdd/logs}"
+JOBS_DIR="$SDD_LOG_ROOT/jobs"
+LOG="$SDD_LOG_ROOT/sdd-opencode.log"
+METRICS_FILE="$SDD_LOG_ROOT/metrics.jsonl"
+mkdir -p "$TMUX_SOCKET_DIR" "$JOBS_DIR" "$SDD_LOG_ROOT"
 
 CYAN='\033[38;5;87m'
 DIM='\033[2m'
@@ -76,6 +108,30 @@ RESET='\033[0m'
 log() { printf '%s\n' "$1" >> "$LOG"; }
 
 now_iso() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+
+# Appends one JSON line to metrics.jsonl for the sdd-metrics-reporter agent.
+# Fields are passed as key=value pairs; python3 gives safe JSON escaping when
+# available, falling back to a naive (unescaped) line so metrics collection
+# never blocks a dispatch even on a stripped-down environment.
+append_metric() {
+  local event="$1"; shift
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$JOB_ID" "$event" "$@" >> "$METRICS_FILE" 2>/dev/null <<'PY' || true
+import datetime, json, sys
+job, event, *rest = sys.argv[1:]
+d = {"ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "job": job, "event": event}
+for kv in rest:
+    if "=" in kv:
+        k, v = kv.split("=", 1)
+        d[k] = v
+print(json.dumps(d))
+PY
+  else
+    local pairs="" kv
+    for kv in "$@"; do pairs+=",\"${kv%%=*}\":\"${kv#*=}\""; done
+    printf '{"ts":"%s","job":"%s","event":"%s"%s}\n' "$(now_iso)" "$JOB_ID" "$event" "$pairs" >> "$METRICS_FILE"
+  fi
+}
 
 # Pulls a single-line "key: value" out of the prompt's Context{} block. Only
 # handles single-line values (allowed_files is captured as its raw list text,
@@ -223,6 +279,12 @@ command -v tmux >/dev/null 2>&1 || {
 write_dispatch_handoff
 echo "running" > "$STATUS_FILE"
 
+DISPATCH_MODULE="$(extract_context_field module)"
+DISPATCH_BRANCH="$(extract_context_field branch)"
+append_metric "dispatch" \
+  "agent=$AGENT" "model=$MODEL" "repo=$DISPATCH_REPO" "module=$DISPATCH_MODULE" \
+  "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH"
+
 OC_ARGS=("run" "--agent" "$AGENT" "--auto")
 [[ -n "$MODEL" ]] && OC_ARGS+=("--model" "$MODEL")
 [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]] && OC_ARGS+=("--dir" "$WORK_DIR")
@@ -242,8 +304,10 @@ INNER_CMD=$(cat <<EOF
 # tmux pane itself, not just captured to the log file — otherwise a terminal
 # window attached via sdd_opencode_view.sh shows nothing until the session
 # ends. PIPESTATUS[0] recovers opencode's own exit code past the pipe.
+_start=\$(date +%s)
 "$OC_BIN" $OC_ARGS_Q 2>&1 | tee "$OUT"
 ec=\${PIPESTATUS[0]}
+_duration=\$(( \$(date +%s) - _start ))
 echo "\$ec" > "$EXIT_FILE"
 if [[ "\$ec" -eq 0 ]]; then
   st=done
@@ -266,6 +330,7 @@ tail_body="\$(tail -n 40 "$OUT" 2>/dev/null || true)"
   echo "--- tail (last 40 lines) ---"
   printf '%s\n' "\$tail_body"
 } > "$RESULT_FILE"
+echo "{\"ts\":\"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"job\":\"$JOB_ID\",\"event\":\"result\",\"status\":\"\$st\",\"exit_code\":\$ec,\"duration_s\":\$_duration}" >> "$METRICS_FILE"
 EOF
 )
 

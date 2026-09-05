@@ -49,7 +49,8 @@ retry).
    ```
    Si algún path modificado cae bajo `odoo-17.0/`, `odoo-19.0/`, `enterprise-17.0/` o `enterprise-19.0/` →
    **FAIL inmediato**, motivo: "violación de guardrail de core/enterprise", sin importar qué diga qc-report.md.
-4. **Guardrail de scope declarado**: leer `/tmp/sdd-jobs/<job_id>/dispatch.handoff` (headers
+4. **Guardrail de scope declarado**: leer `src/.sdd/logs/jobs/<job_id>/dispatch.handoff` (job dir persistente,
+   antes vivía en `/tmp/sdd-jobs/`; headers
    `repo:`/`module:`/`branch:`/`allowed_files:`, provenientes del bloque `Context {}` del prompt original — ver
    skill `sdd-opencode-delegate-agent`) y comparar contra el mismo `git diff --stat` del punto 3. Si algún path
    modificado cae fuera del `repo`/`module`/`allowed_files` declarados → **FAIL**, motivo: "violación de scope
