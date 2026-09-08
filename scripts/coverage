@@ -14,6 +14,11 @@ set -euo pipefail
 #   --modules          Comma-separated module paths relative to /home/odoo/src/ (required)
 #   --test_tags        Odoo --test-tags value (required)
 #   --db_name          Database name (optional, defaults to auto-generated temp DB)
+#   --db_user          Postgres role used to create/drop the temp DB (default: odoo).
+#                      Instances with a dedicated role (provision-role) MUST pass
+#                      theirs here -- the shared "odoo" role is kept NOLOGIN on
+#                      purpose once provision-role has run on that database.
+#   --db_password      Password for --db_user (default: odoo).
 #   --keep-db          Don't drop the temp DB after test run (for debugging)
 #   --threshold        Minimum coverage % required (default: 70)
 #   --help             Show this help
@@ -23,6 +28,8 @@ ODOO_CONTAINER=""
 TEST_TAGS=""
 MODULES=""
 DB_NAME=""
+DB_USER="odoo"
+DB_PASSWORD="odoo"
 KEEP_DB=false
 THRESHOLD=70
 
@@ -37,6 +44,8 @@ for arg in "$@"; do
     --test_tags=*)        TEST_TAGS="${arg#*=}" ;;
     --modules=*)          MODULES="${arg#*=}" ;;
     --db_name=*)          DB_NAME="${arg#*=}" ;;
+    --db_user=*)          DB_USER="${arg#*=}" ;;
+    --db_password=*)      DB_PASSWORD="${arg#*=}" ;;
     --threshold=*)        THRESHOLD="${arg#*=}" ;;
     --keep-db)            KEEP_DB=true ;;
     --help)               show_help ;;
@@ -105,7 +114,7 @@ echo ""
 # ── Create temp database ─────────────────────────────────────────────────────
 echo "📦 Creando base de datos temporal '$DB_NAME'..."
 docker_exec bash -c "
-  PGPASSWORD=odoo psql -U odoo -d postgres -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER odoo;\"
+  PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -d postgres -c \"CREATE DATABASE \\\"$DB_NAME\\\" OWNER $DB_USER;\"
 " || {
   echo "❌ No se pudo crear la base de datos '$DB_NAME'."
   exit 1
@@ -118,7 +127,7 @@ cleanup() {
     echo ""
     echo "🧹 Eliminando base de datos temporal '$DB_NAME'..."
     docker_exec bash -c "
-      PGPASSWORD=odoo psql -U odoo -d postgres -c \"DROP DATABASE IF EXISTS \\\"$DB_NAME\\\";\" 2>/dev/null
+      PGPASSWORD=$DB_PASSWORD psql -U $DB_USER -d postgres -c \"DROP DATABASE IF EXISTS \\\"$DB_NAME\\\";\" 2>/dev/null
     " || true
     echo "   ✅ DB '$DB_NAME' eliminada."
   fi

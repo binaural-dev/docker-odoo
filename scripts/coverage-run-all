@@ -143,6 +143,27 @@ def discover_candidates():
     return json.loads(out.stdout)
 
 
+def resolve_db_credentials(name):
+    """(user, password) for project ``name``'s Postgres role.
+
+    Same override as ``generators.config_loader.resolve_db_config``: an
+    instance with its own "db_user"/"db_password" (provision-role) must
+    use those, never the shared database role -- that shared role is
+    kept NOLOGIN on purpose once provision-role has run on its database
+    (see odoo_cli/core/actions/postgres.py). Read-only JSON parse here,
+    unlike get_enabled/set_enabled, which avoid a full parse only to
+    preserve formatting on WRITE.
+    """
+    import json
+
+    config = json.loads(INSTANCES_JSON.read_text())
+    inst_conf = config.get("instances", {}).get(name, {})
+    db_conf = config.get("databases", {}).get(inst_conf.get("database"), {})
+    user = inst_conf.get("db_user", db_conf.get("user", "odoo"))
+    password = inst_conf.get("db_password", db_conf.get("password", "odoo"))
+    return user, password
+
+
 def build_module_args(entry):
     name = entry["project"]
     mods = entry["tested_modules"]
@@ -299,10 +320,12 @@ def run_project(entry, threshold, do_pull, keep_running, clean_images, dry_run):
             subprocess.run(["git", "-C", str(repo), "pull", "--ff-only"], capture_output=True, text=True)
 
     modules_arg, tags_arg = build_module_args(entry)
+    db_user, db_password = resolve_db_credentials(name)
     coverage_cmd = [
         str(COVERAGE), f"--odoo_container=odoo-{name}",
         f"--modules={modules_arg}", f"--test_tags={tags_arg}",
         f"--threshold={threshold}",
+        f"--db_user={db_user}", f"--db_password={db_password}",
     ]
 
     was_enabled = get_enabled(name)
