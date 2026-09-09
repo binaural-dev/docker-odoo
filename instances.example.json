@@ -29,7 +29,8 @@
       "password": "odoo",
       "bootstrap_user": "odoo_bootstrap",
       "bootstrap_password": "cambiar-esto",
-      "config": "postgresql.conf"
+      "config": "postgresql.conf",
+      "pgvector": false
     }
   },
   "instances": {

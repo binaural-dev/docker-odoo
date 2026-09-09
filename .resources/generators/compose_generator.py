@@ -91,6 +91,10 @@ def _db_service(db_name, db_conf):
     bootstrap_password = db_conf.get("bootstrap_password", password)
     pg_config = db_conf.get("config")
     expose_host_port = db_conf.get("expose_host_port", False)
+    # Opt-in per database group -- only groups that actually run modules
+    # needing pgvector should pay for installing/activating it (see
+    # db.Dockerfile and db_install_extensions.sh). Defaults to off.
+    pgvector = db_conf.get("pgvector", False)
     container_name = f"db-{db_name}"
 
     lines = [
@@ -111,6 +115,7 @@ def _db_service(db_name, db_conf):
         "      dockerfile: ./.resources/db.Dockerfile",
         "      args:",
         f"        POSTGRES_IMG_VERSION: {pg_version}",
+        f"        INSTALL_PGVECTOR: \"{str(pgvector).lower()}\"",
         f"    image: local_odoo_db_{db_name}:{pg_version}",
     ]
 
@@ -135,6 +140,7 @@ def _db_service(db_name, db_conf):
         f"      - POSTGRES_USER={bootstrap_user}",
         f"      - APP_DB_USER={user}",
         f"      - APP_DB_PASSWORD={password}",
+        f"      - PGVECTOR_ENABLED={str(pgvector).lower()}",
         "      - PGDATA=/var/lib/postgresql/data/pgdata",
         "",
     ]
