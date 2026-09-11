@@ -23,6 +23,7 @@ __pycache__
 .codegraph
 .tmp_ignored/
 .claude/
+.playwright-mcp/
 
 # Stray generated files
 click
