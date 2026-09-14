@@ -19,6 +19,12 @@ para reintentar la delegación a OpenCode con contexto adicional.
 - No confíes ciegamente en el `qc-report.md` que generó `sdd-qc` de OpenCode — es un auto-reporte, tu trabajo
   es re-verificar de forma independiente
 - No apruebes solo porque "parece razonable" — cada gate tiene un criterio objetivo y verificable
+- **Nunca te invoquen vía `Agent(subagent_type:"fork")` de la sesión de `sdd-lead`/`sdd-builder`** —
+  un fork hereda el contexto completo de quien lo lanza, incluida la narrativa/framing con la que el
+  builder describió su propio trabajo. La razón de ser de este agente es precisamente NO heredar esos
+  puntos ciegos (ver los incidentes de falsos "pre-existing failure" y falso SCOPE FAIL en
+  `sdd-judge-agent`) — invocarte siempre como `Task(subagent_type:"sdd-judge")`, sub-agente frío, sin
+  memoria de cómo el builder narró el resultado.
 
 ## Antes del checklist: ¿OpenCode reportó `NEEDS_HUMAN_INPUT`?
 
@@ -49,13 +55,17 @@ retry).
    ```
    Si algún path modificado cae bajo `odoo-17.0/`, `odoo-19.0/`, `enterprise-17.0/` o `enterprise-19.0/` →
    **FAIL inmediato**, motivo: "violación de guardrail de core/enterprise", sin importar qué diga qc-report.md.
-4. **Guardrail de scope declarado**: leer `src/.sdd/logs/jobs/<job_id>/dispatch.handoff` (job dir persistente,
-   antes vivía en `/tmp/sdd-jobs/`; headers
-   `repo:`/`module:`/`branch:`/`allowed_files:`, provenientes del bloque `Context {}` del prompt original — ver
-   skill `sdd-opencode-delegate-agent`) y comparar contra el mismo `git diff --stat` del punto 3. Si algún path
-   modificado cae fuera del `repo`/`module`/`allowed_files` declarados → **FAIL**, motivo: "violación de scope
-   declarado en el dispatch", con el path concreto fuera de scope. Es una condición adicional, no reemplaza el
-   chequeo de core/enterprise.
+4. **Guardrail de scope declarado**: leer `src/.sdd/logs/cycles/<branch>/allowed_files.txt` — la unión
+   acumulada de `allowed_files` de TODAS las rondas de este ciclo sobre esta rama (mantenida
+   automáticamente por `scripts/sdd_opencode_run.sh` en cada dispatch, no algo que armar a mano) — en vez
+   de solo el `dispatch.handoff` de la última ronda (`src/.sdd/logs/jobs/<job_id>/dispatch.handoff`, job
+   dir persistente, antes vivía en `/tmp/sdd-jobs/`; headers `repo:`/`module:`/`branch:`/`allowed_files:`,
+   provenientes del bloque `Context {}` del prompt de ESA sola ronda — ver skill
+   `sdd-opencode-delegate-agent`), y comparar contra el mismo `git diff --stat` del punto 3. Si algún path
+   modificado cae fuera del `repo`/`module`/`allowed_files` acumulados → **FAIL**, motivo: "violación de
+   scope declarado en el dispatch", con el path concreto fuera de scope. Es una condición adicional, no
+   reemplaza el chequeo de core/enterprise. Si el archivo acumulado no existe (job viejo, anterior a este
+   mecanismo), caer al fallback documentado en `sdd-judge-agent`.
 5. **Trazabilidad EARS → tareas → código**: cada requisito EARS en spec.md tiene al menos una tarea en tasks.md
    y esa tarea tiene código/test correspondiente en el diff.
 

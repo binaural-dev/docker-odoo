@@ -43,6 +43,19 @@ curso. Tu único output es un archivo Markdown en `src/.sdd/reports/<fecha>.md`.
    Incidentes clasificados, Desviaciones de configuración, Recomendaciones de auto-mejora, Datos
    faltantes/limitaciones.
 
+## Fork en vez de Task — con una salvedad de tools
+
+Cuando quien invoca ya está en sesión con el contexto del ciclo recién cerrado (ej. `sdd-lead`
+justo después de un Build/QC), `Agent(subagent_type:"fork")` es más barato que un `Task` frío para
+esta agregación de solo lectura — comparte caché de prompt, no hay que re-explicar qué corrida se
+está midiendo. **Salvedad real**: este agente necesita `Bash` (para correr
+`scripts/sdd_opencode_config_sync_check.sh`, tail de `output.log`, etc.) — un fork solo hereda el
+tool-allowlist del contexto que lo lanza, así que si ese contexto (ej. `sdd-lead`) NO tiene `Bash`
+en su propio scope, forkearlo no le da `Bash` tampoco, y el reporte no podría correr el chequeo de
+sync ni leer logs con herramientas de shell. Usar fork solo cuando el caller ya tiene `Bash`
+disponible; si no, seguir invocando `Task(subagent_type:"sdd-metrics-reporter")` como sub-agente
+frío (que sí lo tiene declarado en su propio frontmatter).
+
 ## Reportar
 
 Al terminar, devolvé a quien te invocó la ruta del archivo escrito y el resumen ejecutivo (3-5 líneas) tal

@@ -149,6 +149,15 @@ reject_dispatch() {
   mkdir -p "$job_dir"
   echo "failed" > "$job_dir/status"
   echo "1" > "$job_dir/exit_code"
+  # A guardrail rejection (missing Context field, cwd/repo mismatch, duplicate
+  # dispatch lock) used to leave zero trace in metrics.jsonl — the script
+  # exited before the only append_metric call in the file (the "dispatch"
+  # event, further down) ever ran. That undercounted the real failure rate:
+  # sdd-metrics-reporter had no way to see how many dispatches never made it
+  # past validation. JOB_ID is the global append_metric reads, so it's set
+  # here even though this job never reaches the normal JOB_ID assignment.
+  JOB_ID="$job_id"
+  append_metric "rejected" "reason=$error_msg"
   printf '{"error":"%s","job":"%s","dir":"%s","status":"failed"}\n' "$error_msg" "$job_id" "$job_dir"
   exit 1
 }
@@ -179,6 +188,46 @@ fi
 DISPATCH_REPO="$(extract_context_field repo)"
 if [[ -n "$DISPATCH_REPO" ]] && [[ "$WORK_DIR" != *"$DISPATCH_REPO"* ]]; then
   reject_dispatch "cwd does not match declared repo: WORK_DIR='${WORK_DIR}' repo='${DISPATCH_REPO}' — pass the repo-scoped path as the 4th arg (e.g. src/${DISPATCH_REPO}), not the src/ default"
+fi
+
+# --- duplicate-dispatch lock ----------------------------------------------
+# Observed in production (2026-09-12 23:39-23:40): 6 byte-identical dispatches
+# of the same task fired within under a minute (a relay re-dispatching instead
+# of waiting/polling for the already-running job — see sdd-opencode-delegate-
+# agent's "sub-agente puede desobedecer" note). None of the 6 ever produced a
+# result event; they just vanished from metrics.jsonl with no `orphaned`
+# classification either. This lock closes that hole: a dispatch identical to
+# one already in flight for the same repo/module/branch is rejected instead of
+# silently racing it, and the rejection is now visible (see reject_dispatch's
+# "rejected" metric event above).
+hash_key() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -d' ' -f1
+  else
+    cksum | cut -d' ' -f1
+  fi
+}
+
+LOCK_DIR="$SDD_LOG_ROOT/locks"
+mkdir -p "$LOCK_DIR"
+DISPATCH_MODULE_EARLY="$(extract_context_field module)"
+DISPATCH_BRANCH_EARLY="$(extract_context_field branch)"
+LOCK_HASH="$(printf '%s' "${DISPATCH_REPO}|${DISPATCH_MODULE_EARLY}|${DISPATCH_BRANCH_EARLY}|${PROMPT}" | hash_key)"
+LOCK_FILE="$LOCK_DIR/$LOCK_HASH.lock"
+LOCK_WINDOW_S=90
+
+if [[ -f "$LOCK_FILE" ]]; then
+  existing_job="$(cat "$LOCK_FILE" 2>/dev/null || true)"
+  existing_status="$(cat "$JOBS_DIR/$existing_job/status" 2>/dev/null || true)"
+  lock_mtime="$(stat -c %Y "$LOCK_FILE" 2>/dev/null || stat -f %m "$LOCK_FILE" 2>/dev/null || echo 0)"
+  lock_age=$(( $(date +%s) - lock_mtime ))
+  if [[ -n "$existing_job" ]] && \
+     [[ "$existing_status" != "done" && "$existing_status" != "failed" && "$existing_status" != "orphaned" ]] && \
+     (( lock_age < LOCK_WINDOW_S )); then
+    reject_dispatch "duplicate dispatch of identical prompt (repo=${DISPATCH_REPO} module=${DISPATCH_MODULE_EARLY} branch=${DISPATCH_BRANCH_EARLY}) within ${LOCK_WINDOW_S}s of an in-flight job=${existing_job} (status=${existing_status:-unknown}) — wait/poll the existing job instead of re-dispatching"
+  fi
 fi
 
 # --- environment must never be pattern-guessed -----------------------------
@@ -257,12 +306,19 @@ write_result_handoff() {
   } > "$RESULT_FILE"
 }
 
+# Claim the duplicate-dispatch lock now that this dispatch has passed every
+# rejection check and is actually going to run — released on terminal status
+# (done/failed/orphaned) either below (early failure paths) or inside
+# INNER_CMD once opencode itself finishes.
+echo "$JOB_ID" > "$LOCK_FILE"
+
 OC_BIN="$(command -v opencode 2>/dev/null || true)"
 if [[ -z "$OC_BIN" ]]; then
   log "$(printf "${RED}  ✗ job %s failed: opencode not found in PATH${RESET}" "$JOB_ID")"
   echo "failed" > "$STATUS_FILE"
   echo "127" > "$EXIT_FILE"
   write_result_handoff "failed" "127"
+  rm -f "$LOCK_FILE"
   printf '{"job":"%s","dir":"%s","status":"failed","error":"opencode not found"}\n' "$JOB_ID" "$JOB_DIR"
   exit 1
 fi
@@ -272,12 +328,32 @@ command -v tmux >/dev/null 2>&1 || {
   echo "failed" > "$STATUS_FILE"
   echo "127" > "$EXIT_FILE"
   write_result_handoff "failed" "127"
+  rm -f "$LOCK_FILE"
   printf '{"job":"%s","dir":"%s","status":"failed","error":"tmux not found"}\n' "$JOB_ID" "$JOB_DIR"
   exit 1
 }
 
 write_dispatch_handoff
 echo "running" > "$STATUS_FILE"
+
+# --- cumulative allowed_files across retry rounds of the same branch -------
+# sdd-judge used to only ever see the LATEST dispatch's allowed_files, which
+# produced a false SCOPE FAIL when a legitimate change spanned several retry
+# rounds of the same cycle (TA-15107 round 3: two files from round 1, already
+# evaluated on their merits, got flagged as scope violations in round 3
+# because round 3's dispatch.handoff didn't re-list them) — costing a full
+# wasted retry iteration. Rounds of the same cycle share a branch, so key the
+# cumulative set by branch: each dispatch's allowed_files gets unioned in here
+# instead of judge only ever reading the single latest dispatch.handoff.
+CYCLE_BRANCH="$(extract_context_field branch)"
+if [[ -n "$CYCLE_BRANCH" ]]; then
+  CYCLE_DIR="$SDD_LOG_ROOT/cycles/$(printf '%s' "$CYCLE_BRANCH" | tr '/' '_')"
+  mkdir -p "$CYCLE_DIR"
+  CYCLE_ALLOWED_FILES="$CYCLE_DIR/allowed_files.txt"
+  extract_context_field allowed_files >> "$CYCLE_ALLOWED_FILES"
+  sort -u -o "$CYCLE_ALLOWED_FILES" "$CYCLE_ALLOWED_FILES"
+  echo "$JOB_ID" >> "$CYCLE_DIR/jobs.txt"
+fi
 
 DISPATCH_MODULE="$(extract_context_field module)"
 DISPATCH_BRANCH="$(extract_context_field branch)"
@@ -331,6 +407,7 @@ tail_body="\$(tail -n 40 "$OUT" 2>/dev/null || true)"
   printf '%s\n' "\$tail_body"
 } > "$RESULT_FILE"
 echo "{\"ts\":\"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"job\":\"$JOB_ID\",\"event\":\"result\",\"status\":\"\$st\",\"exit_code\":\$ec,\"duration_s\":\$_duration}" >> "$METRICS_FILE"
+rm -f "$LOCK_FILE"
 EOF
 )
 

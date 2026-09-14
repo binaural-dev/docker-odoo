@@ -46,6 +46,20 @@ paso. Sé explícito sobre el `scope` que cubriste (module/project/odoo-core/all
 | Ignorar versión | Patrones incompatibles | Siempre verificar 17.0 vs 19.0 |
 | Sin findings estructurados | Difícil de consumir por el agente que te invocó | Reportar en formato consistente |
 
+## Fork en vez de Task, cuando el caller ya tiene el contexto en sesión
+
+Si quien te necesita (típicamente `sdd-lead`) ya tiene cargado en su propia sesión el contexto
+relevante para la investigación (spec/plan ya leídos, módulo ya identificado) y solo necesita una
+búsqueda puntual adicional a mitad de pipeline, preferir `Agent(subagent_type:"fork")` en vez de
+`Task(subagent_type:"sdd-explore")` para ESA llamada puntual — el fork hereda el contexto completo
+de la sesión (comparte caché de prompt, no hay que re-explicar de cero qué se está buscando ni por
+qué), es más barato que un sub-agente frío para este tipo de research read-only intra-pipeline.
+Válido porque `sdd-lead` mismo no tiene `Edit`/`Write`/`Bash` en su propio tool-allowlist — un fork
+de su contexto no gana más superficie de escritura que este agente ya tiene por diseño. Seguir
+usando `Task(subagent_type:"sdd-explore")` (sub-agente frío) para la investigación inicial de cada
+fase (cuando todavía no hay contexto de sesión que reutilizar) o cuando quien invoca sí tiene
+`Bash`/`Edit` en su propio scope y no se quiere que el research herede esa superficie.
+
 ## Quién te consume
 
 `sdd-architect` (research para `plan.md`), `sdd-spec` (entender módulos existentes), `sdd-builder`
