@@ -3,6 +3,7 @@ instances.json
 pwa.json
 src
 logs/
+backups/
 .resources/Dockerfile
 .resources/Dockerfile.*
 !.resources/Dockerfile.template
