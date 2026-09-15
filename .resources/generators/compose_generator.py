@@ -336,18 +336,23 @@ def _nginx_service(config):
 
 
 def _mailhog_service(mailhog_conf):
-    """Generate the MailHog service (SMTP catcher for dev environments)."""
-    smtp_port = mailhog_conf.get("smtp_port", 1025)
-    http_port = mailhog_conf.get("http_port", 8025)
+    """Generate the MailHog service (SMTP catcher for dev environments).
 
+    No "ports:" here on purpose: _nginx_service already publishes
+    mailhog_conf's http_port on the host and reverse-proxies it to
+    mailhog:8025 (see nginx_generator.py's "mailhog.local" server block).
+    Publishing the same host port here too made `docker compose up mailhog`
+    fail with "port is already allocated" as soon as nginx (started first
+    by every `./odoo start`/`restart`) had already bound it. Odoo instances
+    and nginx both reach this container over the internal network by its
+    service name regardless of any host port publish.
+    """
     return [
         "  mailhog:",
         "    image: mailhog/mailhog:latest",
         "    restart: always",
         "    networks:",
         f"      - {NETWORK_NAME}",
-        "    ports:",
-        f'      - "{http_port}:8025"',
         "",
     ]
 
