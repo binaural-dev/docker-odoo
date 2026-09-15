@@ -41,6 +41,7 @@ from odoo_cli.core.actions.access import (
     list_containers,
     psql_connect,
     run_bash,
+    run_shell,
     show_logs,
 )
 from odoo_cli.core.actions.hosts import (
@@ -199,6 +200,46 @@ def dispatch(
 
     elif args.action == "bash":
         run_bash(runner, config, args.instance)
+
+    elif args.action == "shell":
+        # Deliberately NOT in _INSTANCE_AWARE_ACTIONS: the leading
+        # positional is ambiguous between "instance" and the first
+        # token of the delegated subcommand (e.g. "search"). Resolve
+        # that ambiguity here, same as the legacy CLI did, before
+        # falling back to the generic instance prompt.
+        shell_args = list(args.args)
+        instance = args.instance
+        if instance is not None and instance not in config["instances"]:
+            shell_args.insert(0, instance)
+            instance = None
+        if instance is None:
+            instance = prompt_for_instance(runner, config, "shell")
+
+        # `-d <db>` after the instance falls into REMAINDER; pull it
+        # out here so we don't ask for the database twice (the script
+        # also accepts it).
+        shell_db = args.shell_db
+        filtered_args = []
+        skip_next = False
+        for i, token in enumerate(shell_args):
+            if skip_next:
+                skip_next = False
+                continue
+            if token in ("-d", "--db") and i + 1 < len(shell_args):
+                shell_db = shell_db or shell_args[i + 1]
+                skip_next = True
+                continue
+            if token.startswith("--db=") or token.startswith("-d="):
+                shell_db = shell_db or token.split("=", 1)[1]
+                continue
+            filtered_args.append(token)
+        shell_args = filtered_args
+        if shell_db is None:
+            shell_db = prompt_for_database(runner, config, instance)
+
+        return run_shell(
+            runner, base_path, instance, shell_db, args.shell_user, shell_args
+        )
 
     elif args.action == "logs":
         show_logs(runner, config, args.instance)

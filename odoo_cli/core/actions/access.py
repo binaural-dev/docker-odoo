@@ -9,6 +9,7 @@ the user just watches (logs, list).
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -132,9 +133,45 @@ def psql_connect(
     # user-visible behavior is identical.
 
 
+# ============================================================
+# Shell
+# ============================================================
+
+
+def run_shell(
+    runner: "Runner",
+    base_path: str,
+    instance: str,
+    dbname: str,
+    user: str | None,
+    extra_args: list[str],
+) -> int:
+    """Delegate to ``scripts/odoo-shell`` for one-shot ops or a REPL.
+
+    ``scripts/odoo-shell`` does not read ``instances.json`` — it takes
+    the container name and database as flags and talks to it via raw
+    ``docker exec`` (not ``docker compose exec``: the container name
+    it needs, ``odoo-<instance>``, is stable regardless of the Compose
+    project namespacing). This action just resolves those flags and
+    hands off, keeping the TTY attached via ``run_interactive`` since
+    the REPL subcommand is fully interactive.
+    """
+    cmd = [
+        str(Path(base_path) / "scripts" / "odoo-shell"),
+        "--container", f"odoo-{instance}",
+        "--compose-file", COMPOSE_FILE,
+        "-d", dbname,
+    ]
+    if user:
+        cmd += ["--user", user]
+    cmd += extra_args
+    return runner.run_interactive(cmd, cwd=".")
+
+
 __all__ = [
     "list_containers",
     "psql_connect",
     "run_bash",
+    "run_shell",
     "show_logs",
 ]

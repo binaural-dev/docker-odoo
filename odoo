@@ -78,14 +78,14 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Comandos por categoría:\n"
             "  Ciclo de vida       build, start, stop, restart, remove, fix-files\n"
-            "  Acceso / debug      bash, logs, list, psql, pw\n"
+            "  Acceso / debug      bash, shell, logs, list, psql, pw\n"
             "  Módulos             update, init, test\n"
             "  Git / submódulos    sync, update-tags, update-tags-bulk, "
             "submodule-status\n"
             "  Cobertura de tests  coverage-status, coverage\n"
             "  Postgres / roles    provision-role\n"
             "  Config / infra      new, hosts, enable, disable, "
-            "validate-instances, tui\n"
+            "validate-instances, tui, apk\n"
             "\n"
             "Ejemplos:\n"
             "  ./odoo start contiflex               levanta sólo esa instancia\n"
@@ -164,6 +164,48 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "instance", nargs="?", default=None,
         help="Nombre de instancia (opcional)",
+    )
+
+    # shell
+    shell_p = subparsers.add_parser(
+        "shell",
+        help="Shell operativo de Odoo: search/read/count/create/write/unlink/method "
+             "o REPL interactivo, contra una instancia. Ver ./odoo shell --help",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Subcomandos (delegados a scripts/odoo-shell):\n"
+            "  shell                          REPL interactivo (ipython)\n"
+            "  search   -m MODELO [--domain D] [-f CAMPOS] [--limit N] [--order S]\n"
+            "  read     -m MODELO -i IDS [-f CAMPOS]         (alias: browse)\n"
+            "  count    -m MODELO [--domain D]\n"
+            "  create   -m MODELO --values VALS\n"
+            "  write    -m MODELO -i IDS --values VALS\n"
+            "  unlink   -m MODELO -i IDS --yes\n"
+            "  method   -m MODELO -n METODO [-i IDS] [--domain D] [--limit N]\n"
+            "           [--order S] [-a ARGS] [-k KWARGS]\n"
+            "Ejemplos:\n"
+            "  ./odoo shell\n"
+            "  ./odoo shell search -m res.partner --domain \"[['id','>',5]]\" --fields \"name,id\"\n"
+            "  ./odoo shell method -m res.partner -n _compute_display_name --ids 10,1\n"
+            "  ./odoo shell method -m res.partner -n _compute_display_name --limit 10 --order \"id asc\"\n"
+        ),
+    )
+    shell_p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional, se elige interactivamente). "
+             "Debe ir antes del subcomando.",
+    )
+    shell_p.add_argument(
+        "-d", dest="shell_db", default=None,
+        help="Nombre de la base de datos (opcional)",
+    )
+    shell_p.add_argument(
+        "--user", dest="shell_user", default=None,
+        help="Login de usuario para las operaciones (opcional)",
+    )
+    shell_p.add_argument(
+        "args", nargs=argparse.REMAINDER,
+        help="Subcomando y argumentos para scripts/odoo-shell (ver ./odoo shell --help)",
     )
 
     # logs
@@ -569,6 +611,13 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # apk: passthrough directo a scripts/odoo-apk antes de argparse (ver
+    # main()). El subparser solo queda para listar el comando en el help.
+    subparsers.add_parser(
+        "apk",
+        help="Genera el APK/AAB de la app (TWA) en un contenedor (toolchain en .resources/apk)",
+    )
+
     # new
     p = subparsers.add_parser(
         "new",
@@ -602,6 +651,14 @@ def main() -> int:
         script = "coverage-run-all" if sys.argv[1] == "coverage" else "coverage-status"
         return subprocess.run(
             [os.path.join(BASE_PATH, "scripts", script), *sys.argv[2:]]
+        ).returncode
+
+    # apk: idem — scripts/odoo-apk usa click y acepta flags que este
+    # argparse no conoce (--scheme, --rebuild, etc.), así que se delega
+    # antes de parsear para que no los rechace.
+    if len(sys.argv) > 1 and sys.argv[1] == "apk":
+        return subprocess.run(
+            [os.path.join(BASE_PATH, "scripts", "odoo-apk"), *sys.argv[2:]]
         ).returncode
 
     parser = _build_parser()

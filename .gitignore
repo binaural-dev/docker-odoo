@@ -2,6 +2,7 @@
 instances.json
 instances.json.bak
 coverage_data/
+pwa.json
 src
 !mcp-server/src
 logs/
@@ -21,6 +22,7 @@ __pycache__
 .ignore
 .DS_Store
 .codegraph
+# Temporales de odoo_restore (odoo-apk usa .ignore/). Nunca versionar.
 .tmp_ignored/
 .claude/
 .playwright-mcp/
