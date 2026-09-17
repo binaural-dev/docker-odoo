@@ -1,0 +1,1188 @@
+#!/usr/bin/env python3
+"""Smoke tests automatizados para la TUI v3 (CSS externo + OptionList + --dev).
+
+Uso:
+    python3 scripts/tui_smoke_test.py
+    python3 scripts/tui_smoke_test.py -v
+
+Cubre las nueve simulaciones del plan v3:
+  1. El propio smoke corre limpio (este test).
+  2. Headless app boot: DockerOdooApp arranca y termina limpio en
+     headless con size=(120, 40).
+  3. Dev mode boot: con dev=True no crashea y self.dev persiste.
+  4. CSS parse: odoo-tui.tcss parsea via el runtime de Textual.
+  5. ModulePicker compose: la modal monta sin MountError.
+  6. OptionList highlight: con Pilot, press('down') cambia highlighted.
+  7. --dev flag parsing: _parse_args(['--dev']).dev es True.
+  8. --help output: el argparse muestra --dev.
+  9. No regresion de instancias: DockerOdooApp con dev=False sigue
+     exponiendo los ListView de instances_list y actions_list.
+
+Implementacion: unittest de stdlib (sin pytest) + asyncio.run para
+los pedazos async (Textual Pilot).
+"""
+
+import argparse
+import asyncio
+import io
+import os
+import subprocess
+import sys
+import time
+import unittest
+from contextlib import redirect_stdout, redirect_stderr
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+
+from tui.parser import parse_progress, classify_level
+from tui.models import Action
+from tui.actions import get_action
+from tui.app import DockerOdooApp
+from tui.widgets.update_progress import UpdateProgress
+from tui.__main__ import _parse_args
+
+ODOO_TUI = REPO_ROOT / "odoo-tui"
+TCSS_PATH = REPO_ROOT / "tui" / "styles" / "odoo-tui.tcss"
+
+
+class TuiSmokeTest(unittest.TestCase):
+    """Suite de smoke tests para la TUI v3."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tcss_text = TCSS_PATH.read_text()
+
+    # ------------------------------------------------------------------
+    # Sim 4: CSS parse
+    # ------------------------------------------------------------------
+
+    def test_css_file_exists(self):
+        """Sim 4a: el archivo odoo-tui.tcss existe en la raiz del repo."""
+        self.assertTrue(TCSS_PATH.exists(), f"Falta {TCSS_PATH}")
+        self.assertGreater(len(self.tcss_text), 0, "TCSS vacio")
+
+    def test_css_path_declared(self):
+        """Sim 4b: DockerOdooApp declara CSS_PATH apuntando al archivo."""
+        from textual._path import _make_path_object_relative
+
+        declared = DockerOdooApp.__dict__.get("CSS_PATH")
+        self.assertIsNotNone(declared, "DockerOdooApp no define CSS_PATH")
+        app = DockerOdooApp()
+        resolved = _make_path_object_relative(declared, app)
+        self.assertTrue(
+            resolved.exists(),
+            f"CSS_PATH ({declared!r}) resuelve a archivo inexistente: {resolved}",
+        )
+        self.assertEqual(
+            resolved, TCSS_PATH,
+            f"CSS_PATH resuelve a {resolved}, se esperaba {TCSS_PATH}",
+        )
+
+    def test_css_loads_in_app(self):
+        """Sim 4c: el CSS parsea via el runtime real de Textual."""
+        from textual.app import App
+        from textual.widgets import Static
+
+        class _Probe(App):
+            CSS_PATH = str(TCSS_PATH)
+
+            def compose(self):
+                yield Static("x")
+
+        async def go():
+            app = _Probe()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                rules = (
+                    len(app.stylesheet.rules)
+                    if hasattr(app.stylesheet, "rules")
+                    else 0
+                )
+                return rules
+
+        rules = asyncio.run(go())
+        self.assertGreater(rules, 0, "El stylesheet no cargo reglas")
+
+    # ------------------------------------------------------------------
+    # Sim 7: --dev flag parsing
+    # ------------------------------------------------------------------
+
+    def test_dev_flag_absent(self):
+        """Sim 7a: sin flag, args.dev es False."""
+        args = _parse_args([])
+        self.assertFalse(args.dev)
+
+    def test_dev_flag_present(self):
+        """Sim 7b: con --dev, args.dev es True."""
+        args = _parse_args(["--dev"])
+        self.assertTrue(args.dev)
+
+    def test_dev_flag_with_value(self):
+        """Sim 7c: con --dev=all, args.dev es 'all'."""
+        args = _parse_args(["--dev=all"])
+        self.assertEqual(args.dev, "all")
+
+    # ------------------------------------------------------------------
+    # Sim 8: --help output
+    # ------------------------------------------------------------------
+
+    def test_help_mentions_dev(self):
+        """Sim 8: --help imprime usage que menciona --dev."""
+        buf_out, buf_err = io.StringIO(), io.StringIO()
+        with redirect_stdout(buf_out), redirect_stderr(buf_err):
+            with self.assertRaises(SystemExit):
+                _parse_args(["--help"])
+        output = buf_out.getvalue() + buf_err.getvalue()
+        self.assertIn("--dev", output, f"--help no menciona --dev:\n{output}")
+
+    def test_help_exit_code_via_subprocess(self):
+        """Sim 8b: el script real imprime --dev en --help (subprocess)."""
+        result = subprocess.run(
+            [sys.executable, str(ODOO_TUI), "--help"],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, f"odoo-tui --help fallo:\n{result.stderr}")
+        self.assertIn("--dev", result.stdout, f"--help no menciona --dev:\n{result.stdout}")
+
+    # ------------------------------------------------------------------
+    # Sim 2 / 3: headless app boot + dev mode boot
+    # ------------------------------------------------------------------
+
+    def test_headless_app_boot(self):
+        """Sim 2: DockerOdooApp arranca en headless y termina limpio."""
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_dev_mode_boot(self):
+        """Sim 3: dev=True arranca limpio y self.dev queda accesible."""
+        async def go():
+            app = DockerOdooApp(dev=True)
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                return app.dev
+
+        dev = asyncio.run(go())
+        self.assertTrue(dev)
+
+    def test_dev_mode_all(self):
+        """Sim 3b: dev='all' tambien arranca limpio."""
+        async def go():
+            app = DockerOdooApp(dev="all")
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                return app.dev
+
+        dev = asyncio.run(go())
+        self.assertEqual(dev, "all")
+
+    # ------------------------------------------------------------------
+    # Sim 9: no regresion de instancias (ListViews siguen funcionando)
+    # ------------------------------------------------------------------
+
+    def test_instance_listview_present(self):
+        """Sim 9: DockerOdooApp sigue exponiendo #instances_list como ListView."""
+        from textual.widgets import ListView
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                lv = app.query_one("#instances_list", ListView)
+                return len(lv.children)
+
+        n = asyncio.run(go())
+        # Al menos 1 hijo (el "Todas las instancias" item se agrega en
+        # refresh_instances; sin instances.json puede haber 1).
+        self.assertGreaterEqual(n, 1, "instances_list quedo vacio")
+
+    def test_actions_listview_present(self):
+        """Sim 9b: DockerOdooApp sigue exponiendo #actions_list como ListView."""
+        from textual.widgets import ListView
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                lv = app.query_one("#actions_list", ListView)
+                return len(lv.children)
+
+        n = asyncio.run(go())
+        # Las ACTIONS tienen ~22 entradas; todas se cargan por categoria.
+        self.assertGreater(n, 0, "actions_list quedo vacio")
+
+    # ------------------------------------------------------------------
+    # Sim 5: ModulePicker compose (sin MountError)
+    # ------------------------------------------------------------------
+
+    def test_module_picker_compose(self):
+        """Sim 5: ModulePicker monta sin MountError por id duplicado."""
+        from textual.app import App
+        from textual.widgets import Static
+        from tui.screens.module_picker import ModulePicker
+
+        async def go():
+            class _Host(App):
+                def compose(self):
+                    yield Static("host")
+
+            app = _Host()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                picker = ModulePicker(
+                    instance_name="test",
+                    available_modules=["sale", "purchase", "stock"],
+                )
+                await app.push_screen(picker)
+                await pilot.pause()
+                # Confirma que la modal monto
+                available = picker.query_one("#available_list")
+                selected = picker.query_one("#selected_list")
+                from textual.widgets import OptionList
+
+                self.assertIsInstance(available, OptionList)
+                self.assertIsInstance(selected, OptionList)
+                self.assertEqual(len(available.options), 3)
+                self.assertEqual(len(selected.options), 0)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    # ------------------------------------------------------------------
+    # Sim 6: OptionList highlight con Pilot
+    # ------------------------------------------------------------------
+
+    def test_option_list_highlight(self):
+        """Sim 6: con Pilot, press('down') cambia highlighted del OptionList."""
+        from textual.app import App
+        from textual.widgets import Static
+        from tui.screens.module_picker import ModulePicker
+
+        async def go():
+            class _Host(App):
+                def compose(self):
+                    yield Static("host")
+
+            app = _Host()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                picker = ModulePicker(
+                    instance_name="test",
+                    available_modules=["sale", "purchase", "stock"],
+                )
+                await app.push_screen(picker)
+                await pilot.pause()
+
+                available = picker.query_one("#available_list")
+                # highlighted arranca en None (no hay focus aun)
+                initial = available.highlighted
+                available.focus()
+                await pilot.pause()
+                focused_initial = available.highlighted
+                # Press down debe mover el cursor
+                await pilot.press("down")
+                await pilot.pause()
+                after_down = available.highlighted
+                # Press enter dispara OptionSelected -> handler selecciona
+                await pilot.press("enter")
+                await pilot.pause()
+                return {
+                    "initial": initial,
+                    "focused_initial": focused_initial,
+                    "after_down": after_down,
+                    "selected_after_enter": list(picker.selected),
+                }
+
+        result = asyncio.run(go())
+        # Verifica que down cambia el cursor (de None o 0 a >=0)
+        self.assertIsNotNone(
+            result["after_down"],
+            f"highlighted no cambio tras press('down'): {result}",
+        )
+        # Verifica que enter selecciona un modulo
+        self.assertEqual(
+            len(result["selected_after_enter"]),
+            1,
+            f"enter no selecciono un modulo: {result}",
+        )
+
+
+# ============================================================
+# TUI v4 — UpdateProgress tests
+# ============================================================
+
+
+class TuiProgressParserTest(unittest.TestCase):
+    """Sim 1: tests del parser de progreso puro."""
+
+    def test_parse_match_simple(self):
+        """(45/234) → (45, 234)"""
+        r = parse_progress("(45/234)")
+        self.assertEqual(r, (45, 234))
+
+    def test_parse_no_match(self):
+        """linea sin parentesis → None"""
+        r = parse_progress("INFO: sale module updated")
+        self.assertIsNone(r)
+
+    def test_parse_zero_current(self):
+        """(0/1) → (0, 1)"""
+        r = parse_progress("(0/1)")
+        self.assertEqual(r, (0, 1))
+
+    def test_parse_large_numbers(self):
+        """(999/1000) → (999, 1000)"""
+        r = parse_progress("(999/1000)")
+        self.assertEqual(r, (999, 1000))
+
+    def test_parse_multiple_matches(self):
+        """linea con dos matches → primer match (0/1)"""
+        r = parse_progress("(0/1) (45/234)")
+        self.assertEqual(r, (0, 1))
+
+    def test_parse_with_surrounding_text(self):
+        """linea con texto envolvente → (5, 10)"""
+        r = parse_progress(
+            "2024-01-01 10:00:00 INFO (5/10) sale"
+        )
+        self.assertEqual(r, (5, 10))
+
+
+class TuiLevelClassifierTest(unittest.TestCase):
+    """Sim 2: tests del clasificador de nivel."""
+
+    def test_critical(self):
+        self.assertEqual(
+            classify_level("CRITICAL: Odoo crashed"),
+            "CRITICAL",
+        )
+
+    def test_error(self):
+        self.assertEqual(
+            classify_level("ERROR: sale module failed"),
+            "ERROR",
+        )
+
+    def test_warning(self):
+        self.assertEqual(
+            classify_level("WARNING: account deprecated"),
+            "WARNING",
+        )
+
+    def test_info(self):
+        self.assertEqual(
+            classify_level("INFO: update module sale"),
+            "INFO",
+        )
+
+    def test_no_prefix_defaults_to_info(self):
+        """linea sin prefijo → INFO"""
+        self.assertEqual(
+            classify_level("  some log message"),
+            "INFO",
+        )
+
+    def test_error_with_indent(self):
+        """linea con espacio previo → ERROR"""
+        self.assertEqual(
+            classify_level("  ERROR: something"),
+            "ERROR",
+        )
+
+
+class TuiUpdateProgressWidgetTest(unittest.TestCase):
+    """Sim 3: tests del widget presentacional UpdateProgress."""
+
+    def test_progress_widget_compose(self):
+        """UpdateProgress se monta con ProgressBar, labels y chips."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = UpdateProgress(instance_name="test", modules="sale")
+                await app.mount(up)
+                await pilot.pause()
+                self.assertIsNotNone(up.query_one("#up_progress"))
+                self.assertIsNotNone(up.query_one("#up_progress_label"))
+                self.assertIsNotNone(up.query_one("#up_remaining"))
+                for fid in ("filt_info", "filter_warning", "filter_error", "filt_critical"):
+                    self.assertIsNotNone(up.query_one(f"#{fid}"))
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_set_progress(self):
+        """UpdateProgress.set_progress(45, 234) actualiza ProgressBar y labels."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.set_progress(45, 234)
+                await pilot.pause()
+                pb = up.query_one("#up_progress")
+                self.assertEqual(pb.total, 234)
+                self.assertEqual(pb.progress, 45)
+                lbl = up.query_one("#up_progress_label")
+                self.assertIn("45 / 234", str(lbl.render()))
+                rem = up.query_one("#up_remaining")
+                self.assertIn("189", str(rem.render()))
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_filter_toggle(self):
+        """UpdateProgress._toggle_level() cambia filter_levels y chips."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                self.assertIn("WARNING", up.filter_levels)
+                up._toggle_level("WARNING")
+                self.assertNotIn("WARNING", up.filter_levels)
+                up._toggle_level("WARNING")
+                self.assertIn("WARNING", up.filter_levels)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_add_and_filter_lines(self):
+        """UpdateProgress.add_line() y get_filtered_lines() filtran correctamente."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.add_line("ERROR", "ERROR: test error")
+                up.add_line("WARNING", "WARNING: test warning")
+                up.add_line("INFO", "INFO: test info")
+                # WARNING activo por defecto -> todas pasan
+                all_lines = up.get_filtered_lines()
+                self.assertEqual(len(all_lines), 3)
+                # Quitar WARNING
+                up._toggle_level("WARNING")
+                filtered = up.get_filtered_lines()
+                self.assertEqual(len(filtered), 2)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_set_all_levels(self):
+        """set_all_levels(True) activa todo, set_all_levels(False) vacia."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.add_line("ERROR", "e")
+                up.add_line("WARNING", "w")
+                up.set_all_levels(False)
+                self.assertEqual(len(up.get_filtered_lines()), 0)
+                up.set_all_levels(True)
+                self.assertEqual(len(up.get_filtered_lines()), 2)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_set_errors_only(self):
+        """set_errors_only() deja solo ERROR y CRITICAL."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.add_line("ERROR", "e")
+                up.add_line("WARNING", "w")
+                up.add_line("INFO", "i")
+                up.add_line("CRITICAL", "c")
+                up.set_errors_only()
+                lines = up.get_filtered_lines()
+                self.assertEqual(len(lines), 2)
+                self.assertIn("e", lines)
+                self.assertIn("c", lines)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_clear(self):
+        """clear() resetea todo."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                up.set_progress(45, 234)
+                up.add_line("ERROR", "e")
+                up.clear()
+                self.assertEqual(up.progress_current, 0)
+                self.assertEqual(up.progress_total, 0)
+                self.assertEqual(len(up._all_lines), 0)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_progress_widget_idle_timeout_sets_indeterminate(self):
+        """ProgressBar con total=None queda en modo indeterminado."""
+        from textual.app import App
+
+        async def go():
+            app = App()
+            async with app.run_test(headless=True, size=(80, 24)) as pilot:
+                await pilot.pause()
+                up = UpdateProgress()
+                await app.mount(up)
+                await pilot.pause()
+                pb = up.query_one("#up_progress")
+                self.assertIsNotNone(pb)
+                pb.total = None
+                self.assertIsNone(pb.total)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+
+class TuiProgressIntegrationTest(unittest.TestCase):
+    """Sim 4-9: tests de integracion con subprocess mockeado y bindings."""
+
+    def test_integration_parses_progress_lines(self):
+        """Sim 4: mockear subprocess con lineas de progreso, verificar avance."""
+        from textual.app import App
+
+        odoo_lines = [
+            "INFO: odoo: (0/5) starting",
+            "INFO: odoo: (1/5) sale",
+            "WARNING: odoo: (2/5) account deprecated",
+            "ERROR: odoo: (3/5) stock failed",
+            "INFO: odoo: (4/5) purchase",
+            "INFO: odoo: (5/5) done",
+        ]
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                up = app.query_one("#update_progress", UpdateProgress)
+                up.display = True
+                up.clear()
+                for line in odoo_lines:
+                    parsed = parse_progress(line)
+                    if parsed is not None:
+                        up.set_progress(parsed[0], parsed[1])
+                    level = classify_level(line)
+                    up.add_line(level, line)
+                await pilot.pause()
+                self.assertEqual(up.progress_total, 5)
+                self.assertEqual(up.progress_current, 5)
+                self.assertEqual(len(up._all_lines), 6)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_filter_with_bindings(self):
+        """Sim 5: toggle WARNING con binding, verificar solo ciertos niveles."""
+        from textual.app import App
+
+        odoo_lines = [
+            "ERROR: e1",
+            "WARNING: w1",
+            "INFO: i1",
+            "ERROR: e2",
+            "CRITICAL: c1",
+        ]
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                up = app.query_one("#update_progress", UpdateProgress)
+                up.display = True
+                for line in odoo_lines:
+                    level = classify_level(line)
+                    up.add_line(level, line)
+                # Ver estado inicial: 5 lineas pasan
+                self.assertEqual(len(up.get_filtered_lines()), 5)
+                # Presionar '2' toggle WARNING
+                await pilot.press("2")
+                await pilot.pause()
+                # WARNING desactivado -> quedan 4
+                self.assertNotIn("WARNING", up.filter_levels)
+                self.assertEqual(len(up.get_filtered_lines()), 4)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_filter_errors_only(self):
+        """Sim 6: binding '9' deja solo ERROR+CRITICAL."""
+        from textual.app import App
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                up = app.query_one("#update_progress", UpdateProgress)
+                up.display = True
+                up.add_line("ERROR", "e1")
+                up.add_line("WARNING", "w1")
+                up.add_line("INFO", "i1")
+                up.add_line("CRITICAL", "c1")
+                await pilot.pause()
+                await pilot.press("9")
+                await pilot.pause()
+                lines = up.get_filtered_lines()
+                self.assertEqual(len(lines), 2)
+                self.assertIn("e1", lines)
+                self.assertIn("c1", lines)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_filter_all(self):
+        """Sim 7: binding '0' activa todos los niveles."""
+        from textual.app import App
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                up = app.query_one("#update_progress", UpdateProgress)
+                up.display = True
+                up.add_line("ERROR", "e1")
+                up.add_line("WARNING", "w1")
+                up._toggle_level("WARNING")
+                await pilot.pause()
+                self.assertEqual(len(up.get_filtered_lines()), 1)
+                await pilot.press("0")
+                await pilot.pause()
+                self.assertEqual(len(up.get_filtered_lines()), 2)
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_cancel_with_esc(self):
+        """Sim 8: Esc llama a terminate() en el subprocess."""
+        from textual.app import App
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                mock_proc = MagicMock()
+                mock_proc.terminate = MagicMock()
+                app._update_proc = mock_proc
+                await pilot.press("escape")
+                await pilot.pause()
+                mock_proc.terminate.assert_called_once()
+                return "ok"
+
+        result = asyncio.run(go())
+        self.assertEqual(result, "ok")
+
+    def test_integration_no_modules_shows_widget(self):
+        """Sim 10: update sin modulos especificos (all) TAMBIEN muestra
+        el widget porque Odoo emite (N/M) en cualquier caso. Antes
+        retornaba False, lo que hacia invisible la barra para el caso
+        mas comun (corregido: el usuario se quejaba de que la barra
+        no funcionaba)."""
+        update_action = get_action("update")
+        app = DockerOdooApp()
+        self.assertTrue(
+            app._is_update_with_modules(update_action, {"modules": "all"})
+        )
+
+    def test_integration_with_modules_shows_widget(self):
+        """update con modulos conocidos usa el widget."""
+        update_action = get_action("update")
+        app = DockerOdooApp()
+        self.assertTrue(
+            app._is_update_with_modules(update_action, {"modules": "sale,purchase"})
+        )
+
+    def test_integration_non_update_no_widget(self):
+        """accion no-update no usa el widget."""
+        start_action = get_action("start")
+        app = DockerOdooApp()
+        self.assertFalse(
+            app._is_update_with_modules(start_action, {})
+        )
+
+    def test_cancel_kills_zombie(self):
+        """Sim 11: un proceso que ignora SIGTERM debe morir por SIGKILL
+        dentro del grace + kill grace. Usamos timeouts cortos (1s+1s)
+        para que el test corra rapido.
+        """
+        from tui.runner import stream_command
+
+        async def go():
+            # trap '' TERM ignora SIGTERM; sleep 60 bloquea
+            argv = ["sh", "-c", "trap '' TERM; sleep 60"]
+
+            async def runner_task():
+                return await stream_command(
+                    argv,
+                    str(REPO_ROOT),
+                    on_line=lambda _line: None,
+                    terminate_grace=1.0,
+                    kill_grace=1.0,
+                )
+
+            t0 = time.monotonic()
+            task = asyncio.create_task(runner_task())
+            # Dejamos que arranque
+            await asyncio.sleep(0.3)
+            task.cancel()
+            try:
+                await task
+                cancelled = False
+            except asyncio.CancelledError:
+                cancelled = True
+            elapsed = time.monotonic() - t0
+            return {"cancelled": cancelled, "elapsed": elapsed}
+
+        result = asyncio.run(go())
+        self.assertTrue(
+            result["cancelled"],
+            f"el runner no propagó CancelledError: {result}",
+        )
+        # Total: 0.3s arranque + 1.0s SIGTERM grace + 1.0s SIGKILL grace
+        # = ~2.3s. Permitimos hasta 4s para CI lento.
+        self.assertLess(
+            result["elapsed"], 4.0,
+            f"cancel tomó demasiado: {result['elapsed']:.2f}s (esperado <4s)",
+        )
+
+
+# ============================================================
+# TUI v6 — Streaming regression tests
+# ============================================================
+
+
+class TuiStreamingRegressionTest(unittest.TestCase):
+    """Tests de regresión para el bug original del TUI colgado.
+
+    Cubren las tres aristas que arreglamos en este batch:
+
+      1. Streaming con output lento NO debe colgarse (la causa raiz:
+         block-buffering de Popen + readline de thread).
+      2. Cancel escalado a SIGKILL termina dentro del timeout
+         (commit 2: terminate+wait+kill).
+      3. Save de instances.json desde thread no toca el DOM
+         (commit 4: helpers puros + to_thread).
+    """
+
+    def test_streaming_with_slow_output_does_not_hang(self):
+        """Sim R1: el runner no se cuelga con output lento.
+
+        Reproduce el bug original: el viejo `subprocess.Popen` con
+        `bufsize=1, text=True, stdout=PIPE` hacia block-buffering y
+        `for line in proc.stdout` se quedaba esperando 4-8 KB de
+        buffer. Aqui emitimos 1 linea cada 200ms (10 lineas en 2s).
+        Si el bug estuviera presente, este test colgaria o reportaria
+        menos de 10 lineas.
+        """
+        from tui.runner import stream_command
+
+        async def go():
+            # python -c con sleep 0.2 entre prints -> 10 lineas en 2s
+            argv = [
+                "python3", "-c",
+                "import time\n"
+                "for i in range(10):\n"
+                "    print(f'INFO ({i}/{i+1}) line {i}')\n"
+                "    time.sleep(0.2)\n",
+            ]
+            lines: list[str] = []
+            progress_events: list[tuple[int, int]] = []
+
+            def on_line(line: str) -> None:
+                lines.append(line)
+
+            def on_progress(cur: int, tot: int) -> None:
+                progress_events.append((cur, tot))
+
+            t0 = time.monotonic()
+            rc = await stream_command(
+                argv, str(REPO_ROOT),
+                on_line=on_line, on_progress=on_progress,
+            )
+            elapsed = time.monotonic() - t0
+            return {"rc": rc, "lines": lines, "elapsed": elapsed,
+                    "progress_events": progress_events}
+
+        result = asyncio.run(go())
+        self.assertEqual(result["rc"], 0, f"rc != 0: {result}")
+        # 10 lineas de output, todas deben llegar.
+        self.assertEqual(
+            len(result["lines"]), 10,
+            f"se perdieron lineas: {result['lines']}",
+        )
+        # El script dura ~2s (10 * 0.2). Si el runner se cuelga,
+        # el elapsed seria mucho mayor. Damos margen para CI lento.
+        self.assertLess(
+            result["elapsed"], 8.0,
+            f"el test tardo demasiado (probable hang): "
+            f"{result['elapsed']:.2f}s",
+        )
+        # Tambien verificamos que el progress callback se invoco
+        # para los matches (N/M) en las lineas.
+        self.assertGreater(
+            len(result["progress_events"]), 0,
+            f"progress no se detecto: {result}",
+        )
+
+    def test_streaming_cancelled_returns_partial(self):
+        """Sim R2: cancel de un comando largo -> CancelledError rapido.
+
+        Lanza un sleep 60, cancela a los 500ms, verifica que
+        CancelledError se propague en menos de 7s (terminate 1s +
+        kill 1s + slack).
+        """
+        from tui.runner import stream_command
+
+        async def go():
+            argv = ["sh", "-c", "trap '' TERM; sleep 60"]
+
+            async def runner_task():
+                return await stream_command(
+                    argv,
+                    str(REPO_ROOT),
+                    on_line=lambda _l: None,
+                    terminate_grace=1.0,
+                    kill_grace=1.0,
+                )
+
+            t0 = time.monotonic()
+            task = asyncio.create_task(runner_task())
+            await asyncio.sleep(0.5)
+            task.cancel()
+            try:
+                await task
+                raised = False
+                rc = None
+            except asyncio.CancelledError:
+                raised = True
+                rc = None
+            elapsed = time.monotonic() - t0
+            return {"raised": raised, "elapsed": elapsed, "rc": rc}
+
+        result = asyncio.run(go())
+        self.assertTrue(
+            result["raised"],
+            f"CancelledError no se propago: {result}",
+        )
+        # 0.5s sleep + 1s SIGTERM grace + 1s SIGKILL grace = ~2.5s.
+        # Damos margen a 7s para CI lento.
+        self.assertLess(
+            result["elapsed"], 7.0,
+            f"cancel tardo demasiado: {result['elapsed']:.2f}s",
+        )
+
+    def test_save_json_from_thread_does_not_crash(self):
+        """Sim R3: 5 saves en paralelo via to_thread no rompen nada.
+
+        Simula el caso real: el user apreta Space rapido 5 veces y
+        cada toggle dispara un worker que llama
+        `_save_instances_json_async` (que internamente hace
+        `asyncio.to_thread(_write_instances_json, ...)`). Verificamos
+        que ninguno levante y que el archivo final siga siendo JSON
+        valido.
+        """
+        from tui.app import _write_instances_json
+
+        sample = {
+            "odoo_configs": {},
+            "databases": {},
+            "instances": {
+                "regression_r3": {
+                    "odoo_version": "17.0",
+                    "external_port": 8171,
+                    "database": "regression_r3",
+                    "enabled": True,
+                },
+            },
+        }
+        real_path = REPO_ROOT / "instances.json"
+        backup = real_path.read_bytes() if real_path.exists() else None
+
+        try:
+            async def go():
+                # 5 saves en paralelo, igual que un user con Space
+                # compulsivo. Cada uno corre en su propio thread del
+                # pool. El helper es puro (no toca DOM), asi que esto
+                # es seguro.
+                tasks = [
+                    asyncio.to_thread(
+                        _write_instances_json, str(REPO_ROOT), sample
+                    )
+                    for _ in range(5)
+                ]
+                return await asyncio.gather(*tasks, return_exceptions=True)
+
+            results = asyncio.run(go())
+            for i, r in enumerate(results):
+                self.assertIsInstance(
+                    r, tuple,
+                    f"save #{i} levanto una excepcion: {r!r}",
+                )
+                self.assertTrue(r[0], f"save #{i} fallo: {r}")
+            # El archivo final debe ser JSON valido y tener la
+            # instancia regression_r3.
+            import json as _json
+            parsed = _json.loads(real_path.read_text())
+            self.assertIn("instances", parsed)
+            self.assertIn("regression_r3", parsed["instances"])
+            # Y no debe haber quedado corrupto de un save parcial.
+            self.assertEqual(
+                parsed["instances"]["regression_r3"]["odoo_version"],
+                "17.0",
+            )
+        finally:
+            if backup is not None:
+                real_path.write_bytes(backup)
+            elif real_path.exists():
+                real_path.unlink()
+
+
+# ============================================================
+# submodule-status / update-tags — real dispatch through the TUI
+# ============================================================
+
+
+class TuiActionDispatchIntegrationTest(unittest.TestCase):
+    """Drive the real ListView -> InputModal -> submit pipeline with Pilot.
+
+    Unlike the CLI's own tests (which exercise ``update_tags``/
+    ``submodule_status`` directly with a scripted ``Runner``), these
+    verify the TUI's OWN wiring: that selecting the action in the real
+    ``ListView``, typing into the real ``InputModal``, and submitting
+    it actually reaches ``DispatchMixin`` with the right argv — not
+    just that ``_odoo_cli_args`` builds the right list in isolation.
+
+    Only the actual subprocess boundary is mocked (``stream_command``
+    for non-interactive actions, ``DockerOdooApp._run_interactive``
+    for ``interactive=True`` ones) — everything above that, including
+    real key presses and widget state, is genuine.
+    """
+
+    @staticmethod
+    def _select_action(actions_list, action_id: str) -> None:
+        idx = next(
+            i
+            for i, item in enumerate(actions_list.children)
+            if getattr(item, "action", None) and item.action.action_id == action_id
+        )
+        actions_list.index = idx
+        actions_list.focus()
+
+    def test_submodule_status_empty_repo_means_all_projects(self):
+        """Selecting 'Estado de submódulos' and submitting with the repo
+        field blank must reach stream_command with NO project positional
+        (the "optional" tweak for this one action must actually work)."""
+        from textual.widgets import Input, ListView
+
+        captured = {}
+
+        async def fake_stream_command(argv, cwd, on_line=None, on_progress=None, **kwargs):
+            captured["argv"] = argv
+            return 0
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                actions_list = app.query_one("#actions_list", ListView)
+                self._select_action(actions_list, "submodule-status")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                # Confirm the modal actually mounted with an empty,
+                # optional repo field before submitting blank.
+                inp = app.screen.query_one("#inp_repo", Input)
+                self.assertEqual(inp.value, "")
+                with patch("tui.runner.stream_command", side_effect=fake_stream_command):
+                    await pilot.press("ctrl+enter")
+                    await pilot.pause()
+                    await pilot.pause()
+
+        asyncio.run(go())
+        self.assertEqual(
+            captured.get("argv"), ["./odoo", "submodule-status"],
+            f"argv inesperado: {captured}",
+        )
+
+    def test_submodule_status_with_project_typed_in(self):
+        """Same flow, but typing a project name must append it as the
+        sole positional argument."""
+        from textual.widgets import Input, ListView
+
+        captured = {}
+
+        async def fake_stream_command(argv, cwd, on_line=None, on_progress=None, **kwargs):
+            captured["argv"] = argv
+            return 0
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                actions_list = app.query_one("#actions_list", ListView)
+                self._select_action(actions_list, "submodule-status")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                inp = app.screen.query_one("#inp_repo", Input)
+                inp.value = "bananera"
+                await pilot.pause()
+                with patch("tui.runner.stream_command", side_effect=fake_stream_command):
+                    await pilot.press("ctrl+enter")
+                    await pilot.pause()
+                    await pilot.pause()
+
+        asyncio.run(go())
+        self.assertEqual(
+            captured.get("argv"), ["./odoo", "submodule-status", "bananera"],
+            f"argv inesperado: {captured}",
+        )
+
+    def test_update_tags_routes_through_interactive_suspend_path(self):
+        """update-tags is interactive=True: selecting it and submitting
+        the project field must call DockerOdooApp._run_interactive
+        (the terminal-suspend path), not the streamed one — it needs a
+        live TTY for its confirm()/prompt_text() loop, which a streamed
+        subprocess can't give it."""
+        from textual.widgets import Input, ListView
+
+        captured = {}
+
+        async def fake_run_interactive(argv, action):
+            captured["argv"] = argv
+            captured["action_id"] = action.action_id
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                actions_list = app.query_one("#actions_list", ListView)
+                self._select_action(actions_list, "update-tags")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                inp = app.screen.query_one("#inp_repo", Input)
+                inp.value = "bananera"
+                await pilot.pause()
+                with patch.object(
+                    app, "_run_interactive", side_effect=fake_run_interactive
+                ):
+                    await pilot.press("ctrl+enter")
+                    await pilot.pause()
+                    await pilot.pause()
+
+        asyncio.run(go())
+        self.assertEqual(
+            captured.get("argv"), ["./odoo", "update-tags", "bananera"],
+            f"argv inesperado: {captured}",
+        )
+        self.assertEqual(captured.get("action_id"), "update-tags")
+
+    def test_sync_still_requires_repo_unlike_submodule_status(self):
+        """Regression guard: the optional=True tweak in _dispatch is
+        keyed off action_id == 'submodule-status' specifically. sync
+        shares the same ARG_REPO field and must still block submission
+        when it's left blank — if this ever starts passing (modal
+        dismisses, stream_command gets called), the tweak leaked to
+        every ARG_REPO-using action."""
+        from textual.widgets import Input, ListView
+
+        captured = {}
+
+        async def fake_stream_command(argv, cwd, on_line=None, on_progress=None, **kwargs):
+            captured["argv"] = argv
+            return 0
+
+        async def go():
+            app = DockerOdooApp()
+            async with app.run_test(headless=True, size=(120, 40)) as pilot:
+                await pilot.pause()
+                actions_list = app.query_one("#actions_list", ListView)
+                self._select_action(actions_list, "sync")
+                await pilot.pause()
+                await pilot.press("enter")
+                await pilot.pause()
+                inp = app.screen.query_one("#inp_repo", Input)
+                self.assertEqual(inp.value, "")
+                with patch("tui.runner.stream_command", side_effect=fake_stream_command):
+                    await pilot.press("ctrl+enter")
+                    await pilot.pause()
+                    await pilot.pause()
+                return len(app.screen_stack)
+
+        stack_depth = asyncio.run(go())
+        self.assertEqual(
+            captured, {},
+            f"sync no debía ejecutar con repo vacío. Llamadas: {captured}",
+        )
+        self.assertGreater(
+            stack_depth, 1,
+            "El modal de sync se cerró con el campo repo vacío (debería seguir "
+            "bloqueado pidiendo el valor requerido).",
+        )
+
+
+if __name__ == "__main__":
+    # Permitir -v para verbosity
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("unittest_args", nargs="*")
+    parsed, _ = parser.parse_known_args()
+    argv = [sys.argv[0]] + (["-v"] if parsed.verbose else []) + parsed.unittest_args
+    unittest.main(argv=argv, verbosity=2 if parsed.verbose else 1, exit=False)

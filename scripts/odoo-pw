@@ -2,6 +2,8 @@
 
 import json
 import os
+import shlex
+import subprocess
 import sys
 import click
 from pathlib import Path
@@ -14,6 +16,7 @@ from generators.config_loader import (
     get_db_host,
     get_db_internal_port,
 )
+from generators.pw_helpers import _check_db_exists
 
 
 @click.command()
@@ -34,12 +37,46 @@ def run_command(instance, d, l, password):
     db_password = db_conf["password"]
     db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
+    compose_file = os.path.join(BASE_PATH, "docker-compose.generated.yml")
 
-    pw = f"'{password}'"
-    login = f"'{l}'"
-    os.system(
-        f'docker exec -it -e PGPASSWORD={db_password} {container} psql --host {db_host} --port {db_port} -U {db_user} -d {d} -c "update res_users set password = {pw}, login = {login} where id=2;"'
+    safe_pw = shlex.quote(password)
+    safe_login = shlex.quote(l)
+
+    # Validar que la DB exista en el contenedor antes de correr psql.
+    # Sin esto, psql falla con 'database does not exist' y termina con
+    # error confuso cuando la instancia no coincide con la DB.
+    existe, disponibles = _check_db_exists(
+        container, db_host, db_user, db_port, db_password, d, compose_file,
     )
+    if not existe:
+        bases_str = ", ".join(disponibles) if disponibles else "(no se pudo listar)"
+        click.echo(
+            f"\n\033[1;31m✗ La base de datos '{d}' no existe en la instancia '{instance}'.\033[0m"
+            f"\nBases disponibles en '{instance}': {bases_str}\n",
+            err=True,
+        )
+        sys.exit(1)
+
+    env = os.environ.copy()
+    env["PGPASSWORD"] = db_password
+    click.echo(f"\n→ Restableciendo contraseña para el usuario '{l}' en la base de datos '{d}'...")
+    proc = subprocess.run(
+        [
+            "docker", "compose", "-f", compose_file, "exec", "-T",
+            container,
+            "psql",
+            "--host", db_host,
+            "--port", str(db_port),
+            "-U", db_user,
+            "-d", d,
+            "-c", f"update res_users set password = {safe_pw} where login = {safe_login};"
+        ],
+        env=env,
+    )
+    if proc.returncode != 0:
+        click.echo(f"\n\033[1;31m✗ Error ejecutando psql (código {proc.returncode}). Contraseña NO actualizada.\033[0m\n", err=True)
+        sys.exit(proc.returncode)
+    click.echo("✅ Contraseña actualizada.\n")
 
 
 if __name__ == "__main__":

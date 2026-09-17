@@ -13,10 +13,10 @@ RUN python3 -m pip install --no-cache-dir \
     cairosvg \
     click-odoo-contrib
 
-ENV SOURCES /home/odoo/src
-ENV RESOURCES /home/odoo/.resources
-ENV CONFIG_DIR /home/odoo/.config
-ENV DATA_DIR /home/odoo/data
+ENV SOURCES=/home/odoo/src
+ENV RESOURCES=/home/odoo/.resources
+ENV CONFIG_DIR=/home/odoo/.config
+ENV DATA_DIR=/home/odoo/data
 ENV ODOO_RC=$CONFIG_DIR/odoo.conf
 
 RUN mkdir -p $RESOURCES && \
