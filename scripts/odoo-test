@@ -1127,8 +1127,32 @@ def run_command():
     # querian probar.
     http_port = random_high_port()
     gevent_port = random_high_port()
+
+    # -i (install) es un no-op para un modulo que YA esta instalado: Odoo no
+    # recarga su codigo Python ni redescubre sus tests, asi que -d apuntando
+    # a una base real ya provisionada (no una de las descartables que este
+    # script genera solo) corre con "Tests ejecutados: 0" y sin ningun error
+    # -- silenciosamente no hizo nada. Si la base ya existe y TODOS los
+    # modulos pedidos ya estan 'installed' ahi, se usa -u (update) en su
+    # lugar, que si fuerza la recarga de codigo + tests. Si la base es
+    # nueva (recien creada mas abajo) o falta instalar algo, se mantiene -i,
+    # que es el flujo normal de esta herramienta (base descartable, todo
+    # fresco).
+    requested_modules = modules_str.split(",")
+    reused_db = db_exists(container, db_name)
+    pre_run_states = query_module_states(container, db_name, requested_modules) if reused_db else {}
+    already_installed = reused_db and all(
+        pre_run_states.get(m) == "installed" for m in requested_modules
+    )
+    install_flag = "-u" if already_installed else "-i"
+    if already_installed:
+        print(
+            f"→ '{modules_str}' ya esta instalado en '{db_name}': usando -u (update) "
+            "en vez de -i para forzar la recarga de codigo y tests."
+        )
+
     odoo_cmd = (
-        f"odoo --test-tags {test_tags} -d {db_name} -i {modules_str} "
+        f"odoo --test-tags {test_tags} -d {db_name} {install_flag} {modules_str} "
         "--without-demo=True --stop-after-init --workers 0 --no-http "
         f"--http-port={http_port} --gevent-port={gevent_port} "
         "-c /home/odoo/.config/odoo.conf"
