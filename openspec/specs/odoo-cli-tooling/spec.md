@@ -126,3 +126,28 @@ de `pwa.json` en la raíz del repo, con precedencia flag CLI > env
 - **THEN** se instala `adb` si falta (según macOS/Linux), se espera el
   dispositivo autorizado, se instala la APK con `adb install -r` y se abre la
   app; si no hay APK todavía, primero se genera
+
+### Requirement: `./odoo test` reutiliza una base ya provisionada sin dejar de ejecutar tests
+
+Cuando `-d`/`--db` apunta a una base que ya existe y el/los módulo(s) pedidos
+ya están instalados ahí, el CLI DEBE forzar una actualización (`-u`) en vez de
+una instalación (`-i`) al invocar Odoo, para que el código Python del módulo
+se recargue y sus tests se redescubran. `-i` sobre un módulo ya instalado es
+un no-op para Odoo: no falla, pero tampoco corre ni un solo test — silencio
+indistinguible de "no había nada que probar".
+
+#### Scenario: base nueva o módulo no instalado (comportamiento sin cambios)
+- **GIVEN** `-d` no apunta a una base existente, o la base existe pero el
+  módulo pedido no está instalado ahí
+- **WHEN** se ejecuta `./odoo test`
+- **THEN** se usa `-i` como hasta ahora (flujo normal: base descartable,
+  instalación fresca)
+
+#### Scenario: base existente con el módulo ya instalado
+- **GIVEN** `-d <base>` apunta a una base que ya existe y TODOS los módulos
+  pedidos figuran `state = 'installed'` en `ir_module_module` de esa base
+- **WHEN** se ejecuta `./odoo test -i <instancia> -m <modulo> -d <base>
+  --no-rm-db`
+- **THEN** el CLI imprime que va a usar `-u` en su lugar, Odoo recarga el
+  código del módulo y sus tests corren normalmente (visible en el resumen
+  como `Tests ejecutados: N`, no `0`)
