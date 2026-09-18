@@ -49,8 +49,8 @@ for mod_path in "${MOD_ARRAY[@]}"; do
 done
 
 # Eliminar la última coma de ambas variables
-SOURCE_PATHS=${SOURCE_PATHS::-1}
-MODULE_NAMES=${MODULE_NAMES::-1}
+SOURCE_PATHS=${SOURCE_PATHS%,}
+MODULE_NAMES=${MODULE_NAMES%,}
 COVERAGERC_PATH=/home/odoo/.coveragerc
 
 echo "✅ Rutas de origen para coverage: $SOURCE_PATHS"
