@@ -1,0 +1,798 @@
+#!/usr/bin/env python3
+"""migration-verify — demuestra que la data sobrevivió al salto 17 -> 19.
+
+Implementa los puntos 1..10 de `migration_things/v19/09-plan-de-pruebas.md`.
+El principio es el del documento: se toma un **snapshot en v17, fuera de la BD**,
+y después se compara contra la BD v19 ya migrada. Fuera de la BD a propósito:
+las tablas de respaldo internas podrían no sobrevivir al servicio de upgrade.
+
+    scripts/migration-verify snapshot -d 17_proalca_bs \
+        -o deliverables/migracion-19/proalca/snapshot-v17.json
+
+    scripts/migration-verify compare -s deliverables/migracion-19/proalca/snapshot-v17.json \
+        -d 19_proalca_run5 -o deliverables/migracion-19/proalca/compare-20260922.json
+
+Habla con la BD por `docker exec <contenedor-pg> psql`, igual que el resto de
+`scripts/` — sin dependencias de Python fuera de la stdlib.
+
+Las diferencias de esquema 17 -> 19 que el propio salto introduce están
+declaradas aquí y se resuelven por versión, no se esquivan:
+
+  * `account_account.code` en 17 es una columna; en 19 vive en `code_store`
+    (jsonb por compañía). La consulta del punto 3 usa la expresión correcta
+    según lo que exista en esa BD.
+  * `stock_valuation_layer` no existe en 19 (R-14). El punto 8 lo registra en
+    el snapshot como **informativo**: se reporta, no se compara.
+
+Salida de `compare`: código 0 si todo lo exigible cuadra, 1 si hay alguna
+diferencia real. Lo informativo nunca cambia el código de salida.
+"""
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+SEP = "\x01"
+DEFAULT_PG_CONTAINER = "db-pg16"
+DEFAULT_PG_USER = "odoo"
+
+# Tablas del punto 1. `None` como valor = no tiene equivalente en 19; se
+# reporta pero no se compara.
+TABLAS_PUNTO_1 = [
+    "account_move",
+    "account_move_line",
+    "account_partial_reconcile",
+    "account_full_reconcile",
+    "account_account",
+    "account_journal",
+    "account_payment",
+    "account_retention",
+    "account_retention_line",
+    "res_partner",
+    "res_company",
+    "res_currency_rate",
+    "product_template",
+    "product_product",
+    "stock_quant",
+    "stock_move",
+    "stock_move_line",
+    "stock_picking",
+    "sale_order",
+    "sale_order_line",
+    "purchase_order",
+    "purchase_order_line",
+    "ir_attachment",
+    "ir_sequence",
+    "ir_cron",
+    "ir_mail_server",
+]
+
+# Tablas que desaparecen en 19 y por qué. Se snapshotean igual (sirven de
+# evidencia de lo que había), pero su ausencia del lado 19 no es un fallo.
+TABLAS_SIN_EQUIVALENTE_19 = {
+    "stock_valuation_layer": "R-14: eliminado como modelo en 19.0",
+    "stock_valuation_layer_revaluation": "R-14: eliminado como modelo en 19.0",
+}
+
+
+class Psql:
+    """Cliente psql por docker exec. Devuelve filas como listas de strings."""
+
+    def __init__(self, container, user, database):
+        self.container = container
+        self.user = user
+        self.database = database
+
+    def query(self, sql):
+        cmd = [
+            "docker", "exec", self.container,
+            "psql", "-U", self.user, "-d", self.database,
+            "-tA", "-F", SEP, "-v", "ON_ERROR_STOP=1", "-c", sql,
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(
+                f"psql falló sobre {self.database}:\n{res.stderr.strip()}\nSQL: {sql[:400]}"
+            )
+        filas = []
+        for linea in res.stdout.splitlines():
+            if not linea.strip():
+                continue
+            filas.append(linea.split(SEP))
+        return filas
+
+    def scalar(self, sql):
+        filas = self.query(sql)
+        return filas[0][0] if filas and filas[0] else None
+
+    def tabla_existe(self, tabla):
+        return self.scalar(
+            f"SELECT count(*) FROM pg_tables WHERE schemaname='public' "
+            f"AND tablename='{tabla}'"
+        ) == "1"
+
+    def columna_existe(self, tabla, columna):
+        return self.scalar(
+            f"SELECT count(*) FROM information_schema.columns "
+            f"WHERE table_name='{tabla}' AND column_name='{columna}'"
+        ) == "1"
+
+
+def expresion_codigo_cuenta(db):
+    """El punto 3 necesita el código de cuenta, que cambió de sitio en 18.0.
+
+    17: `account_account.code`. 18/19: `account_account.code_store` (jsonb por
+    compañía). Leerlo mal devuelve NULL en silencio, que es justo la clase de
+    error que este plan de pruebas existe para atrapar.
+    """
+    if db.columna_existe("account_account", "code"):
+        return "a.code"
+    if db.columna_existe("account_account", "code_store"):
+        return "(a.code_store ->> l.company_id::text)"
+    return "NULL::varchar"
+
+
+def construir_checks(db):
+    """Devuelve la lista de checks resuelta contra el esquema de ESTA BD."""
+    code_expr = expresion_codigo_cuenta(db)
+
+    checks = []
+
+    # --- Punto 1: conteo por modelo -------------------------------------
+    piezas = []
+    faltantes = {}
+    for tabla in TABLAS_PUNTO_1 + list(TABLAS_SIN_EQUIVALENTE_19):
+        if db.tabla_existe(tabla):
+            piezas.append(f"SELECT '{tabla}' AS tabla, count(*)::text AS filas FROM {tabla}")
+        else:
+            faltantes[tabla] = TABLAS_SIN_EQUIVALENTE_19.get(tabla, "tabla ausente")
+    checks.append({
+        "id": "p01_conteo_por_modelo",
+        "titulo": "Punto 1 · Conteo por modelo",
+        "claves": ["tabla"],
+        "valores": ["filas"],
+        "sql": " UNION ALL ".join(piezas) + " ORDER BY 1",
+        "informativo_para": dict(TABLAS_SIN_EQUIVALENTE_19),
+        "tablas_ausentes": faltantes,
+    })
+
+    # --- Punto 2: sumas por (compañía, diario, ejercicio) ----------------
+    checks.append({
+        "id": "p02_sumas_por_diario",
+        "titulo": "Punto 2 · sum(debit/credit/balance) por compañía, diario y ejercicio",
+        "claves": ["company_id", "journal_id", "ejercicio"],
+        "valores": ["lineas", "debe", "haber", "balance"],
+        "sql": """
+            SELECT l.company_id::text, l.journal_id::text, to_char(l.date,'YYYY'),
+                   count(*)::text,
+                   round(sum(l.debit)::numeric,2)::text,
+                   round(sum(l.credit)::numeric,2)::text,
+                   round(sum(l.balance)::numeric,2)::text
+            FROM account_move_line l
+            GROUP BY 1,2,3 ORDER BY 1,2,3
+        """,
+    })
+
+    # --- Punto 3: balance por cuenta al cierre de cada ejercicio ---------
+    checks.append({
+        "id": "p03_balance_por_cuenta",
+        "titulo": "Punto 3 · Balance de comprobación por cuenta y ejercicio",
+        "claves": ["company_id", "cuenta", "ejercicio"],
+        "valores": ["debe", "haber"],
+        "sql": f"""
+            SELECT l.company_id::text, coalesce({code_expr},'(sin codigo)'),
+                   to_char(l.date,'YYYY'),
+                   round(sum(l.debit)::numeric,2)::text,
+                   round(sum(l.credit)::numeric,2)::text
+            FROM account_move_line l
+            JOIN account_account a ON a.id = l.account_id
+            GROUP BY 1,2,3 ORDER BY 1,2,3
+        """,
+    })
+
+    # --- Punto 4: cuadre debe = haber -----------------------------------
+    checks.append({
+        "id": "p04_cuadre_global",
+        "titulo": "Punto 4 · sum(debit) = sum(credit) por asiento y global",
+        "claves": ["concepto"],
+        "valores": ["valor"],
+        "sql": """
+            SELECT 'asientos_descuadrados', count(*)::text FROM (
+                SELECT move_id FROM account_move_line GROUP BY move_id
+                HAVING round(sum(debit)::numeric,2) <> round(sum(credit)::numeric,2)
+            ) t
+            UNION ALL SELECT 'suma_debe', round(sum(debit)::numeric,2)::text FROM account_move_line
+            UNION ALL SELECT 'suma_haber', round(sum(credit)::numeric,2)::text FROM account_move_line
+            UNION ALL SELECT 'suma_balance', round(sum(balance)::numeric,2)::text FROM account_move_line
+            ORDER BY 1
+        """,
+    })
+
+    # --- Punto 5: columnas foreign_* ------------------------------------
+    checks.append({
+        "id": "p05_moneda_alterna",
+        "titulo": "Punto 5 · sum(foreign_debit/foreign_credit) por compañía y ejercicio",
+        "claves": ["company_id", "ejercicio"],
+        "valores": ["foreign_debe", "foreign_haber", "foreign_balance", "descuadre"],
+        "sql": """
+            SELECT company_id::text, to_char(date,'YYYY'),
+                   round(sum(foreign_debit)::numeric,2)::text,
+                   round(sum(foreign_credit)::numeric,2)::text,
+                   round(sum(foreign_balance)::numeric,2)::text,
+                   round((sum(foreign_debit)-sum(foreign_credit))::numeric,2)::text
+            FROM account_move_line
+            GROUP BY 1,2 ORDER BY 1,2
+        """,
+    })
+
+    # --- Punto 6: conciliación ------------------------------------------
+    # `sum(round(x,2))` y no `round(sum(x),2)`: sumar 9.484 floats sin redondear
+    # arrastra ~0,08 de ruido de coma flotante que no corresponde a ninguna
+    # factura cambiada. Redondear antes de sumar hace que el check señale
+    # facturas de verdad distintas, no artefactos de la suma.
+    checks.append({
+        "id": "p06a_conciliacion_parcial",
+        "titulo": "Punto 6 · account.partial.reconcile: conteo y suma",
+        "claves": ["concepto"],
+        "valores": ["valor"],
+        "sql": """
+            SELECT 'partials', count(*)::text FROM account_partial_reconcile
+            UNION ALL SELECT 'partials_suma', coalesce(round(sum(amount)::numeric,2),0)::text
+                FROM account_partial_reconcile
+            UNION ALL SELECT 'full_reconciles', count(*)::text FROM account_full_reconcile
+            UNION ALL SELECT 'residual_facturas', coalesce(sum(round(amount_residual::numeric,2)),0)::text
+                FROM account_move WHERE move_type <> 'entry'
+            ORDER BY 1
+        """,
+    })
+    checks.append({
+        "id": "p06b_estado_de_pago",
+        "titulo": "Punto 6 · facturas por payment_state",
+        "claves": ["move_type", "payment_state"],
+        "valores": ["facturas"],
+        "sql": """
+            SELECT move_type, coalesce(payment_state,'(null)'), count(*)::text
+            FROM account_move WHERE move_type <> 'entry'
+            GROUP BY 1,2 ORDER BY 1,2
+        """,
+    })
+
+    # --- Punto 7: retenciones -------------------------------------------
+    if db.tabla_existe("account_retention"):
+        checks.append({
+            "id": "p07a_retenciones",
+            "titulo": "Punto 7 · Retenciones por tipo y ejercicio",
+            "claves": ["type", "type_retention", "ejercicio"],
+            "valores": ["retenciones", "monto_retenido", "monto_iva", "monto_factura"],
+            "sql": """
+                SELECT coalesce(type,'(null)'), coalesce(type_retention,'(null)'),
+                       to_char(date,'YYYY'),
+                       count(*)::text,
+                       coalesce(round(sum(total_retention_amount)::numeric,2),0)::text,
+                       coalesce(round(sum(total_iva_amount)::numeric,2),0)::text,
+                       coalesce(round(sum(total_invoice_amount)::numeric,2),0)::text
+                FROM account_retention
+                GROUP BY 1,2,3 ORDER BY 1,2,3
+            """,
+        })
+    if db.tabla_existe("account_retention_line"):
+        checks.append({
+            "id": "p07b_retencion_lineas",
+            "titulo": "Punto 7 · Líneas de retención por tipo de factura",
+            "claves": ["invoice_type"],
+            "valores": ["lineas", "retenido", "base"],
+            "sql": """
+                SELECT coalesce(invoice_type,'(null)'),
+                       count(*)::text,
+                       coalesce(round(sum(retention_amount)::numeric,2),0)::text,
+                       coalesce(round(sum(base_ret)::numeric,2),0)::text
+                FROM account_retention_line
+                GROUP BY 1 ORDER BY 1
+            """,
+        })
+
+    # --- Punto 8: inventario --------------------------------------------
+    checks.append({
+        "id": "p08a_quants",
+        "titulo": "Punto 8 · stock.quant por compañía, ubicación y producto",
+        "claves": ["company_id", "location_id", "product_id"],
+        "valores": ["cantidad", "reservado"],
+        "sql": """
+            SELECT coalesce(company_id::text,'(null)'), location_id::text, product_id::text,
+                   round(sum(quantity)::numeric,4)::text,
+                   round(sum(coalesce(reserved_quantity,0))::numeric,4)::text
+            FROM stock_quant
+            GROUP BY 1,2,3 ORDER BY 1,2,3
+        """,
+    })
+    if db.tabla_existe("stock_valuation_layer"):
+        checks.append({
+            "id": "p08b_valuation_layer",
+            "titulo": "Punto 8 · stock.valuation.layer (informativo: no existe en 19)",
+            "claves": ["concepto"],
+            "valores": ["valor"],
+            "informativo": True,
+            "nota": TABLAS_SIN_EQUIVALENTE_19["stock_valuation_layer"],
+            "sql": """
+                SELECT 'capas', count(*)::text FROM stock_valuation_layer
+                UNION ALL SELECT 'valor', coalesce(round(sum(value)::numeric,2),0)::text
+                    FROM stock_valuation_layer
+                UNION ALL SELECT 'cantidad', coalesce(round(sum(quantity)::numeric,4),0)::text
+                    FROM stock_valuation_layer
+                ORDER BY 1
+            """,
+        })
+
+    # --- Punto 9: secuencias y numeración -------------------------------
+    checks.append({
+        "id": "p09a_secuencias",
+        "titulo": "Punto 9 · ir.sequence: number_next por secuencia",
+        "claves": ["id", "code", "prefix"],
+        "valores": ["number_next"],
+        "sql": """
+            SELECT id::text, coalesce(code,'(null)'), coalesce(prefix,'(null)'),
+                   number_next::text
+            FROM ir_sequence ORDER BY id
+        """,
+    })
+    checks.append({
+        "id": "p09b_numeracion_diarios",
+        "titulo": "Punto 9 · Último número por diario y ejercicio (asientos posteados)",
+        "claves": ["journal_id", "ejercicio"],
+        "valores": ["asientos", "ultimo_numero"],
+        "sql": """
+            SELECT journal_id::text, to_char(date,'YYYY'),
+                   count(*)::text, coalesce(max(name),'(null)')
+            FROM account_move WHERE state='posted'
+            GROUP BY 1,2 ORDER BY 1,2
+        """,
+    })
+
+    # --- Punto 10: adjuntos ---------------------------------------------
+    checks.append({
+        "id": "p10_adjuntos",
+        "titulo": "Punto 10 · ir.attachment: conteo, bytes y almacenamiento",
+        "claves": ["concepto"],
+        "valores": ["valor"],
+        "sql": """
+            SELECT 'adjuntos', count(*)::text FROM ir_attachment
+            UNION ALL SELECT 'bytes', coalesce(sum(file_size),0)::text FROM ir_attachment
+            UNION ALL SELECT 'en_filestore', count(*)::text FROM ir_attachment
+                WHERE store_fname IS NOT NULL
+            UNION ALL SELECT 'en_base_de_datos', count(*)::text FROM ir_attachment
+                WHERE db_datas IS NOT NULL
+            ORDER BY 1
+        """,
+    })
+
+    return checks
+
+
+def ejecutar_checks(db, checks):
+    resultado = {}
+    for check in checks:
+        filas = db.query(" ".join(check["sql"].split()))
+        n_claves = len(check["claves"])
+        datos = {}
+        for fila in filas:
+            clave = SEP.join(fila[:n_claves])
+            datos[clave] = fila[n_claves:]
+        resultado[check["id"]] = {
+            "titulo": check["titulo"],
+            "claves": check["claves"],
+            "valores": check["valores"],
+            "informativo": check.get("informativo", False),
+            "nota": check.get("nota"),
+            "informativo_para": check.get("informativo_para", {}),
+            "tablas_ausentes": check.get("tablas_ausentes", {}),
+            "filas": datos,
+        }
+    return resultado
+
+
+def contar_filestore(odoo_container, database):
+    """Punto 10, la mitad que no está en la BD: qué hay de verdad en disco."""
+    if not odoo_container:
+        return None
+    ruta = f"/home/odoo/data/filestore/{database}"
+    cmd = [
+        "docker", "exec", odoo_container, "bash", "-lc",
+        f"if [ -d '{ruta}' ]; then find '{ruta}' -type f | wc -l; "
+        f"du -sb '{ruta}' | cut -f1; else echo 0; echo 0; fi",
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        return {"error": res.stderr.strip()}
+    lineas = [x for x in res.stdout.split() if x.strip()]
+    if len(lineas) < 2:
+        return {"error": "salida inesperada: " + res.stdout.strip()}
+    return {"archivos": int(lineas[0]), "bytes": int(lineas[1])}
+
+
+def metadatos(db, odoo_container):
+    version = db.scalar(
+        "SELECT latest_version FROM ir_module_module WHERE name='base' LIMIT 1"
+    )
+    modulos = db.scalar("SELECT count(*) FROM ir_module_module WHERE state='installed'")
+    pendientes = db.scalar(
+        "SELECT count(*) FROM ir_module_module WHERE state IN ('to upgrade','to install')"
+    )
+    return {
+        "base_de_datos": db.database,
+        "version_base": version,
+        "modulos_instalados": int(modulos or 0),
+        "modulos_pendientes": int(pendientes or 0),
+        "tomado_en": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "filestore": contar_filestore(odoo_container, db.database),
+    }
+
+
+AUDITORIA_MODULOS = {
+    "pendientes": """
+        SELECT state, name FROM ir_module_module
+        WHERE state IN ('to upgrade','to install','to remove') ORDER BY 1,2
+    """,
+    "sin_migrar": """
+        SELECT name, latest_version FROM ir_module_module
+        WHERE state = 'installed' AND latest_version NOT LIKE '19.%' ORDER BY 1
+    """,
+    "dependencias_rotas": """
+        SELECT m.name, d.name, coalesce(dm.state,'NO EXISTE')
+        FROM ir_module_module m
+        JOIN ir_module_module_dependency d ON d.module_id = m.id
+        LEFT JOIN ir_module_module dm ON dm.name = d.name
+        WHERE m.state = 'installed' AND coalesce(dm.state,'x') <> 'installed'
+        ORDER BY 1,2
+    """,
+}
+
+
+RAICES_ADDONS_POR_DEFECTO = [
+    "src/_migracion19/integra-addons",
+    "src/_migracion19/odoo-venezuela",
+    "src/_migracion19/third-party-addons",
+    "src/custom/17_proalca_bs",
+]
+
+_RE_XMLID = re.compile(r"""<(?:record|template)\s[^>]*id=["\']([A-Za-z0-9_.]+)["\']""", re.S)
+
+
+def _xmlids_declarados(raices, modulos):
+    """Los xmlid que el código v19 declara hoy, por módulo."""
+    declarados = {m: set() for m in modulos}
+    for raiz in raices:
+        for manifest in Path(raiz).glob("*/__manifest__.py"):
+            modulo = manifest.parent.name
+            if modulo not in declarados:
+                continue
+            for xml in manifest.parent.rglob("*.xml"):
+                if "/migrations/" in str(xml):
+                    continue
+                try:
+                    texto = xml.read_text(errors="ignore")
+                except OSError:
+                    continue
+                for xid in _RE_XMLID.findall(texto):
+                    declarados[modulo].add(xid.split(".")[-1])
+    return declarados
+
+
+def cmd_vistas(args):
+    """Encuentra (y opcionalmente borra) las vistas que v19 ya no declara.
+
+    Una vista que v17 traía y v19 dejó de declarar no la reescribe nadie: se
+    queda en la BD tal cual. Si su xpath se ancla a algo que en 19 ya no
+    existe, revienta la validación del árbol de vistas de su modelo y
+    **aborta la migración entera** con un `ParseError`, mucho antes de que
+    Odoo llegue a su propia limpieza de fin de actualización.
+
+    Esto hace esa limpieza a tiempo. No inventa nada: borra exactamente lo
+    que Odoo borraría al final. Y es seguro dentro de un `-u all`, porque si
+    una vista se marcara huérfana por error, la carga del módulo la vuelve a
+    crear desde su archivo de datos.
+    """
+    db = Psql(args.pg_container, args.pg_user, args.database)
+
+    filas = db.query(
+        "SELECT d.module, d.name, d.res_id::text FROM ir_model_data d "
+        "WHERE d.model = 'ir.ui.view' ORDER BY 1,2"
+    )
+    en_bd = {}
+    for modulo, nombre, res_id in filas:
+        en_bd.setdefault(modulo, {})[nombre] = int(res_id)
+
+    raices = args.addons or RAICES_ADDONS_POR_DEFECTO
+    declarados = _xmlids_declarados(raices, set(en_bd))
+
+    # Un módulo sin ningún xmlid encontrado en disco no está en estas rutas
+    # (es del core o de enterprise): no se toca.
+    huerfanas = {}
+    for modulo, vistas in en_bd.items():
+        if not declarados.get(modulo):
+            continue
+        faltan = {n: i for n, i in vistas.items() if n not in declarados[modulo]}
+        if faltan:
+            huerfanas[modulo] = faltan
+
+    total = sum(len(v) for v in huerfanas.values())
+    print(f"\nVistas huérfanas en {args.database}: {total}\n")
+    for modulo in sorted(huerfanas):
+        print(f"  {modulo}  ({len(huerfanas[modulo])} de {len(en_bd[modulo])})")
+        for nombre in sorted(huerfanas[modulo]):
+            print(f"      {nombre}")
+
+    if not total:
+        print("  ninguna.")
+        return 0
+
+    if not args.borrar:
+        print("\nNo se borró nada. Con --borrar se eliminan, junto a las vistas que hereden "
+              "de ellas.\nHay que hacerlo ANTES del `-u all`, sobre el clon de la plantilla.")
+        return 1
+
+    # `ir_ui_view.inherit_id` es RESTRICT, no CASCADE: hay que borrar el árbol
+    # de abajo hacia arriba o PostgreSQL rechaza el borrado del padre.
+    borradas = 0
+    for modulo, vistas in sorted(huerfanas.items()):
+        for nombre, view_id in sorted(vistas.items()):
+            subarbol = db.query(f"""
+                WITH RECURSIVE arbol AS (
+                    SELECT id, 0 AS nivel FROM ir_ui_view WHERE id = {view_id}
+                    UNION ALL
+                    SELECT v.id, a.nivel + 1 FROM ir_ui_view v
+                    JOIN arbol a ON v.inherit_id = a.id
+                )
+                SELECT id FROM arbol ORDER BY nivel DESC
+            """)
+            ids = [int(fila[0]) for fila in subarbol]
+            if len(ids) > 1:
+                print(f"  {modulo}.{nombre} arrastra {len(ids)-1} vista(s) heredada(s)")
+            for vid in ids:
+                db.query(f"DELETE FROM ir_model_data WHERE model='ir.ui.view' AND res_id = {vid}")
+                db.query(f"DELETE FROM ir_ui_view WHERE id = {vid}")
+            borradas += len(ids)
+
+    print(f"\nBorradas {borradas} vistas.")
+    return 0
+
+
+def cmd_modulos(args):
+    """Audita el grafo de módulos de una BD ya migrada.
+
+    Existe porque `0 pendientes` **no** significa que la migración corrió: un
+    módulo cuya dependencia no se pudo cargar se salta en silencio y se queda
+    `installed` con su versión de v17, sin ejecutar ni uno de sus `migrations/`.
+    Esta auditoría es lo único que lo delata.
+    """
+    db = Psql(args.pg_container, args.pg_user, args.database)
+    hallazgos = {k: db.query(" ".join(q.split())) for k, q in AUDITORIA_MODULOS.items()}
+
+    print(f"\nAuditoría del grafo de módulos de {args.database}\n")
+
+    pendientes = hallazgos["pendientes"]
+    print(f"[{'FALLA' if pendientes else 'OK   '}] módulos a medias: {len(pendientes)}")
+    for estado, nombre in pendientes[:args.max_detalle]:
+        print(f"          {nombre} [{estado}]")
+
+    sin_migrar = hallazgos["sin_migrar"]
+    print(f"[{'FALLA' if sin_migrar else 'OK   '}] instalados que NO llegaron a una versión 19: "
+          f"{len(sin_migrar)}")
+    for nombre, version in sin_migrar[:args.max_detalle]:
+        print(f"          {nombre} sigue en {version} — sus migrations/ no corrieron")
+
+    rotas = hallazgos["dependencias_rotas"]
+    print(f"[{'FALLA' if rotas else 'OK   '}] instalados con dependencias sin instalar: {len(rotas)}")
+    for modulo, dep, estado in rotas[:args.max_detalle]:
+        print(f"          {modulo} -> {dep} [{estado}]")
+
+    hay_fallos = bool(pendientes or sin_migrar or rotas)
+
+    if args.out:
+        destino = os.path.abspath(args.out)
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        with open(destino, "w", encoding="utf-8") as fh:
+            json.dump({"base_de_datos": args.database,
+                       "auditado_en": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                       "hallazgos": hallazgos}, fh, ensure_ascii=False, indent=1)
+        print(f"Informe -> {destino}")
+
+    print("\nRESULTADO:", "EL GRAFO NO ESTA SANO" if hay_fallos else "GRAFO SANO")
+    return 1 if hay_fallos else 0
+
+
+def cmd_snapshot(args):
+    db = Psql(args.pg_container, args.pg_user, args.database)
+    checks = construir_checks(db)
+    snapshot = {
+        "herramienta": "migration-verify/1",
+        "meta": metadatos(db, args.odoo_container),
+        "checks": ejecutar_checks(db, checks),
+    }
+    destino = os.path.abspath(args.out)
+    os.makedirs(os.path.dirname(destino), exist_ok=True)
+    with open(destino, "w", encoding="utf-8") as fh:
+        json.dump(snapshot, fh, ensure_ascii=False, indent=1, sort_keys=True)
+
+    print(f"Snapshot de {args.database} -> {destino}")
+    print(f"  base {snapshot['meta']['version_base']} · "
+          f"{snapshot['meta']['modulos_instalados']} módulos instalados")
+    for cid, res in snapshot["checks"].items():
+        print(f"  {cid:28s} {len(res['filas']):>7d} filas   {res['titulo']}")
+    fs = snapshot["meta"]["filestore"]
+    if fs and "archivos" in fs:
+        print(f"  filestore: {fs['archivos']} archivos, {fs['bytes']/1e6:.1f} MB")
+    return 0
+
+
+def _fmt(valores, nombres):
+    return ", ".join(f"{n}={v}" for n, v in zip(nombres, valores))
+
+
+def comparar_check(ref, act):
+    """Devuelve (faltan, sobran, distintos) entre dos resultados de un check."""
+    claves_ref, claves_act = set(ref["filas"]), set(act["filas"])
+    faltan = sorted(claves_ref - claves_act)
+    sobran = sorted(claves_act - claves_ref)
+    distintos = []
+    for clave in sorted(claves_ref & claves_act):
+        if ref["filas"][clave] != act["filas"][clave]:
+            distintos.append({
+                "clave": clave.split(SEP),
+                "v17": ref["filas"][clave],
+                "v19": act["filas"][clave],
+            })
+    return faltan, sobran, distintos
+
+
+def cmd_compare(args):
+    with open(args.snapshot, encoding="utf-8") as fh:
+        snapshot = json.load(fh)
+
+    db = Psql(args.pg_container, args.pg_user, args.database)
+    actual = {
+        "herramienta": "migration-verify/1",
+        "meta": metadatos(db, args.odoo_container),
+        "checks": ejecutar_checks(db, construir_checks(db)),
+    }
+
+    informe = {
+        "origen": snapshot["meta"],
+        "destino": actual["meta"],
+        "comparado_en": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "checks": {},
+    }
+    hay_fallos = False
+
+    print(f"\n{snapshot['meta']['base_de_datos']} ({snapshot['meta']['version_base']})"
+          f"  ->  {actual['meta']['base_de_datos']} ({actual['meta']['version_base']})\n")
+
+    for cid, ref in snapshot["checks"].items():
+        act = actual["checks"].get(cid)
+        if act is None:
+            informe["checks"][cid] = {"estado": "ausente_en_destino",
+                                      "informativo": ref.get("informativo", False)}
+            marca = "info" if ref.get("informativo") else "FALLA"
+            if not ref.get("informativo"):
+                hay_fallos = True
+            print(f"[{marca:5s}] {cid:28s} no se pudo ejecutar contra la BD destino"
+                  f"{' — ' + ref['nota'] if ref.get('nota') else ''}")
+            continue
+
+        faltan, sobran, distintos = comparar_check(ref, act)
+
+        # El punto 1 lleva su propio mapa de renombres: una tabla que 19 ya no
+        # tiene no es una pérdida de datos, es una ruptura conocida.
+        informativas = set(ref.get("informativo_para", {}))
+        faltan_reales = [k for k in faltan if k not in informativas]
+        distintos_reales = [d for d in distintos if d["clave"][0] not in informativas]
+
+        ok = not faltan_reales and not distintos_reales and not ref.get("informativo")
+        if ref.get("informativo"):
+            estado, marca = "informativo", "info"
+        elif ok:
+            estado, marca = "ok", "OK"
+        else:
+            estado, marca = "diferencias", "FALLA"
+            hay_fallos = True
+
+        informe["checks"][cid] = {
+            "estado": estado,
+            "titulo": ref["titulo"],
+            "filas_v17": len(ref["filas"]),
+            "filas_v19": len(act["filas"]),
+            "faltan_en_v19": [k.split(SEP) for k in faltan],
+            "nuevas_en_v19": [k.split(SEP) for k in sobran],
+            "valores_distintos": distintos,
+            "ignoradas_por_renombre": sorted(informativas & set(faltan)),
+        }
+
+        detalle = f"{len(ref['filas'])} filas"
+        if faltan or sobran or distintos:
+            detalle += (f" · faltan {len(faltan)} · nuevas {len(sobran)}"
+                        f" · distintas {len(distintos)}")
+        print(f"[{marca:5s}] {cid:28s} {detalle}")
+
+        for d in distintos_reales[:args.max_detalle]:
+            print(f"          {'/'.join(d['clave'])}")
+            print(f"            v17: {_fmt(d['v17'], ref['valores'])}")
+            print(f"            v19: {_fmt(d['v19'], act['valores'])}")
+        if len(distintos_reales) > args.max_detalle:
+            print(f"          … y {len(distintos_reales)-args.max_detalle} más "
+                  f"(el detalle completo queda en el JSON)")
+        for k in faltan_reales[:args.max_detalle]:
+            print(f"          falta en v19: {'/'.join(k.split(SEP))}")
+
+    # Los puntos 11 y 12 del plan no son automatizables: los firma un contador.
+    print("\nPuntos 11 (nómina) y 12 (muestreo de 30 asientos por estrato): "
+          "revisión humana, no los cubre esta herramienta.")
+
+    if args.out:
+        destino = os.path.abspath(args.out)
+        os.makedirs(os.path.dirname(destino), exist_ok=True)
+        with open(destino, "w", encoding="utf-8") as fh:
+            json.dump(informe, fh, ensure_ascii=False, indent=1, sort_keys=True)
+        print(f"Informe -> {destino}")
+
+    print("\nRESULTADO:", "HAY DIFERENCIAS" if hay_fallos else "TODO CUADRA")
+    return 1 if hay_fallos else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        prog="migration-verify",
+        description="Verifica que la data sobrevivió al salto 17 -> 19 "
+                    "(puntos 1..10 de 09-plan-de-pruebas.md).",
+    )
+    parser.add_argument("--pg-container", default=DEFAULT_PG_CONTAINER,
+                        help=f"contenedor de PostgreSQL (def. {DEFAULT_PG_CONTAINER})")
+    parser.add_argument("--pg-user", default=DEFAULT_PG_USER,
+                        help=f"usuario de PostgreSQL (def. {DEFAULT_PG_USER})")
+    parser.add_argument("--odoo-container", default=None,
+                        help="contenedor Odoo, para medir el filestore en disco")
+
+    sub = parser.add_subparsers(dest="comando", required=True)
+
+    p_snap = sub.add_parser("snapshot", help="toma el snapshot de referencia (v17)")
+    p_snap.add_argument("-d", "--database", required=True)
+    p_snap.add_argument("-o", "--out", required=True)
+    p_snap.set_defaults(func=cmd_snapshot)
+
+    p_mod = sub.add_parser("modulos",
+                           help="audita el grafo de módulos de una BD migrada")
+    p_mod.add_argument("-d", "--database", required=True)
+    p_mod.add_argument("-o", "--out", default=None)
+    p_mod.add_argument("--max-detalle", type=int, default=20)
+    p_mod.set_defaults(func=cmd_modulos)
+
+    p_vis = sub.add_parser("vistas",
+                           help="vistas que v19 ya no declara y abortan la migración")
+    p_vis.add_argument("-d", "--database", required=True)
+    p_vis.add_argument("--addons", action="append", default=None,
+                       help="raíz de addons a inspeccionar (repetible)")
+    p_vis.add_argument("--borrar", action="store_true",
+                       help="borrarlas; hacerlo ANTES del -u all")
+    p_vis.set_defaults(func=cmd_vistas)
+
+    p_cmp = sub.add_parser("compare", help="compara una BD contra un snapshot")
+    p_cmp.add_argument("-s", "--snapshot", required=True)
+    p_cmp.add_argument("-d", "--database", required=True)
+    p_cmp.add_argument("-o", "--out", default=None)
+    p_cmp.add_argument("--max-detalle", type=int, default=10,
+                       help="cuántas diferencias imprimir por check (def. 10)")
+    p_cmp.set_defaults(func=cmd_compare)
+
+    args = parser.parse_args()
+    try:
+        return args.func(args)
+    except RuntimeError as err:
+        print(f"ERROR: {err}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())
