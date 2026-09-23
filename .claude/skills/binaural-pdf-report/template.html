@@ -1,0 +1,264 @@
+<title>{{TITLE}}</title>
+<style>
+  :root {
+    --azul-primario: #0f4c94;
+    --azul-cian: #018ecd;
+    --azul-oscuro: #1e2a50;
+    --acento: #f6b03b;
+    --gris-texto: #33394a;
+    --gris-claro: #f4f6fa;
+    --borde: #dbe2ee;
+  }
+  * { box-sizing: border-box; }
+  /* Page box wider than the .page content (880px) so wide tables never clip at the
+     right edge, and with a real, UNIFORM margin on every side/page (including the
+     first) so continuation pages never butt content against the paper edge. The
+     spacer script at the end of the document uses these exact numbers to push the
+     footer flush to the bottom of whichever page it lands on. */
+  @page { size: 1050px 1350px; margin: 56px 60px; }
+  body {
+    margin: 0;
+    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    color: var(--gris-texto);
+    background: #eef1f6;
+    line-height: 1.55;
+  }
+  h1, h2, h3 {
+    font-family: 'Open Sans', 'Segoe UI', Helvetica, Arial, sans-serif;
+    font-weight: 700;
+    color: var(--azul-oscuro);
+    letter-spacing: -0.01em;
+  }
+  .page {
+    /* Zero vertical margin always (not just @media print): the footer spacer script
+       measures layout at page-load time under screen media, so screen and print must
+       share identical box-model math or its height math goes stale. Shadow/radius are
+       pure decoration (they don't affect box height) so those stay screen-only below. */
+    max-width: 880px;
+    margin: 0 auto;
+    background: #ffffff;
+    box-shadow: 0 2px 24px rgba(15, 76, 148, 0.12);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  header.brand {
+    background: linear-gradient(115deg, var(--azul-cian) 0%, var(--azul-primario) 55%, var(--azul-oscuro) 100%);
+    padding: 40px 48px 34px;
+    color: #ffffff;
+    position: relative;
+  }
+  header.brand img.logo {
+    height: 34px;
+    width: auto;
+    display: block;
+    margin-bottom: 28px;
+  }
+  header.brand h1 {
+    color: #ffffff;
+    font-size: 26px;
+    margin: 0 0 8px;
+  }
+  header.brand p.subtitle {
+    margin: 0;
+    font-size: 14.5px;
+    color: rgba(255,255,255,0.88);
+    max-width: 640px;
+  }
+  .meta-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 22px;
+  }
+  .meta-chip {
+    background: rgba(255,255,255,0.14);
+    border: 1px solid rgba(255,255,255,0.35);
+    color: #ffffff;
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 999px;
+  }
+  main {
+    padding: 40px 48px 8px;
+  }
+  section {
+    margin-bottom: 34px;
+  }
+  h2 {
+    font-size: 18px;
+    border-left: 4px solid var(--azul-cian);
+    padding-left: 12px;
+    margin: 0 0 14px;
+  }
+  h2 .num {
+    color: var(--azul-cian);
+    margin-right: 6px;
+  }
+  h3 {
+    font-size: 14.5px;
+    margin: 18px 0 8px;
+    color: var(--azul-primario);
+  }
+  p { margin: 0 0 12px; font-size: 14.5px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; font-size: 14.5px; }
+  li { margin-bottom: 5px; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13.5px;
+    margin: 6px 0 18px;
+    border: 1px solid var(--borde);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  thead th {
+    background: var(--azul-oscuro);
+    color: #ffffff;
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 600;
+    font-family: 'Open Sans', Helvetica, Arial, sans-serif;
+  }
+  tbody td {
+    padding: 9px 14px;
+    border-top: 1px solid var(--borde);
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) { background: var(--gris-claro); }
+  .callout {
+    background: #fff7e8;
+    border: 1px solid var(--acento);
+    border-left: 4px solid var(--acento);
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-size: 13.5px;
+    margin: 14px 0;
+  }
+  .callout strong { color: #8a5a00; }
+  .example-box {
+    background: var(--gris-claro);
+    border: 1px solid var(--borde);
+    border-radius: 10px;
+    padding: 18px 20px;
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .example-box .arrow { color: var(--azul-cian); font-size: 22px; }
+  .example-item { text-align: center; min-width: 130px; }
+  .example-item .label { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.04em; color: #6a7386; margin-bottom: 4px; }
+  .example-item .value { font-size: 19px; font-weight: 700; color: var(--azul-oscuro); font-family: 'Open Sans', Helvetica, Arial, sans-serif; }
+  .badge-ok {
+    display: inline-block;
+    background: #e5f6ea;
+    color: #1c7c3e;
+    border: 1px solid #b7e5c4;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    margin-left: 6px;
+  }
+  .badge-warn {
+    display: inline-block;
+    background: #fff2e0;
+    color: #8a5a00;
+    border: 1px solid #f3cf8f;
+    font-size: 12px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 999px;
+    margin-left: 6px;
+  }
+  .steps {
+    counter-reset: step;
+    list-style: none;
+    padding-left: 0;
+  }
+  .steps li {
+    counter-increment: step;
+    position: relative;
+    padding-left: 34px;
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0; top: 0;
+    width: 22px; height: 22px;
+    background: var(--azul-primario);
+    color: #fff;
+    border-radius: 50%;
+    font-size: 11.5px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Open Sans', Helvetica, Arial, sans-serif;
+  }
+  code, .mono {
+    font-family: 'SFMono-Regular', Consolas, Menlo, monospace;
+    background: var(--gris-claro);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 12.5px;
+    color: var(--azul-oscuro);
+  }
+  footer.brand {
+    background: var(--azul-oscuro);
+    color: rgba(255,255,255,0.75);
+    padding: 26px 48px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  footer.brand img.logo {
+    height: 20px;
+    width: auto;
+  }
+  footer.brand .conf {
+    font-size: 11.5px;
+    text-align: right;
+    max-width: 380px;
+  }
+  @media (max-width: 640px) {
+    header.brand, main, footer.brand { padding-left: 24px; padding-right: 24px; }
+    .example-box { flex-direction: column; align-items: flex-start; }
+  }
+  @media print {
+    body { background: #fff; }
+    .page { box-shadow: none; margin: 0; border-radius: 0; }
+  }
+  footer.brand { break-inside: avoid; page-break-inside: avoid; }
+</style>
+
+<div class="page">
+  <header class="brand">
+    <img class="logo" src="data:image/png;base64,{{LOGO_WHITE_B64}}" alt="Binaural" />
+    <h1>{{TITLE}}</h1>
+    <p class="subtitle">{{SUBTITLE}}</p>
+    <div class="meta-strip">
+      {{META_CHIPS}}
+    </div>
+  </header>
+
+  <main>
+{{BODY}}
+  </main>
+
+  <!-- {{FOOTER_SPACER}} — a build step measures the real rendered PDF and injects a
+       static `<div style="height:Npx"></div>` here (or leaves this comment untouched
+       if no spacer is needed) so the footer lands flush on the bottom of whichever
+       page it falls on. See "Paginacion y pie de pagina" in SKILL.md — this used to be
+       computed live via JS at page-load time, but screen-media layout (when the script
+       ran) and Chrome's real print pagination disagreed by an unpredictable amount, so
+       the reliable version measures the actual output PDF instead of predicting it. -->
+  <footer class="brand">
+    <img class="logo" src="data:image/png;base64,{{LOGO_COLOR_B64}}" alt="Binaural" style="filter: brightness(0) invert(1);" />
+    <div class="conf">{{FOOTER_NOTE}}</div>
+  </footer>
+</div>

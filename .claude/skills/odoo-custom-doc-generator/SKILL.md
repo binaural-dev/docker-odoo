@@ -1,3 +1,8 @@
+---
+name: odoo-custom-doc-generator
+description: Analiza los módulos personalizados de un proyecto de cliente Odoo y genera un informe estructurado + guía de validación para el consultor funcional (no para desarrolladores). Usar cuando el usuario pida "genera un informe de personalizaciones", "qué flujos tocan los custom", "guía para el consultor", "documentación de módulos custom" o similar. Si no especifica el proyecto, auto-detectarlo desde el working directory.
+---
+
 # Generate Custom Module Documentation
 
 Genera un informe estructurado de todas las personalizaciones Odoo de un proyecto, detallando qué flujos de negocio modifican, qué hace cada módulo y cómo validarlo. El informe está pensado para entregárselo a un consultor funcional, no a un desarrollador.
@@ -41,7 +46,7 @@ Excluir carpetas que NO sean módulos custom del proyecto:
 - `enterprise/`
 - `design-themes/`
 - Cualquier carpeta que no empiece con el prefijo detectado
-- Carpetas que empiezan con `.` (`.git`, `.opencode`)
+- Carpetas que empiezan con `.` (`.git`, `.claude`)
 - `__pycache__/`
 
 De las restantes, conservar solo las que tengan `__manifest__.py` **y** `installable: True` (o sin ese key, que por defecto es True).

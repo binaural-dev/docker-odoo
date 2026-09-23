@@ -1,3 +1,8 @@
+---
+name: odoo-purge-localization
+description: Desinstala localizaciones o módulos custom pesados (ej. binaural_*) de una base de datos Odoo, preservando la integridad de la UI nativa y de la data. Usar cuando el usuario pida purgar/depurar una BD quitando todos los módulos de un prefijo específico, opcionalmente conservando excepciones puntuales (ej. "purga los módulos binaural_* de la BD cliente_prod pero conserva binaural_seller").
+---
+
 # Skill: odoo-purge-localization
 
 ## Propósito
@@ -288,7 +293,7 @@ DO $$ DECLARE fk RECORD; BEGIN
 END $$;
 ```
 
-> Si durante la Fase 10 (sync) aparecen `IntegrityError` en tablas `_rel` puntuales que la query anterior no cubrió (esto pasa con relaciones many2many que Odoo creó sin FK formal a nivel de Postgres), identificarlas desde el traceback y agregar un `DELETE` puntual para esa tabla exacta antes de reintentar el sync — no dejarlo como parte fija de esta skill, porque son específicas de cada proyecto.
+> Si durante la Fase 8 (sync) aparecen `IntegrityError` en tablas `_rel` puntuales que la query anterior no cubrió (esto pasa con relaciones many2many que Odoo creó sin FK formal a nivel de Postgres — ejemplos vistos en clientes Binaural: `sale_advance_payment_inv_sale_order_rel`, `account_move_account_move_send_rel`, `account_move_send_res_partner_rel`), identificarlas desde el traceback y agregar un `DELETE` puntual para esa tabla exacta antes de reintentar el sync — no dejarlo como parte fija de esta skill, porque no todas las tablas `_rel` sin FK formal existen en todos los clientes.
 
 ---
 
@@ -335,7 +340,7 @@ WHERE NOT EXISTS (SELECT 1 FROM ir_act_window a WHERE a.binding_model_id = ir_ac
   AND NOT EXISTS (SELECT 1 FROM ir_model m WHERE m.id = ir_act_server.binding_model_id);
 ```
 
-Si tras el sync (Fase 10) aparece un error tipo `Unexpected indentation` en server actions, es señal de una `ir.act.server` huérfana con código Python roto; se puede acotar la limpieza a los módulos nativos conocidos:
+Si tras el sync (Fase 8) aparece un error tipo `Unexpected indentation` en server actions, es señal de una `ir.act.server` huérfana con código Python roto; se puede acotar la limpieza a los módulos nativos conocidos:
 
 ```sql
 DELETE FROM ir_act_server
@@ -370,7 +375,7 @@ odoo -d <DB_NAME> -u base --workers=0 --max-cron-threads=0 --stop-after-init
 - `--max-cron-threads=0`: no ejecutar crons durante la sincronización.
 - `--stop-after-init`: termina Odoo apenas termina el upgrade, no lo deja corriendo.
 
-Si el log muestra que faltan acciones genéricas que vistas nativas esperan encontrar (ej. una `ir.act.window` con un ID fijo referenciado desde una vista XML nativa), identificar el ID y el modelo exactos desde el traceback y recrear el registro puntualmente — esto es específico de cada base y no debe generalizarse a un INSERT fijo en la skill.
+Si el log muestra que faltan acciones genéricas que vistas nativas esperan encontrar (ej. una `ir.act.window` con un ID fijo referenciado desde una vista XML nativa, como IDs conocidos 323/353 vistos en clientes previos), identificar el ID y el modelo exactos desde el traceback y recrear el registro puntualmente — esto es específico de cada base y no debe generalizarse a un INSERT fijo en la skill.
 
 ---
 
