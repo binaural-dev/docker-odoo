@@ -247,7 +247,8 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `list` | Lista contenedores en ejecución. |
 | `remove [instance]` | Elimina contenedores y volúmenes. |
 | `fix-files [instance]` | Corrige permisos del filestore. |
-| `psql <instance> -d <db>` | Conecta a PostgreSQL. |
+| `psql <instance> -d <db>` | Conecta a PostgreSQL. Con `--ps`/`--postgres` en vez de instancia, elegí cualquier base de cualquier servicio de Postgres, sin filtrar (rompe el `NOLOGIN` del rol bootstrap brevemente si hace falta). `psql remove <instance> -d <db>` (o `psql remove --ps`) elimina una base con confirmación explícita. |
+| `restore <instance> -z <zip> -d <db>` | Restaura una base de datos y filestore desde un ZIP (passthrough directo a `scripts/odoo_restore restore`, ver más abajo). |
 | `update <instance> [-d <db\|all>] [-m modules] [-f]` | Actualiza módulos de Odoo (una base o todas). Sin `-m`, actualiza todos los módulos usando `click-odoo-update` (solo los que cambiaron desde la última actualización); con `-f`/`--force` fuerza un upgrade completo de todos, sin importar qué cambió. Un módulo puntual (`-m modulo`) siempre se actualiza directo, sin pasar por ninguno de los dos caminos anteriores. |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
@@ -277,6 +278,15 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 
 # Conectar a psql
 ./odoo psql bananera -d bananera_prod
+
+# Conectar a CUALQUIER base de un servicio de Postgres, sin filtrar por instancia
+./odoo psql --ps
+
+# Eliminar una base de datos (con confirmación)
+./odoo psql remove bananera -d bananera_old
+
+# Eliminar cualquier base de cualquier servicio (con confirmación)
+./odoo psql remove --ps
 
 # Actualizar módulos
 ./odoo update bananera -d bananera_prod -m sale,purchase

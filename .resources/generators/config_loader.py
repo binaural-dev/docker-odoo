@@ -269,6 +269,46 @@ def resolve_db_config(inst_conf, config):
     return config["databases"][db_name]
 
 
+def resolve_instance_db_creds(inst_conf, db_conf):
+    """Resolve the Postgres credentials an instance must connect with: its
+    own dedicated role (``db_user``/``db_password``, instance root level)
+    if it has one, falling back to the shared service role otherwise.
+
+    Matters beyond just "which user": an instance migrated to a dedicated
+    role (via ``./odoo provision-role``) has ``REVOKE CONNECT ... FROM
+    PUBLIC`` applied to its databases, so the shared service role can no
+    longer connect to them at all -- using the wrong credentials here
+    doesn't just pick a less-specific role, it fails outright with
+    "permission denied for database ... User does not have CONNECT
+    privilege." Any code that opens its own connection to an instance's
+    database (rather than going through the Odoo process, which already
+    gets the right ones from compose) must resolve creds through this
+    function, not read ``db_conf['user']``/``['password']`` directly.
+    """
+    db_user = inst_conf.get("db_user", db_conf["user"])
+    db_password = inst_conf.get("db_password", db_conf["password"])
+    return db_user, db_password
+
+
+def resolve_db_bootstrap_creds(db_conf):
+    """Resolve the cluster's bootstrap role for a database service: the
+    initdb superuser Postgres creates on the volume and never lets lose
+    that attribute (``bootstrap_user``/``bootstrap_password``, falling back
+    to the shared service role when unset).
+
+    Per-instance roles and the shared service role are deliberately
+    non-superuser (see [[resolve_instance_db_creds]]), so operations that
+    require superuser -- e.g. ``CREATE EXTENSION`` for a non-trusted
+    extension on a freshly created database -- must authenticate as this
+    role instead. Only use it for that kind of one-off privileged
+    bootstrap step, never as the role an instance or script connects with
+    day to day.
+    """
+    bootstrap_user = db_conf.get("bootstrap_user", db_conf["user"])
+    bootstrap_password = db_conf.get("bootstrap_password", db_conf["password"])
+    return bootstrap_user, bootstrap_password
+
+
 def get_db_host(db_name, db_conf):
     """
     Get the DB host for a given database config.
