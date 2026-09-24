@@ -16,9 +16,18 @@ sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 from generators.config_loader import (
     load_config,
     resolve_db_config,
+    resolve_instance_db_creds,
+    resolve_db_bootstrap_creds,
     get_db_host,
     get_db_internal_port,
 )
+from generators.db_bootstrap import (
+    pg_exec,
+    bootstrap_needs_breakglass,
+    bootstrap_breakglass_enable,
+)
+
+COMPOSE_FILE = os.path.join(BASE_PATH, "docker-compose.generated.yml")
 
 
 class RestoreWorkspace:
@@ -241,6 +250,9 @@ class DatabaseRestoreManager:
     )
     SERVER_VERSION_PATTERN = re.compile(r"^(?P<version>[0-9]+(?:\.[0-9]+)*)")
     PSQL_VERSION_PATTERN = re.compile(r"(?P<version>[0-9]+(?:\.[0-9]+)*)")
+    CREATE_EXTENSION_PATTERN = re.compile(
+        r'^CREATE EXTENSION IF NOT EXISTS "?(?P<name>[A-Za-z_][A-Za-z0-9_]*)"?'
+    )
 
     def __init__(
         self,
@@ -253,6 +265,11 @@ class DatabaseRestoreManager:
         container_db_dump_path,
         linux_dump_user,
         psql_bin,
+        bootstrap_user=None,
+        bootstrap_password=None,
+        bootstrap_db_conf=None,
+        bootstrap_db_service_name=None,
+        bootstrap_db_container=None,
         verbose=False,
     ):
         self.container = container
@@ -264,6 +281,14 @@ class DatabaseRestoreManager:
         self.container_db_dump_path = container_db_dump_path
         self.linux_dump_user = linux_dump_user
         self.psql_bin = psql_bin
+        self.bootstrap_user = bootstrap_user
+        self.bootstrap_password = bootstrap_password
+        # Needed only to break-glass the bootstrap role back into LOGIN when
+        # it's hardened to NOLOGIN (see _set_instance_superuser).
+        self.bootstrap_db_conf = bootstrap_db_conf
+        self.bootstrap_db_service_name = bootstrap_db_service_name
+        self.bootstrap_db_container = bootstrap_db_container
+        self._broke_bootstrap_glass = False
         self.verbose = verbose
 
     def _psql_command(self, *args):
@@ -556,6 +581,88 @@ class DatabaseRestoreManager:
 
         subprocess.run(create_cmd, check=True)
 
+    def _dump_needs_superuser(self):
+        with open(self.local_dump_path, "r", errors="replace") as f:
+            return any(self.CREATE_EXTENSION_PATTERN.match(line) for line in f)
+
+    def _set_instance_superuser(self, enabled):
+        """Grant or revoke SUPERUSER on the instance's own role, via the
+        cluster's bootstrap role.
+
+        The instance role is deliberately non-superuser (per-instance
+        Postgres roles), so a dump containing a non-trusted extension (e.g.
+        pgvector's ``vector``) fails restoring as that role with "Must be
+        superuser to create this extension". Rather than replaying the
+        dump's own CREATE SCHEMA/CREATE EXTENSION statements out of order
+        (fragile: the dump uses plain CREATE SCHEMA with no IF NOT EXISTS,
+        so pre-creating it here would make the dump's own statement fail
+        instead), grant the instance role SUPERUSER for the duration of
+        the restore so the dump runs exactly as authored, then revoke it.
+        Caller is responsible for revoking via try/finally.
+        """
+        if not self.bootstrap_user:
+            raise RuntimeError(
+                "El dump requiere crear extensiones pero no hay credenciales de "
+                "bootstrap (superuser) configuradas para este servicio de base de datos."
+            )
+
+        if enabled and self.bootstrap_db_container and bootstrap_needs_breakglass(
+            self.bootstrap_db_container, self.bootstrap_user, self.bootstrap_password
+        ):
+            # El rol bootstrap queda en NOLOGIN tras aprovisionar instancias con
+            # rol dedicado (endurecimiento normal, ver ./odoo provision-role);
+            # sin esto no hay forma de otorgar SUPERUSER temporalmente.
+            bootstrap_breakglass_enable(
+                self.bootstrap_db_container,
+                self.bootstrap_user,
+                self.bootstrap_db_conf,
+                self.bootstrap_db_service_name,
+                COMPOSE_FILE,
+            )
+            self._broke_bootstrap_glass = True
+
+        verb = "SUPERUSER" if enabled else "NOSUPERUSER"
+        print(
+            f"{'Otorgando' if enabled else 'Revocando'} superuser temporal a "
+            f"'{self.db_user}' (rol de bootstrap) para la duración del restore"
+        )
+        cmd = [
+            "docker",
+            "exec",
+            "-e",
+            f"PGPASSWORD={self.bootstrap_password}",
+            self.container,
+            self.psql_bin,
+            "-U",
+            self.bootstrap_user,
+            "-h",
+            self.db_host,
+            "-p",
+            str(self.db_port),
+            "-d",
+            "postgres",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-c",
+            f'ALTER ROLE "{self.db_user}" {verb};',
+        ]
+        try:
+            if self.verbose:
+                masked_cmd = [
+                    "PGPASSWORD=***" if a.startswith("PGPASSWORD=") else a
+                    for a in cmd
+                ]
+                print("Command:", " ".join(masked_cmd))
+                subprocess.run(cmd, check=True)
+            else:
+                subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            if exc.stderr:
+                print(exc.stderr.strip(), file=sys.stderr)
+            elif exc.stdout:
+                print(exc.stdout.strip(), file=sys.stderr)
+            raise
+
     def _copy_dump_to_container(self):
         print(f"Copiando dump.sql al contenedor {self.container}")
 
@@ -588,44 +695,70 @@ class DatabaseRestoreManager:
 
         self._copy_dump_to_container()
 
-        cmd = [
-            "docker",
-            "exec",
-            "-i",
-            self.container,
-            self.psql_bin,
-            "-U",
-            self.db_user,
-            "-h",
-            self.db_host,
-            "-p",
-            str(self.db_port),
-            "-d",
-            self.db_name,
-            "-v",
-            "ON_ERROR_STOP=1",
-            "-f",
-            self.container_db_dump_path,
-        ]
-
-        if not self.verbose:
-            cmd.insert(-2, "-q")
+        needs_superuser = self._dump_needs_superuser()
+        if needs_superuser:
+            self._set_instance_superuser(True)
 
         try:
-            if self.verbose:
-                print("Command:", " ".join(cmd))
-                subprocess.run(cmd, check=True)
-            else:
-                subprocess.run(cmd, check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as exc:
-            if exc.stderr:
-                print(exc.stderr.strip(), file=sys.stderr)
-            elif exc.stdout:
-                print(exc.stdout.strip(), file=sys.stderr)
-            raise
+            cmd = [
+                "docker",
+                "exec",
+                "-i",
+                self.container,
+                self.psql_bin,
+                "-U",
+                self.db_user,
+                "-h",
+                self.db_host,
+                "-p",
+                str(self.db_port),
+                "-d",
+                self.db_name,
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-f",
+                self.container_db_dump_path,
+            ]
+
+            if not self.verbose:
+                cmd.insert(-2, "-q")
+
+            try:
+                if self.verbose:
+                    print("Command:", " ".join(cmd))
+                    subprocess.run(cmd, check=True)
+                else:
+                    subprocess.run(cmd, check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as exc:
+                if exc.stderr:
+                    print(exc.stderr.strip(), file=sys.stderr)
+                elif exc.stdout:
+                    print(exc.stdout.strip(), file=sys.stderr)
+                raise
+        finally:
+            if needs_superuser:
+                self._set_instance_superuser(False)
+                self._relock_bootstrap_if_needed()
 
         print(f"Restore de dump.sql finalizado para la base '{self.db_name}'")
         return True
+
+    def _relock_bootstrap_if_needed(self):
+        """Undo the temporary LOGIN break-glass from _set_instance_superuser,
+        restoring the hardened NOLOGIN state. No break-glass needed to lock it
+        back down -- the role can already log in at this point."""
+        if not self._broke_bootstrap_glass:
+            return
+        print(f"Volviendo a bloquear el rol bootstrap '{self.bootstrap_user}' (NOLOGIN)")
+        pg_exec(
+            self.bootstrap_db_container,
+            self.bootstrap_user,
+            self.bootstrap_password,
+            "postgres",
+            f"ALTER ROLE {self.bootstrap_user} NOLOGIN;",
+            check=False,
+        )
+        self._broke_bootstrap_glass = False
 
 
 class FilestoreRestoreManager:
@@ -695,6 +828,11 @@ class RestoreOrchestrator:
         linux_dump_user,
         workdir_base,
         psql_bin,
+        bootstrap_user=None,
+        bootstrap_password=None,
+        bootstrap_db_conf=None,
+        bootstrap_db_service_name=None,
+        bootstrap_db_container=None,
         verbose=False,
         cleanup_enabled=True,
         db_prefix=None,
@@ -709,6 +847,11 @@ class RestoreOrchestrator:
         self.container_filestore_base_path = container_filestore_base_path
         self.linux_dump_user = linux_dump_user
         self.psql_bin = psql_bin
+        self.bootstrap_user = bootstrap_user
+        self.bootstrap_password = bootstrap_password
+        self.bootstrap_db_conf = bootstrap_db_conf
+        self.bootstrap_db_service_name = bootstrap_db_service_name
+        self.bootstrap_db_container = bootstrap_db_container
         self.verbose = verbose
         self.workspace = RestoreWorkspace(workdir_base=workdir_base)
         self.cleanup_manager = CleanupManager(
@@ -751,6 +894,11 @@ class RestoreOrchestrator:
             container_db_dump_path=self.workspace.container_db_dump_path,
             linux_dump_user=self.linux_dump_user,
             psql_bin=self.psql_bin,
+            bootstrap_user=self.bootstrap_user,
+            bootstrap_password=self.bootstrap_password,
+            bootstrap_db_conf=self.bootstrap_db_conf,
+            bootstrap_db_service_name=self.bootstrap_db_service_name,
+            bootstrap_db_container=self.bootstrap_db_container,
             verbose=self.verbose,
         )
 
@@ -865,9 +1013,12 @@ def main():
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
+    db_user, _db_password = resolve_instance_db_creds(inst_conf, db_conf)
+    bootstrap_user, bootstrap_password = resolve_db_bootstrap_creds(db_conf)
     db_port = get_db_internal_port(db_conf)
     container_name = f"odoo-{instance}"
+    db_service_name = inst_conf["database"]
+    db_container = f"db-{db_service_name}"
 
     restorer = RestoreOrchestrator(
         zip_path=args.z,
@@ -880,6 +1031,11 @@ def main():
         linux_dump_user="dump_user",
         workdir_base=args.workdir,
         psql_bin=psql_bin,
+        bootstrap_user=bootstrap_user,
+        bootstrap_password=bootstrap_password,
+        bootstrap_db_conf=db_conf,
+        bootstrap_db_service_name=db_service_name,
+        bootstrap_db_container=db_container,
         verbose=args.verbose,
         cleanup_enabled=not args.no_cleanup,
         db_prefix=args.db_prefix,
