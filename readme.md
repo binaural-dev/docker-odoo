@@ -565,6 +565,17 @@ scripts/precommit binaural-19.0 -m integra-addons/modulo_c,enterprise/modulo_c
 
 Para restaurar backups, la versión del contenedor debe ser igual o superior a la versión con que se generó el dump. Ajusta `postgres_version` en la sección `databases` según necesites.
 
+Cada versión de Odoo tiene su propio mínimo de Postgres soportado (`MIN_PG_VERSION` en `odoo/release.py` de esa rama, ej. 13 en Odoo 19.0, **16 en Odoo 20.0**) — antes de apuntar una instancia a un servicio de `databases` existente, confirmá que su `postgres_version` cumple ese mínimo. Nada en este repo lo valida automáticamente (no se compila el código fuente de Odoo en build-time), así que es responsabilidad de quien agrega la instancia.
+
+## Agregar soporte para una versión de Odoo nueva
+
+No hace falta tocar ningún generador (`config_loader.py`/`dockerfile_generator.py`/`compose_generator.py`): ninguno tiene una lista de versiones hardcodeada.
+
+1. Creá `.resources/dockerfiles/<version>_Dockerfile` (copiá el de la versión soportada más reciente y reemplazá las URLs pineadas a esa versión: `debian/control`, `requirements.txt`, y el `.deb` de nightly de `odoo/odoo`). Los paquetes apt/pip se resuelven solos en build-time a partir de esos archivos — no hay que enumerarlos a mano.
+2. Confirmá que la imagen base (`ubuntu:noble` actualmente) sigue cumpliendo el `MIN_PY_VERSION`/`MAX_PY_VERSION` de esa versión (`odoo/release.py` de la rama correspondiente en GitHub).
+3. Agregá la instancia en `instances.json` con ese `odoo_version`, apuntando a un servicio de `databases` que cumpla el `MIN_PG_VERSION` correspondiente (ver arriba).
+4. `./odoo build` genera el Dockerfile y el servicio de compose automáticamente.
+
 ## FAQ
 
 **¿Cómo agrego un nuevo proyecto/instancia?**

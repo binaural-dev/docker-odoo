@@ -62,6 +62,20 @@
         ],
         "db_filter": "^client-a-maintenance_"
       }
+    },
+    "demo-odoo20": {
+      "odoo_version": "20.0",
+      "external_port": 8072,
+      "database": "pg16",
+      "odoo_config": "default",
+      "db_user": "app_demo_odoo20",
+      "db_password": "odoo",
+      "overwrite_odoo_config": {
+        "addons": [
+          "src/enterprise-20.0"
+        ],
+        "db_filter": "^demo-odoo20_"
+      }
     }
   },
   "pgadmin": {
