@@ -25,6 +25,23 @@ El/los modulo(s) se pueden pasar posicionalmente o con -m/--modules (si se
 dan ambas formas, la flag tiene prioridad). --container y --addons son
 obligatorios.
 
+Ademas de nombres de modulo, -m/el posicional acepta (por token, separados
+por coma):
+  * un path DENTRO del contenedor (contiene '/'): debe estar dentro de
+    alguno de los --addons (igual o anidado) -- se expande a todos los
+    modulos que esten ahi dentro.
+  * 'all': se expande a TODOS los modulos escaneados en TODOS los --addons.
+
+Con --per-module-db, cada modulo de la lista ya resuelta (nombres sueltos,
+o los que salieron de expandir un path o 'all') corre en su PROPIA base de
+datos, de forma independiente y secuencial (una instalacion, una corrida de
+tests, una medicion de cobertura por modulo) -- en vez de instalarlos y
+testearlos todos juntos en una sola base, que es el comportamiento por
+defecto. Con --recursive, el arbol de dependencias tambien se calcula POR
+modulo (no combinado): un modulo compartido entre varios de los indicados
+se instala y testea mas de una vez, una por cada base independiente. No es
+compatible con -d/--db explicito (cada modulo autogenera su propio nombre).
+
 FUNCIONAMIENTO
 --------------
 Por defecto (sin --recursive) solo se instalan y testean los modulos
@@ -131,6 +148,10 @@ EJEMPLOS
   ./odoo-test --container odoo-integra-17 --addons /home/odoo/src/custom binaural_brand --out-logs ./reportes
   ./odoo-test --container odoo-integra-17 --addons /home/odoo/src/custom binaural_brand --out-verbose
   ./odoo-test --container odoo-integra-17 --addons /home/odoo/src/custom binaural_brand --dry-run
+  ./odoo-test --container odoo-integra-17 --addons /home/odoo/src/custom -m /home/odoo/src/custom/algun_grupo
+  ./odoo-test --container odoo-integra-17 --addons /home/odoo/src/custom -m all
+  ./odoo-test --container odoo-integra-17 --addons /home/odoo/src/custom binaural_brand,binaural_mobile --per-module-db
+  ./odoo-test --container odoo-integra-17 --addons /home/odoo/src/custom -m all --per-module-db --out-json ./reportes --out-summary-json ./reportes
 """
 
 # Escaneo de modulos: corre DENTRO del contenedor (via 'docker exec python3
@@ -423,6 +444,63 @@ def scan_modules_in_container(container, addon_roots):
     return modules, reverse, paths
 
 
+def resolve_requested_modules(raw_value, modules, module_paths, addon_roots):
+    """Resuelve -m/posicional a una lista plana de nombres de modulo. Cada
+    token separado por coma puede ser:
+      * 'all': se expande a TODOS los modulos escaneados en TODOS los
+        --addons (ignora el resto de tokens si vinieran mezclados).
+      * un path (contiene '/'): debe estar dentro de alguno de los
+        --addons (igual o anidado), se expande a todos los modulos cuyo
+        path este dentro de el.
+      * un nombre de modulo: se valida contra los modulos escaneados.
+    Preserva el orden de aparicion y no repite modulos."""
+    tokens = [t.strip() for t in raw_value.split(",") if t.strip()]
+    if not tokens:
+        return []
+
+    if "all" in tokens:
+        if len(tokens) > 1:
+            print("→ 'all' fue indicado junto con otros modulos/paths: se ignoran, "
+                  "se usan TODOS los modulos escaneados.")
+        return sorted(modules.keys())
+
+    resolved = []
+    seen = set()
+    for token in tokens:
+        if "/" in token:
+            path = token.rstrip("/")
+            within_addons = any(
+                path == root.rstrip("/") or path.startswith(root.rstrip("/") + "/")
+                for root in addon_roots
+            )
+            if not within_addons:
+                print(f"Error: el path '{token}' no esta dentro de ninguno de los "
+                      "--addons indicados:")
+                print(f"  {', '.join(addon_roots)}")
+                sys.exit(1)
+            matched = sorted(
+                m for m, p in module_paths.items()
+                if p == path or p.startswith(path + "/")
+            )
+            if not matched:
+                print(f"Error: no se encontraron modulos (manifests __manifest__.py) "
+                      f"dentro de '{token}'.")
+                sys.exit(1)
+            for m in matched:
+                if m not in seen:
+                    seen.add(m)
+                    resolved.append(m)
+        else:
+            if token not in modules:
+                print(f"Error: el modulo '{token}' no existe en los addons escaneados:")
+                print(f"  {', '.join(addon_roots)}")
+                sys.exit(1)
+            if token not in seen:
+                seen.add(token)
+                resolved.append(token)
+    return resolved
+
+
 def install_test_hook(container):
     """Escribe HOOK_SOURCE (embebido arriba) como sitecustomize.py dentro del
     contenedor, via stdin (sin necesitar ningun archivo local). Se reinstala
@@ -519,6 +597,23 @@ def resolve_test_json_path(out_arg):
         directory = out_arg.rstrip(os.sep) or os.sep
         return os.path.join(directory, "test_report.json")
     return out_arg
+
+
+def resolve_summary_json_path(out_arg):
+    """Mismo criterio que resolve_coverage_json_path pero con nombre por
+    defecto test_summary.json (usado por --out-summary-json)."""
+    if out_arg.endswith(os.sep) or os.path.isdir(out_arg):
+        directory = out_arg.rstrip(os.sep) or os.sep
+        return os.path.join(directory, "test_summary.json")
+    return out_arg
+
+
+def resolve_split_subpath(root_arg, module, filename):
+    """Para --per-module-db: a diferencia de resolve_*_path (modo normal,
+    donde RUTA puede ser un archivo o un directorio), aca RUTA siempre se
+    trata como directorio raiz -- con mas de un modulo, un solo archivo
+    pisaria el de los demas. Devuelve <root_arg>/<module>/<filename>."""
+    return os.path.join(root_arg, module, filename)
 
 
 def resolve_log_path(out_arg):
@@ -750,6 +845,39 @@ def print_recursive_overview(seed_modules, closure, excluded, modules, reverse):
     print_boxed(f"Subarbol de '{modules_label}' ({len(closure)} modulos)", blocks)
 
 
+def compute_closure_for_seed(seed_modules, modules, reverse, tags_arg, exclude_set,
+                              no_confirm, dry_run, label, prefix_messages):
+    """Igual que la logica de --recursive (calculo del subarbol + manejo de
+    dependientes arrastrados por --exclude), parametrizada para poder
+    llamarse una vez por 'target': una sola vez en modo normal (con todos
+    los modulos pedidos como semilla) o una vez por modulo con
+    --per-module-db (prefix_messages=True, para distinguir de que modulo es
+    cada pregunta si hay mas de un target)."""
+    excluded = set(exclude_set)
+    closure = transitive_closure(seed_modules, modules, reverse)
+    closure = [m for m in closure if m not in excluded]
+    dragged = [d for d in dependents_within(excluded, closure, reverse) if d not in seed_modules]
+    if dragged:
+        prefix = f"[{label}] " if prefix_messages else ""
+        print(f"\n{prefix}Los siguientes modulos dependen de los excluidos y volverian a")
+        print("arrastrarlos de vuelta a los tests:")
+        for i, dep in enumerate(dragged, 1):
+            print(f"  {i}) {dep}")
+        if dry_run:
+            print("(en la ejecucion real se preguntara si omitirlos)")
+        elif no_confirm:
+            print("(--no-confirm: se asume la respuesta por defecto, si, se omiten)")
+            excluded.update(dragged)
+            closure = [m for m in closure if m not in excluded]
+        else:
+            answer = input("Omitirlos tambien? [si/no] (por defecto si): ").strip().lower()
+            if answer not in ("no", "n"):
+                excluded.update(dragged)
+                closure = [m for m in closure if m not in excluded]
+    test_tags = ",".join(f"/{m}" for m in closure) if tags_arg == "all" else tags_arg
+    return closure, test_tags, excluded
+
+
 def run_and_capture(cmd):
     """Corre cmd, muestra su salida en vivo y la devuelve completa para parsear."""
     process = subprocess.Popen(
@@ -896,6 +1024,267 @@ def confirm_recursive_run(closure):
         sys.exit(0)
 
 
+def confirm_recursive_run_multi(plans):
+    """Como confirm_recursive_run, pero para --per-module-db: una sola
+    confirmacion cubriendo los N arboles ya impresos (uno por modulo), en
+    vez de N pausas intercaladas con una corrida secuencial larga."""
+    total_installs = sum(len(p["closure"]) for p in plans)
+    answer = input(
+        f"\nEsto ejecutara {len(plans)} modulo(s) en bases de datos independientes "
+        f"({total_installs} instalacion(es) de modulo en total, contando repetidos "
+        "entre modulos que comparten dependencias). Continuar? [s/N]: "
+    ).strip().lower()
+    if answer not in ("s", "si", "sí", "y", "yes"):
+        print("Cancelado.")
+        sys.exit(0)
+
+
+def build_combined_test_report(results):
+    """Para --out-json con --per-module-db: {modulo: {at_install,
+    post_install, totals, verdict: {passed}}} -- version recortada del shape
+    completo que escribe export_test_json (sin 'modules' ni el detalle de
+    'tests', sin 'engaged'/'engaged_marker'), un modulo por key."""
+    combined = {}
+    for r in results:
+        report = r["test_report"]
+        verdict = compute_verdict(report, r["exit_code"], r["closure"], r["module_states"])
+        combined[r["label"]] = {
+            "at_install": {k: report["at_install"][k] for k in ("testsRun", "failures", "errors", "skipped")},
+            "post_install": {k: report["post_install"][k] for k in ("testsRun", "failures", "errors", "skipped")},
+            "totals": report["totals"],
+            "verdict": {"passed": verdict["passed"]},
+        }
+    return combined
+
+
+def build_summary_report(results):
+    """Para --out-summary-json: {modulo: {passed, coverage}} -- el resumen
+    mas compacto posible, un modulo por key."""
+    summary = {}
+    for r in results:
+        verdict = compute_verdict(r["test_report"], r["exit_code"], r["closure"], r["module_states"])
+        coverage_match = re.search(r"^TOTAL\b.*?(\d+)%\s*$", r["output"], re.MULTILINE)
+        summary[r["label"]] = {
+            "passed": verdict["passed"],
+            "coverage": f"{coverage_match.group(1)}%" if coverage_match else None,
+        }
+    return summary
+
+
+def print_split_summary(results):
+    """Resumen final en consola para --per-module-db: una linea por modulo
+    con su resultado y cobertura, ademas del resumen individual que ya
+    imprime print_test_summary durante el loop."""
+    rows = ["RESUMEN GENERAL (--per-module-db)"]
+    for r in results:
+        verdict = compute_verdict(r["test_report"], r["exit_code"], r["closure"], r["module_states"])
+        icon = "✅" if verdict["passed"] else "❌"
+        coverage_match = re.search(r"^TOTAL\b.*?(\d+)%\s*$", r["output"], re.MULTILINE)
+        coverage_str = f"{coverage_match.group(1)}%" if coverage_match else "-"
+        rows.append(f"{icon} {r['label']:<30} cobertura: {coverage_str}")
+
+    width = max(len(r) for r in rows) + 2
+    border = "─" * width
+    print(f"\n┌{border}┐")
+    print(f"│ {rows[0].ljust(width - 1)}│")
+    print(f"├{border}┤")
+    for row in rows[1:]:
+        print(f"│ {row.ljust(width - 1)}│")
+    print(f"└{border}┘\n")
+
+
+def execute_test_run(container, label, closure, test_tags, db_name, args, module_paths,
+                      coverage_json_dest, test_json_dest, logs_dest):
+    """Corre una unica instalacion + bateria de tests + coverage (una base de
+    datos, un proceso de Odoo) para `closure`. Se llama una sola vez en modo
+    normal (closure = todos los modulos pedidos) y una vez por modulo con
+    --per-module-db (closure = el subarbol de ESE modulo). Devuelve un dict
+    para agregar en el resumen final, o None en --dry-run (no se ejecuta
+    nada, solo se imprime el comando)."""
+    source_paths = ",".join(module_paths[m] for m in closure if m in module_paths)
+    modules_str = ",".join(closure)
+    # --workers 0 es necesario para que se vea el resumen final de tests
+    # ("X failed, Y error(s) of Z tests") y para que la cobertura se mida
+    # bien. Sin este flag, ninguna de las dos cosas funciona:
+    #
+    # Ese resumen lo imprime Odoo desde un solo lugar de su codigo fuente:
+    # ThreadedServer.run() en odoo/service/server.py, y solo cuando se usa
+    # --stop-after-init junto con tests habilitados (test_enable=True, que
+    # Odoo activa solo al pasar --test-tags). Ese metodo hace:
+    #
+    #   if stop:
+    #       if config['test_enable']:
+    #           logger = odoo.tests.result._logger
+    #           for db, registry in Registry.registries.d.items():
+    #               report = registry._assertion_report
+    #               log = logger.error if not report.wasSuccessful() \
+    #                else logger.warning if not report.testsRun \
+    #                else logger.info
+    #               log("%s when loading database %r", report, db)
+    #
+    # El problema es que Odoo no siempre usa ThreadedServer: en
+    # server.py:start(), si config['workers'] es distinto de 0, se instancia
+    # PreforkServer en su lugar (el modo con procesos hijos "forkeados" que
+    # usa Odoo en produccion), y esa clase no tiene nada parecido a este
+    # bloque — el resumen simplemente nunca se imprime ahi, sea cual sea el
+    # nivel de log.
+    #
+    # Ademas, en ese modo los tests corren dentro de un proceso hijo
+    # forkeado que el `coverage run` del proceso padre no puede trazar, asi
+    # que el % de cobertura reportado tampoco seria confiable.
+    #
+    # --http-port/--gevent-port en puertos al azar (no los de siempre,
+    # 8069/8072) son necesarios porque --no-http NO evita que Odoo intente
+    # levantar el servidor HTTP: server.py hace
+    # `if config['test_enable'] or (config['http_enable'] and not stop): self.http_spawn()`
+    # y test_enable=True (activado por --test-tags) siempre entra por la
+    # primera condicion, sin importar --no-http. Si el contenedor ya tiene
+    # su propio proceso de Odoo corriendo (el caso normal: no es un
+    # contenedor descartable, es el mismo donde ya vive la instancia), ese
+    # proceso ya tiene 8069/8072 tomados, y el intento de bind falla.
+    #
+    # En Odoo 17.0, ese bind ocurre dentro del thread de background
+    # (http_thread), asi que si falla el proceso sigue vivo -- solo se
+    # imprime un traceback y se pierde el servidor HTTP, que ademas no hace
+    # falta para tests. Pero en Odoo 19.0, http_spawn() construye el
+    # WSGIServer (donde ocurre el bind) en el thread PRINCIPAL antes de
+    # mandar el serve_forever() a background, asi que el fallo pasa ahi
+    # mismo; y Werkzeug 3.x atrapa el EADDRINUSE y llama sys.exit(1) --
+    # matando TODO el proceso antes de llegar a cargar un solo modulo. El
+    # sintoma es un log casi vacio (unas pocas lineas de arranque) y un
+    # "Address already in use" sin ninguna relacion con los modulos que se
+    # querian probar.
+    http_port = random_high_port()
+    gevent_port = random_high_port()
+
+    # -i (install) es un no-op para un modulo que YA esta instalado: Odoo no
+    # recarga su codigo Python ni redescubre sus tests, asi que -d apuntando
+    # a una base real ya provisionada (no una de las descartables que este
+    # script genera solo) corre con "Tests ejecutados: 0" y sin ningun error
+    # -- silenciosamente no hizo nada. Si la base ya existe y TODOS los
+    # modulos pedidos ya estan 'installed' ahi, se usa -u (update) en su
+    # lugar, que si fuerza la recarga de codigo + tests. Si la base es
+    # nueva (recien creada mas abajo) o falta instalar algo, se mantiene -i,
+    # que es el flujo normal de esta herramienta (base descartable, todo
+    # fresco).
+    requested_modules = modules_str.split(",")
+    reused_db = db_exists(container, db_name)
+    pre_run_states = query_module_states(container, db_name, requested_modules) if reused_db else {}
+    already_installed = reused_db and all(
+        pre_run_states.get(m) == "installed" for m in requested_modules
+    )
+    install_flag = "-u" if already_installed else "-i"
+    if already_installed:
+        print(
+            f"→ '{modules_str}' ya esta instalado en '{db_name}': usando -u (update) "
+            "en vez de -i para forzar la recarga de codigo y tests."
+        )
+
+    odoo_cmd = (
+        f"odoo --test-tags {test_tags} -d {db_name} {install_flag} {modules_str} "
+        "--without-demo=True --stop-after-init --workers 0 --no-http "
+        f"--http-port={http_port} --gevent-port={gevent_port} "
+        "-c /home/odoo/.config/odoo.conf"
+    )
+    container_json_path = f"/tmp/coverage_{db_name}.json"
+    json_step = f"python3 -m coverage json -o {container_json_path}; " if coverage_json_dest else ""
+
+    # Hook de resultados de test (HOOK_SOURCE, arriba): se inyecta via
+    # PYTHONPATH, sin instalar ningun modulo Odoo, y escribe el JSON exacto
+    # de la corrida (por test, separado en at_install/post_install) apenas
+    # termina cada fase -- no depende de parsear el resumen de texto.
+    container_test_report_path = f"/tmp/test_report_{db_name}.json"
+    hook_env = (
+        f"export PYTHONPATH={HOOK_CONTAINER_DIR}:$PYTHONPATH; "
+        f"export CICD_TEST_REPORT_PATH={container_test_report_path}; "
+    )
+    inner_cmd = (
+        f"{hook_env}"
+        "pip3 install --quiet coverage && python3 -m coverage erase && "
+        "CICD_TEST_HOOK_ROLE=main "
+        f"python3 -m coverage run --rcfile=/home/odoo/.coveragerc --source={source_paths} "
+        f"/usr/bin/{odoo_cmd}; "
+        f"test_rc=$?; python3 -m coverage report -m; {json_step}exit $test_rc"
+    )
+    full_cmd = ["docker", "exec", "-u", "root", container, "bash", "-c", inner_cmd]
+
+    if args.per_module_db:
+        print(f"\n=== {label} ===")
+    print("Comando de ejecucion:")
+    print(f"  docker exec -u root {container} bash -c \"")
+    print(f"    export PYTHONPATH={HOOK_CONTAINER_DIR}:$PYTHONPATH;")
+    print(f"    export CICD_TEST_REPORT_PATH={container_test_report_path};")
+    print(f"    pip3 install --quiet coverage &&")
+    print(f"    python3 -m coverage erase &&")
+    print(f"    CICD_TEST_HOOK_ROLE=main \\")
+    print(f"    python3 -m coverage run --rcfile=/home/odoo/.coveragerc \\")
+    print(f"      --source={source_paths} \\")
+    print(f"      /usr/bin/{odoo_cmd};")
+    print(f"    python3 -m coverage report -m")
+    if coverage_json_dest:
+        print(f"    python3 -m coverage json -o {container_json_path}")
+    print("  \"")
+    print(f"\nBase de datos: {db_name}"
+          f"{' (se conservara: --no-rm-db)' if args.no_rm_db else ' (se borrara al terminar)'}")
+    if coverage_json_dest:
+        print(f"Reporte JSON de cobertura: se exportara a {coverage_json_dest}")
+    if test_json_dest:
+        print(f"Reporte JSON de tests: se exportara a {test_json_dest}")
+    if logs_dest:
+        origen = f"docker cp de {args.container_log_path}" if args.container_log_path else "salida por stdout"
+        print(f"Log de la corrida: se exportara a {logs_dest} ({origen})")
+    print()
+
+    if args.dry_run:
+        return None
+
+    if not db_exists(container, db_name):
+        create_db(container, db_name)
+    else:
+        print(f"→ Reutilizando base de datos existente '{db_name}'")
+
+    exit_code = 0
+    test_report = None
+    module_states = {}
+    output = ""
+    try:
+        print("Ejecutando tests con cobertura...")
+        exit_code, output = run_and_capture(full_cmd)
+        test_report = read_container_json(container, container_test_report_path)
+
+        # Consulta directa a ir_module_module -- DEBE correr antes de borrar
+        # la base (finally, mas abajo). Es la unica fuente confiable de que
+        # se instalo y que no; nunca se determina parseando texto.
+        module_states = query_module_states(container, db_name, closure)
+
+        print_test_summary(label, db_name, output, test_report, exit_code, closure, module_states)
+
+        if coverage_json_dest:
+            export_container_file(container, container_json_path, coverage_json_dest, "Reporte JSON de cobertura")
+        if test_json_dest:
+            export_test_json(test_report, exit_code, closure, module_states, test_json_dest)
+        if logs_dest:
+            if args.container_log_path:
+                export_container_file(container, args.container_log_path, logs_dest, "Log de la corrida")
+            else:
+                export_run_log(output, logs_dest)
+    finally:
+        if args.no_rm_db:
+            print(f"--no-rm-db: se conserva la base de datos '{db_name}'")
+        else:
+            drop_db(container, db_name)
+
+    return {
+        "label": label,
+        "db_name": db_name,
+        "closure": closure,
+        "exit_code": exit_code,
+        "output": output,
+        "test_report": test_report if test_report is not None else empty_test_report(),
+        "module_states": module_states,
+    }
+
+
 def run_command():
     parser = argparse.ArgumentParser(
         description=USAGE,
@@ -999,6 +1388,21 @@ def run_command():
         help="Muestra, ademas del resumen, el detalle por test (fase, "
              "resultado, tiempo y queries SQL) capturado por el hook."
     )
+    parser.add_argument(
+        "--per-module-db", action="store_true",
+        help="Corre cada modulo (de -m/posicional, ya resuelto si vino de un "
+             "path o de 'all') en su propia base de datos independiente, "
+             "secuencialmente: una instalacion, una corrida de tests y una "
+             "medicion de cobertura por modulo, en vez de todos juntos en una "
+             "sola base. Con --recursive, el arbol de dependencias se calcula "
+             "POR modulo (no combinado). No compatible con -d/--db explicito."
+    )
+    parser.add_argument(
+        "--out-summary-json", default=None, metavar="RUTA",
+        help="Solo junto con --per-module-db: exporta un JSON ultra-resumido "
+             "por modulo ({modulo: {passed, coverage}}). Mismo criterio de "
+             "RUTA que --out-coverage-json (directorio o archivo)."
+    )
     args = parser.parse_args()
 
     args.module = args.module_flag or args.module
@@ -1006,6 +1410,14 @@ def run_command():
         parser.error(
             "Debes indicar modulo(s), por posicional (odoo-test <modulo>) o con -m/--modules."
         )
+    if args.per_module_db and args.db:
+        parser.error(
+            "--per-module-db no es compatible con -d/--db: cada modulo "
+            "autogenera su propio nombre de base (no tiene sentido un solo "
+            "nombre explicito para varias bases independientes)."
+        )
+    if args.out_summary_json and not args.per_module_db:
+        parser.error("--out-summary-json solo tiene efecto junto con --per-module-db.")
 
     container = args.container
     addon_roots = [a.strip() for a in args.addons.split(",") if a.strip()]
@@ -1020,234 +1432,130 @@ def run_command():
         print(f"  Addons: {', '.join(addon_roots)}")
         sys.exit(1)
 
-    modules_arg = [m.strip() for m in args.module.split(",") if m.strip()]
-    missing = [m for m in modules_arg if m not in modules]
-    if missing:
-        print(f"Error: el/los modulo(s) {', '.join(missing)} no existen en los "
-              "addons escaneados:")
-        print(f"  {', '.join(addon_roots)}")
-        sys.exit(1)
+    modules_arg = resolve_requested_modules(args.module, modules, module_paths, addon_roots)
+    if not modules_arg:
+        parser.error("No se pudo resolver ningun modulo desde -m/--modules.")
 
     excluded = {m.strip() for m in args.exclude.split(",") if m.strip()}
     modules_label = ", ".join(modules_arg)
 
-    if not args.recursive:
-        closure = modules_arg
-        test_tags = args.tags if args.tags != "all" else ",".join(f"/{m}" for m in modules_arg)
-        modules_str = ",".join(modules_arg)
-        print(f"Modo no recursivo: solo se ejecuta(n) '{modules_label}' "
-              "(usa --recursive para el arbol completo de dependencias)")
+    if args.per_module_db:
+        seeds = [[m] for m in modules_arg]
     else:
-        closure = transitive_closure(modules_arg, modules, reverse)
-        closure = [m for m in closure if m not in excluded]
-        dragged = [d for d in dependents_within(excluded, closure, reverse)
-                   if d not in modules_arg]
-        if dragged:
-            print("Los siguientes modulos dependen de los excluidos y volverian a")
-            print("arrastrarlos de vuelta a los tests:")
-            for i, dep in enumerate(dragged, 1):
-                print(f"  {i}) {dep}")
-            if args.dry_run:
-                print("(en la ejecucion real se preguntara si omitirlos)")
-            elif args.no_confirm:
-                print("(--no-confirm: se asume la respuesta por defecto, si, se omiten)")
-                excluded.update(dragged)
-                closure = [m for m in closure if m not in excluded]
-            else:
-                answer = input("Omitirlos tambien? [si/no] (por defecto si): ").strip().lower()
-                if answer not in ("no", "n"):
-                    excluded.update(dragged)
-                    closure = [m for m in closure if m not in excluded]
-        test_tags = ",".join(f"/{m}" for m in closure) if args.tags == "all" else args.tags
-        modules_str = ','.join(closure)
+        seeds = [modules_arg]
 
-        print_recursive_overview(modules_arg, closure, excluded, modules, reverse)
+    plans = []
+    for seed in seeds:
+        label = seed[0] if args.per_module_db else modules_label
+        if not args.recursive:
+            closure = seed
+            test_tags = args.tags if args.tags != "all" else ",".join(f"/{m}" for m in seed)
+            plan_excluded = set()
+        else:
+            closure, test_tags, plan_excluded = compute_closure_for_seed(
+                seed, modules, reverse, args.tags, excluded,
+                args.no_confirm, args.dry_run, label, args.per_module_db,
+            )
+        plans.append({
+            "label": label, "seed": seed, "closure": closure,
+            "test_tags": test_tags, "excluded": plan_excluded,
+        })
+
+    if not args.recursive:
+        if args.per_module_db:
+            print(f"Modo no recursivo + --per-module-db: se ejecutan {len(plans)} modulo(s) "
+                  "por separado, cada uno solo (usa --recursive para el arbol de dependencias)")
+        else:
+            print(f"Modo no recursivo: solo se ejecuta(n) '{modules_label}' "
+                  "(usa --recursive para el arbol completo de dependencias)")
+    else:
+        for plan in plans:
+            print_recursive_overview(plan["seed"], plan["closure"], plan["excluded"], modules, reverse)
         if args.dry_run:
             print("\n(dry-run: no se pedira confirmacion)")
         elif args.no_confirm:
             print("\n(--no-confirm: se continua sin pedir confirmacion)")
+        elif args.per_module_db:
+            confirm_recursive_run_multi(plans)
         else:
-            confirm_recursive_run(closure)
+            confirm_recursive_run(plans[0]["closure"])
 
-    db_name = args.db or generate_db_name("_".join(modules_arg))
+    per_plan_dests = []
+    for plan in plans:
+        if args.per_module_db:
+            coverage_json_dest = (
+                resolve_split_subpath(args.out_coverage_json, plan["label"], "coverage.json")
+                if args.out_coverage_json else None
+            )
+            logs_dest = (
+                resolve_split_subpath(args.out_logs, plan["label"], "test_run.log")
+                if args.out_logs else None
+            )
+            test_json_dest = None  # se exporta combinado al final, no por modulo
+        else:
+            coverage_json_dest = (
+                resolve_coverage_json_path(args.out_coverage_json) if args.out_coverage_json else None
+            )
+            logs_dest = resolve_log_path(args.out_logs) if args.out_logs else None
+            test_json_dest = resolve_test_json_path(args.out_json) if args.out_json else None
+        per_plan_dests.append({
+            "coverage_json_dest": coverage_json_dest,
+            "test_json_dest": test_json_dest,
+            "logs_dest": logs_dest,
+        })
 
-    source_paths = ",".join(
-        module_paths[m] for m in closure if m in module_paths
-    )
-    # --workers 0 es necesario para que se vea el resumen final de tests
-    # ("X failed, Y error(s) of Z tests") y para que la cobertura se mida
-    # bien. Sin este flag, ninguna de las dos cosas funciona:
-    #
-    # Ese resumen lo imprime Odoo desde un solo lugar de su codigo fuente:
-    # ThreadedServer.run() en odoo/service/server.py, y solo cuando se usa
-    # --stop-after-init junto con tests habilitados (test_enable=True, que
-    # Odoo activa solo al pasar --test-tags). Ese metodo hace:
-    #
-    #   if stop:
-    #       if config['test_enable']:
-    #           logger = odoo.tests.result._logger
-    #           for db, registry in Registry.registries.d.items():
-    #               report = registry._assertion_report
-    #               log = logger.error if not report.wasSuccessful() \
-    #                else logger.warning if not report.testsRun \
-    #                else logger.info
-    #               log("%s when loading database %r", report, db)
-    #
-    # El problema es que Odoo no siempre usa ThreadedServer: en
-    # server.py:start(), si config['workers'] es distinto de 0, se instancia
-    # PreforkServer en su lugar (el modo con procesos hijos "forkeados" que
-    # usa Odoo en produccion), y esa clase no tiene nada parecido a este
-    # bloque — el resumen simplemente nunca se imprime ahi, sea cual sea el
-    # nivel de log.
-    #
-    # Ademas, en ese modo los tests corren dentro de un proceso hijo
-    # forkeado que el `coverage run` del proceso padre no puede trazar, asi
-    # que el % de cobertura reportado tampoco seria confiable.
-    #
-    # --http-port/--gevent-port en puertos al azar (no los de siempre,
-    # 8069/8072) son necesarios porque --no-http NO evita que Odoo intente
-    # levantar el servidor HTTP: server.py hace
-    # `if config['test_enable'] or (config['http_enable'] and not stop): self.http_spawn()`
-    # y test_enable=True (activado por --test-tags) siempre entra por la
-    # primera condicion, sin importar --no-http. Si el contenedor ya tiene
-    # su propio proceso de Odoo corriendo (el caso normal: no es un
-    # contenedor descartable, es el mismo donde ya vive la instancia), ese
-    # proceso ya tiene 8069/8072 tomados, y el intento de bind falla.
-    #
-    # En Odoo 17.0, ese bind ocurre dentro del thread de background
-    # (http_thread), asi que si falla el proceso sigue vivo -- solo se
-    # imprime un traceback y se pierde el servidor HTTP, que ademas no hace
-    # falta para tests. Pero en Odoo 19.0, http_spawn() construye el
-    # WSGIServer (donde ocurre el bind) en el thread PRINCIPAL antes de
-    # mandar el serve_forever() a background, asi que el fallo pasa ahi
-    # mismo; y Werkzeug 3.x atrapa el EADDRINUSE y llama sys.exit(1) --
-    # matando TODO el proceso antes de llegar a cargar un solo modulo. El
-    # sintoma es un log casi vacio (unas pocas lineas de arranque) y un
-    # "Address already in use" sin ninguna relacion con los modulos que se
-    # querian probar.
-    http_port = random_high_port()
-    gevent_port = random_high_port()
+    db_names = []
+    for plan in plans:
+        if args.per_module_db:
+            db_names.append(generate_db_name(plan["label"]))
+        else:
+            db_names.append(args.db or generate_db_name("_".join(plan["seed"])))
 
-    # -i (install) es un no-op para un modulo que YA esta instalado: Odoo no
-    # recarga su codigo Python ni redescubre sus tests, asi que -d apuntando
-    # a una base real ya provisionada (no una de las descartables que este
-    # script genera solo) corre con "Tests ejecutados: 0" y sin ningun error
-    # -- silenciosamente no hizo nada. Si la base ya existe y TODOS los
-    # modulos pedidos ya estan 'installed' ahi, se usa -u (update) en su
-    # lugar, que si fuerza la recarga de codigo + tests. Si la base es
-    # nueva (recien creada mas abajo) o falta instalar algo, se mantiene -i,
-    # que es el flujo normal de esta herramienta (base descartable, todo
-    # fresco).
-    requested_modules = modules_str.split(",")
-    reused_db = db_exists(container, db_name)
-    pre_run_states = query_module_states(container, db_name, requested_modules) if reused_db else {}
-    already_installed = reused_db and all(
-        pre_run_states.get(m) == "installed" for m in requested_modules
-    )
-    install_flag = "-u" if already_installed else "-i"
-    if already_installed:
-        print(
-            f"→ '{modules_str}' ya esta instalado en '{db_name}': usando -u (update) "
-            "en vez de -i para forzar la recarga de codigo y tests."
+    if not args.dry_run:
+        install_test_hook(container)
+
+    results = []
+    for plan, dests, db_name in zip(plans, per_plan_dests, db_names):
+        result = execute_test_run(
+            container, plan["label"], plan["closure"], plan["test_tags"], db_name, args,
+            module_paths, dests["coverage_json_dest"], dests["test_json_dest"], dests["logs_dest"],
         )
-
-    odoo_cmd = (
-        f"odoo --test-tags {test_tags} -d {db_name} {install_flag} {modules_str} "
-        "--without-demo=True --stop-after-init --workers 0 --no-http "
-        f"--http-port={http_port} --gevent-port={gevent_port} "
-        "-c /home/odoo/.config/odoo.conf"
-    )
-    container_json_path = f"/tmp/coverage_{db_name}.json"
-    coverage_json_dest = (
-        resolve_coverage_json_path(args.out_coverage_json) if args.out_coverage_json else None
-    )
-    json_step = f"python3 -m coverage json -o {container_json_path}; " if coverage_json_dest else ""
-
-    # Hook de resultados de test (HOOK_SOURCE, arriba): se inyecta via
-    # PYTHONPATH, sin instalar ningun modulo Odoo, y escribe el JSON exacto
-    # de la corrida (por test, separado en at_install/post_install) apenas
-    # termina cada fase -- no depende de parsear el resumen de texto.
-    container_test_report_path = f"/tmp/test_report_{db_name}.json"
-    test_json_dest = resolve_test_json_path(args.out_json) if args.out_json else None
-    logs_dest = resolve_log_path(args.out_logs) if args.out_logs else None
-    hook_env = (
-        f"export PYTHONPATH={HOOK_CONTAINER_DIR}:$PYTHONPATH; "
-        f"export CICD_TEST_REPORT_PATH={container_test_report_path}; "
-    )
-    inner_cmd = (
-        f"{hook_env}"
-        "pip3 install --quiet coverage && python3 -m coverage erase && "
-        "CICD_TEST_HOOK_ROLE=main "
-        f"python3 -m coverage run --rcfile=/home/odoo/.coveragerc --source={source_paths} "
-        f"/usr/bin/{odoo_cmd}; "
-        f"test_rc=$?; python3 -m coverage report -m; {json_step}exit $test_rc"
-    )
-    full_cmd = ["docker", "exec", "-u", "root", container, "bash", "-c", inner_cmd]
-
-    print("\nComando de ejecucion:")
-    print(f"  docker exec -u root {container} bash -c \"")
-    print(f"    export PYTHONPATH={HOOK_CONTAINER_DIR}:$PYTHONPATH;")
-    print(f"    export CICD_TEST_REPORT_PATH={container_test_report_path};")
-    print(f"    pip3 install --quiet coverage &&")
-    print(f"    python3 -m coverage erase &&")
-    print(f"    CICD_TEST_HOOK_ROLE=main \\")
-    print(f"    python3 -m coverage run --rcfile=/home/odoo/.coveragerc \\")
-    print(f"      --source={source_paths} \\")
-    print(f"      /usr/bin/{odoo_cmd};")
-    print(f"    python3 -m coverage report -m")
-    if coverage_json_dest:
-        print(f"    python3 -m coverage json -o {container_json_path}")
-    print("  \"")
-    print(f"\nBase de datos: {db_name}"
-          f"{' (se conservara: --no-rm-db)' if args.no_rm_db else ' (se borrara al terminar)'}")
-    if coverage_json_dest:
-        print(f"Reporte JSON: se exportara a {coverage_json_dest}")
-    if test_json_dest:
-        print(f"Reporte JSON de tests: se exportara a {test_json_dest}")
-    if logs_dest:
-        origen = f"docker cp de {args.container_log_path}" if args.container_log_path else "salida por stdout"
-        print(f"Log de la corrida: se exportara a {logs_dest} ({origen})")
-    print()
+        if result is not None:
+            results.append(result)
 
     if args.dry_run:
         return
 
-    install_test_hook(container)
+    if args.per_module_db:
+        print_split_summary(results)
 
-    if not db_exists(container, db_name):
-        create_db(container, db_name)
+        combined_test_json_dest = resolve_test_json_path(args.out_json) if args.out_json else None
+        if combined_test_json_dest:
+            combined = build_combined_test_report(results)
+            parent = os.path.dirname(combined_test_json_dest)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(combined_test_json_dest, "w", encoding="utf-8") as f:
+                json.dump(combined, f, indent=2)
+            print(f"→ Reporte JSON combinado de tests guardado en: {combined_test_json_dest}")
+
+        summary_json_dest = resolve_summary_json_path(args.out_summary_json) if args.out_summary_json else None
+        if summary_json_dest:
+            summary = build_summary_report(results)
+            parent = os.path.dirname(summary_json_dest)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(summary_json_dest, "w", encoding="utf-8") as f:
+                json.dump(summary, f, indent=2)
+            print(f"→ Reporte JSON resumido guardado en: {summary_json_dest}")
+
+        all_passed = all(
+            compute_verdict(r["test_report"], r["exit_code"], r["closure"], r["module_states"])["passed"]
+            for r in results
+        )
+        sys.exit(0 if all_passed else 1)
     else:
-        print(f"→ Reutilizando base de datos existente '{db_name}'")
-
-    exit_code = 0
-    try:
-        print("Ejecutando tests con cobertura...")
-        exit_code, output = run_and_capture(full_cmd)
-        test_report = read_container_json(container, container_test_report_path)
-
-        # Consulta directa a ir_module_module -- DEBE correr antes de borrar
-        # la base (finally, mas abajo). Es la unica fuente confiable de que
-        # se instalo y que no; nunca se determina parseando texto.
-        module_states = query_module_states(container, db_name, closure)
-
-        print_test_summary(modules_label, db_name, output, test_report, exit_code, closure, module_states)
-
-        if coverage_json_dest:
-            export_container_file(container, container_json_path, coverage_json_dest, "Reporte JSON de cobertura")
-        if test_json_dest:
-            export_test_json(test_report, exit_code, closure, module_states, test_json_dest)
-        if logs_dest:
-            if args.container_log_path:
-                export_container_file(container, args.container_log_path, logs_dest, "Log de la corrida")
-            else:
-                export_run_log(output, logs_dest)
-    finally:
-        if args.no_rm_db:
-            print(f"--no-rm-db: se conserva la base de datos '{db_name}'")
-        else:
-            drop_db(container, db_name)
-
-    sys.exit(exit_code)
+        sys.exit(results[0]["exit_code"])
 
 
 if __name__ == "__main__":
