@@ -57,8 +57,21 @@
       generado correctamente en `docker-compose.generated.yml`
       (Dockerfile, `INSTANCE_ADDONS`, `PGUSER`/`DBFILTER` del rol
       dedicado, `depends_on: db-pg16`).
-- [ ] `./odoo build odoo20` real (construir la imagen, levantar el
-      contenedor, entrar a Odoo) — pendiente, fuera de este cambio.
+- [x] `./odoo build` + `./odoo start odoo20` real: imagen
+      `local_odoo_odoo20:20` construida, contenedor `odoo-odoo20`
+      levantado contra `db-pg16` (rol dedicado `odoo_odoo20`).
+- [x] Detectado con la corrida real (no visible en generación en seco):
+      `http://localhost:9009/` daba `502` — Odoo 20.0 cambió el default
+      de `--http-interface` a `127.0.0.1` (antes `0.0.0.0`), así que
+      quedaba escuchando HTTP/gevent solo en loopback, inalcanzable
+      desde el contenedor de nginx. Confirmado inspeccionando
+      `/proc/net/tcp` dentro del contenedor.
+- [x] Fix: `http_interface = 0.0.0.0` explícito en
+      `.resources/conf.d/30-proxy-mode.conf` (aplica a toda versión, no
+      solo 20.0 — no-op en <20.0). Verificado con rebuild +
+      `./odoo restart odoo20`: `/proc/net/tcp` pasa a `0.0.0.0:8069`, y
+      `curl http://localhost:9009/` responde `303` → `/odoo` → `200`
+      (página de Odoo real).
 - [x] Actualizar `readme.md` con la nota de `MIN_PG_VERSION` de Odoo
       20.0.
 - [x] Actualizar `openspec/project.md` si aplica — no aplicó: no cambia

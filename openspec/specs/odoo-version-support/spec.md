@@ -47,3 +47,26 @@ imagen base (`ubuntu:noble`) que ya usan 17.0/19.0.
 - **THEN** el CLI la trata igual que cualquier otra versión soportada:
   genera su Dockerfile y su servicio de compose sin necesitar ningún
   cambio de código adicional
+
+### Requirement: Odoo DEBE escuchar HTTP/gevent en todas las interfaces, no solo loopback
+
+El `odoo.conf` generado para cualquier instancia DEBE fijar
+`http_interface = 0.0.0.0` explícito. nginx corre en un contenedor
+separado y solo puede llegar a Odoo por la red interna
+(`odoo-<inst>:8069`/`:8071`), nunca por loopback — si Odoo queda
+escuchando solo en `127.0.0.1` (el default de `--http-interface` en Odoo
+20.0+, antes `0.0.0.0`), la instancia queda inalcanzable desde nginx sin
+importar el resto de la configuración.
+
+#### Scenario: instancia Odoo 20.0+ detrás de nginx
+- **GIVEN** una instancia con `odoo_version >= 20.0`
+- **WHEN** se genera su `odoo.conf` y arranca el contenedor
+- **THEN** Odoo queda escuchando HTTP (8069) y gevent (8071) en
+  `0.0.0.0`, y nginx puede alcanzarlo por la red interna (`curl
+  http://localhost:<external_port>/` responde, no `502`)
+
+#### Scenario: instancia Odoo <20.0 (comportamiento sin cambios)
+- **WHEN** se genera el `odoo.conf` de una instancia con `odoo_version <
+  20.0` (donde `0.0.0.0` ya era el default de Odoo)
+- **THEN** el flag explícito no cambia nada observable: Odoo sigue
+  escuchando en `0.0.0.0` igual que antes de este requirement

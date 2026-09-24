@@ -49,6 +49,18 @@ ningún generador.
   repo, no submódulo de Git).
 - **`readme.md`**: nota sobre el `MIN_PG_VERSION` de Odoo 20.0 al elegir
   `postgres_version` para el servicio de una instancia 20.0.
+- **`.resources/conf.d/30-proxy-mode.conf`**: agrega `http_interface =
+  0.0.0.0` explícito. Encontrado al levantar `odoo20` de verdad: Odoo
+  20.0 cambió el default de `--http-interface` de `0.0.0.0` a
+  `127.0.0.1` (`odoo/tools/config.py` de esa rama) — con el default
+  nuevo, Odoo queda escuchando HTTP (8069) y gevent (8071) solo en
+  loopback, así que nginx (contenedor separado, llega por la red
+  interna `odoo-multi`, nunca por loopback) no puede alcanzarlo:
+  `connect() failed (111: Connection refused)`, `502` desde afuera. Sin
+  esto, **ninguna** instancia 20.0+ es alcanzable a través de nginx en
+  este repo, sin importar cómo esté configurada. Explícito para toda
+  versión (no solo 20.0): no-op en <20.0 (ya era su default), requerido
+  en 20.0+.
 
 ## Diferencias de paquetes/dependencias: 19.0 → 20.0 (Odoo upstream)
 
@@ -111,6 +123,18 @@ para referencia):
   en `docker-compose.generated.yml` apuntando a
   `./.resources/Dockerfile.20.0`, con `INSTANCE_ADDONS: "src/enterprise-20.0"`,
   `PGUSER`/`DBFILTER` del rol dedicado, y `depends_on: db-pg16`.
-- **No se corrió `./odoo build odoo20` real** (construir la imagen y
-  levantar el contenedor) como parte de este cambio — queda para cuando
-  se quiera evaluar la versión en la práctica.
+- **`./odoo build` + `./odoo start odoo20` reales**: imagen
+  `local_odoo_odoo20:20` construida (nightly `.deb` de Odoo 20.0 +
+  Enterprise 20.0 instalado, sin errores de apt/pip), contenedor
+  `odoo-odoo20` levantado contra `db-pg16` con el rol dedicado
+  `odoo_odoo20`.
+- Detectado en esa corrida real (no en generación en seco): sin
+  `http_interface = 0.0.0.0`, `http://localhost:9009/` daba `502` desde
+  nginx (`connect() failed (111: Connection refused)` — Odoo escuchando
+  solo en `127.0.0.1` dentro del contenedor, default nuevo de Odoo
+  20.0). Confirmado con `/proc/net/tcp` dentro del contenedor
+  (`0100007F:1F85` = `127.0.0.1:8069` antes del fix,
+  `00000000:1F85` = `0.0.0.0:8069` después). Con el fix
+  (`http_interface = 0.0.0.0` en `30-proxy-mode.conf`) + rebuild +
+  `./odoo restart odoo20`: `curl http://localhost:9009/` → `303` → `/odoo`
+  → `200`, página de Odoo real servida.
