@@ -45,9 +45,13 @@ Actualiza los módulos indicados (`<modulo1>`, `<modulo2>`, etc.) en la base de 
 ### restore_db.sh
 
 ```sh
-./scripts/restore_db.sh -b <contenedor_db> -o <contenedor_odoo> -f <archivo_backup> -d <base_de_datos>
+./scripts/restore_db.sh -b <contenedor_db> -o <contenedor_odoo> -f <archivo_backup> -d <base_de_datos> [-u <rol_postgres>]
 ```
 Restaura el backup `<archivo_backup>` en la base de datos `<base_de_datos>`, utilizando los contenedores `<contenedor_db>` (PostgreSQL) y `<contenedor_odoo>` (Odoo).
+
+`-u` es el rol de Postgres a usar para conectar. Si se omite, el script lo resuelve solo desde `db_user` de la instancia en `instances.json` (la instancia se deriva del contenedor Odoo pasado en `-o`, ej. `odoo-ganchosvzla` → `ganchosvzla`), con fallback a `odoo` si esa instancia no tiene rol dedicado. Pasar `-u` explícito siempre tiene prioridad sobre la resolución automática.
+
+Si la instancia tiene un rol dedicado provisionado (ver `./odoo provision-role`) pero el restore falla con `role "odoo" is not permitted to log in`, es porque el rol compartido `odoo` quedó en `NOLOGIN` tras provisionar -- normalmente ya no hace falta pasar `-u` a mano, el script debería resolverlo solo.
 
 
 ### Notas y solución de problemas para restore_db.sh

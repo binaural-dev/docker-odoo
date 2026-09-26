@@ -18,3 +18,4 @@ __pycache__
 .ignore
 .DS_Store
 .codegraph
+backups/

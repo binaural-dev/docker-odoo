@@ -936,8 +936,10 @@ def main():
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
+    # Rol dedicado de la instancia (./odoo provision-role) antes que el rol compartido del
+    # servicio, que queda en NOLOGIN al provisionar; igual que resuelve restore_db.sh.
+    db_user = inst_conf.get("db_user") or db_conf["user"]
+    db_password = inst_conf.get("db_password") or db_conf["password"]
     db_port = get_db_internal_port(db_conf)
     container_name = f"odoo-{instance}"
 
