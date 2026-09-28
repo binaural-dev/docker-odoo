@@ -83,7 +83,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  Git / submódulos    sync, update-tags, update-tags-bulk, "
             "submodule-status\n"
             "  Cobertura de tests  coverage-status, coverage\n"
-            "  Postgres / roles    provision-role\n"
+            "  Postgres / roles    provision-role, psql remove, restore\n"
             "  Config / infra      new, hosts, enable, disable, "
             "validate-instances, tui, apk\n"
             "\n"
@@ -241,16 +241,35 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     # psql
-    p = subparsers.add_parser(
-        "psql", help="Conectar a PostgreSQL"
+    psql_p = subparsers.add_parser(
+        "psql",
+        help="Conectar a PostgreSQL, o eliminar una base de datos (./odoo psql remove ...)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Ejemplos:\n"
+            "  ./odoo psql binaural_actual -d binaural_actual_release   # conectar\n"
+            "  ./odoo psql --ps                                        # conectar, cualquier base del servicio\n"
+            "  ./odoo psql remove binaural_actual -d binaural_actual_release  # eliminar (con confirmación)\n"
+            "  ./odoo psql remove --ps                                 # eliminar, cualquier base del servicio\n"
+        ),
     )
-    p.add_argument(
+    psql_p.add_argument(
         "instance", nargs="?", default=None,
-        help="Nombre de instancia (opcional)",
+        help="Nombre de instancia (opcional), o 'remove' para eliminar una "
+             "base de datos en vez de conectarse.",
     )
-    p.add_argument(
-        "-d", required=False,
-        help="Nombre de la base de datos (opcional)",
+    psql_p.add_argument(
+        "remove_instance", nargs="?", default=None,
+        help=argparse.SUPPRESS,  # instancia real cuando 'instance' es 'remove'
+    )
+    psql_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
+    psql_p.add_argument(
+        "--ps", "--postgres", dest="ps", action="store_true",
+        help="Ignora instancias/db_filter: elegi un servicio de Postgres y "
+             "cualquiera de sus bases, sin filtrar (para conectar, o con "
+             "'remove' para elegir cual eliminar). Requiere habilitar "
+             "brevemente el rol bootstrap (break-glass, reinicia el "
+             "contenedor del servicio si esta en NOLOGIN)."
     )
 
     # pw
@@ -375,6 +394,10 @@ def _build_parser() -> argparse.ArgumentParser:
             "# guarda todo en ./logs/\n"
             "  ./odoo test                                             "
             "# elige instancia y modulo(s) interactivamente\n"
+            "  ./odoo test integra-17 -m src/custom/algun_grupo        "
+            "# path: todos los modulos ahi dentro\n"
+            "  ./odoo test integra-17 -m all --per-module-db           "
+            "# todos los modulos, 1 DB por modulo\n"
         ),
     )
     test_p.add_argument(
@@ -384,7 +407,10 @@ def _build_parser() -> argparse.ArgumentParser:
     test_p.add_argument(
         "module", nargs="?", default=None,
         help="Modulo(s) a testear, separados por coma (opcional, se elige "
-             "interactivamente). Alternativa: -m/--modules."
+             "interactivamente). Tambien acepta un path DENTRO del contenedor "
+             "(expande a todos los modulos que haya ahi, siempre que este "
+             "dentro de los addons de la instancia) o 'all' (todos los "
+             "modulos de la instancia). Alternativa: -m/--modules."
     )
     test_p.add_argument(
         "-i", "--instance", dest="instance_flag", default=None, metavar="INSTANCIA",
@@ -392,12 +418,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     test_p.add_argument(
         "-m", "--modules", dest="module_flag", default=None, metavar="MODULOS",
-        help="Modulo(s), separados por coma (alternativa al posicional)."
+        help="Modulo(s), path o 'all' (alternativa al posicional, ver ayuda del posicional)."
     )
     test_p.add_argument("-d", "--db", default=None, help="Nombre de la base de datos (opcional)")
     test_p.add_argument("--tags", default="all", help="Ver ./scripts/odoo-test -h")
     test_p.add_argument("--recursive", action="store_true", help="Calcula el arbol completo de dependencias")
     test_p.add_argument("--exclude", default="", help="Modulos a omitir del arbol (con --recursive)")
+    test_p.add_argument(
+        "--no-confirm", action="store_true",
+        help="Salta las confirmaciones interactivas de --recursive (uso en automatizacion/CI)",
+    )
     test_p.add_argument("--no-rm-db", action="store_true", help="No borra la base de datos al terminar")
     test_p.add_argument("--dry-run", action="store_true", help="Solo muestra el comando sin ejecutarlo")
     test_p.add_argument(
@@ -423,11 +453,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Muestra ademas el detalle por test (fase, resultado, tiempo, queries)."
     )
     test_p.add_argument(
+        "--per-module-db", action="store_true",
+        help="Corre cada modulo en su propia base de datos independiente, "
+             "secuencialmente (ver ./scripts/odoo-test -h). No compatible con -d/--db."
+    )
+    test_p.add_argument(
+        "--out-summary-json", default=None, metavar="RUTA",
+        help="Solo junto con --per-module-db: JSON ultra-resumido por modulo "
+             "({modulo: {passed, coverage}})."
+    )
+    test_p.add_argument(
         "--all-verbose", action="store_true",
         help="Atajo: activa --out-verbose y, para --out-json/--out-coverage-json/"
-             "--out-logs que no se hayan indicado explicitamente, los apunta a "
-             "./logs/ (se crea si no existe) con el nombre por defecto de cada "
-             "uno (test_report.json, coverage.json, test_run.log)."
+             "--out-logs (y --out-summary-json, si tambien se paso "
+             "--per-module-db) que no se hayan indicado explicitamente, los "
+             "apunta a ./logs/ (se crea si no existe) con el nombre por "
+             "defecto de cada uno (test_report.json, coverage.json, "
+             "test_run.log, test_summary.json)."
     )
 
     # update-tags
@@ -618,6 +660,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Genera el APK/AAB de la app (TWA) en un contenedor (toolchain en .resources/apk)",
     )
 
+    # restore: passthrough directo a scripts/odoo_restore antes de argparse
+    # (en main()). El subparser solo queda para listar el comando en el help.
+    subparsers.add_parser(
+        "restore",
+        help="Restaura una base de datos y filestore desde un ZIP. "
+             "Uso: ./odoo restore <instancia> -z <zip> -d <db_destino> "
+             "(ver ./odoo restore --help para el resto de flags)",
+    )
+
     # new
     p = subparsers.add_parser(
         "new",
@@ -659,6 +710,14 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "apk":
         return subprocess.run(
             [os.path.join(BASE_PATH, "scripts", "odoo-apk"), *sys.argv[2:]]
+        ).returncode
+
+    # restore: idem — scripts/odoo_restore tiene su propio argparse (con su
+    # propio subcomando "restore"), así que se delega tal cual en vez de
+    # duplicar sus flags acá. Se reenvía sys.argv[1:] (incluido "restore").
+    if len(sys.argv) > 1 and sys.argv[1] == "restore":
+        return subprocess.run(
+            [os.path.join(BASE_PATH, "scripts", "odoo_restore"), *sys.argv[1:]]
         ).returncode
 
     parser = _build_parser()

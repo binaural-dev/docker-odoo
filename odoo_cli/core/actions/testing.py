@@ -27,6 +27,33 @@ if TYPE_CHECKING:
 from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
 
 
+def translate_module_path_tokens(raw_value: str, base_path: str) -> str:
+    """Si ``-m``/el posicional de ``test`` trae un path (token con ``/``), lo
+    traduce de path del HOST (relativo al repo, o absoluto dentro de él —
+    forma natural de escribirlo desde este proyecto) al equivalente DENTRO
+    del contenedor (``/home/odoo/<mismo relativo>``): ``scripts/odoo-test``
+    valida paths contra ``--addons``, que ya vienen como paths de contenedor
+    (ver :func:`resolve_container_addon_paths`). Nombres de módulo sueltos y
+    ``all`` pasan sin tocar; un path que ya esté en forma de contenedor, o que
+    no exista como directorio del host, también pasa sin tocar (que
+    ``scripts/odoo-test`` lo valide y dé su propio error, con su propia lista
+    de ``--addons``)."""
+    translated = []
+    for token in raw_value.split(","):
+        stripped = token.strip()
+        if stripped and "/" in stripped and not stripped.startswith("/home/odoo/"):
+            host_path = (
+                stripped if os.path.isabs(stripped)
+                else os.path.join(base_path, stripped)
+            )
+            if os.path.isdir(host_path):
+                rel = os.path.relpath(host_path, base_path)
+                if not rel.startswith(".."):
+                    stripped = f"/home/odoo/{rel}"
+        translated.append(stripped)
+    return ",".join(translated)
+
+
 def resolve_container_addon_paths(base_path: str, config: dict, instance: str) -> list[str]:
     """Addon paths of the instance, translated to their path INSIDE the
     container (mounted via ``./src:/home/odoo/src`` in

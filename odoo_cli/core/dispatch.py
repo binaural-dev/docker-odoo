@@ -67,8 +67,12 @@ from odoo_cli.core.actions.maintenance import (
 )
 from odoo_cli.core.actions.instance_state import set_instances_enabled
 from odoo_cli.core.actions.modules import reset_password, update
-from odoo_cli.core.actions.postgres import provision_instance_role
-from odoo_cli.core.actions.testing import run_tests
+from odoo_cli.core.actions.postgres import (
+    provision_instance_role,
+    psql_connect_all,
+    psql_remove_database,
+)
+from odoo_cli.core.actions.testing import run_tests, translate_module_path_tokens
 from odoo_cli.core.prompts import (
     prompt_for_branch,
     prompt_for_bulk_branch_origin,
@@ -180,7 +184,11 @@ def dispatch(
             _sys.argv = saved_argv
 
     # Subcommands that need an instance resolved first.
-    if args.action in _INSTANCE_AWARE_ACTIONS:
+    # psql --ps (con o sin 'remove') no usa instancia: psql_connect_all() /
+    # psql_remove_database() resuelven servicio y base por su cuenta.
+    _skip_instance = args.action == "psql" and getattr(args, "ps", False)
+
+    if args.action in _INSTANCE_AWARE_ACTIONS and not _skip_instance:
         args.instance = _resolve_instance(runner, config, args)
 
     if args.action == "build":
@@ -254,9 +262,22 @@ def dispatch(
         fix_filestore(runner, config, args.instance)
 
     elif args.action == "psql":
-        if getattr(args, "d", None) is None:
-            args.d = prompt_for_database(runner, config, args.instance)
-        psql_connect(runner, config, args.instance, args.d)
+        # El primer posicional es ambiguo entre instancia y el subcomando
+        # 'remove' (ver el subparser de psql en ./odoo).
+        if args.instance == "remove":
+            psql_remove_database(
+                runner, config, getattr(args, "remove_instance", None),
+                getattr(args, "d", None), getattr(args, "ps", False),
+            )
+        elif getattr(args, "remove_instance", None) is not None:
+            runner.error(f"Error: argumento inesperado '{args.remove_instance}'.")
+            sys.exit(1)
+        elif getattr(args, "ps", False):
+            psql_connect_all(runner, config)
+        else:
+            if getattr(args, "d", None) is None:
+                args.d = prompt_for_database(runner, config, args.instance)
+            psql_connect(runner, config, args.instance, args.d)
 
     elif args.action == "pw":
         if getattr(args, "d", None) is None:
@@ -298,6 +319,8 @@ def dispatch(
     elif args.action == "test":
         if getattr(args, "module", None) is None:
             args.module = prompt_for_test_modules(runner, config, args.instance)
+        else:
+            args.module = translate_module_path_tokens(args.module, base_path)
         run_tests(runner, config, base_path, args.instance, args)
 
     elif args.action == "sync":

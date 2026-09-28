@@ -68,10 +68,39 @@ def _is_bash(path, text):
     return "bash" in first_line or "/sh" in first_line
 
 
+# The one sanctioned way to use a raw ``docker exec``: pass a container ID
+# that was already resolved from the service name (``docker compose ps -q``).
+# That is what this guard is actually about — never hand Docker a bare
+# *service* name. ``generators.db_bootstrap.container_id`` is the single
+# resolver; ``_container_id`` is the alias re-exported for the action modules.
+CONTAINER_ID_RESOLVERS = {"container_id", "_container_id"}
+
+
+def _resolves_container_id(node):
+    """True if ``node`` is a ``container_id(...)`` call, or the variable
+    holding its result (callers that need to catch ``RuntimeError`` bind it
+    first, so the argv element is a plain ``Name``)."""
+    if isinstance(node, ast.Name):
+        return node.id in CONTAINER_ID_RESOLVERS
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name):
+        return func.id in CONTAINER_ID_RESOLVERS
+    if isinstance(func, ast.Attribute):
+        return func.attr in CONTAINER_ID_RESOLVERS
+    return False
+
+
 def _bad_calls_in_python(text):
     """Flag any ``["docker", "exec", ...]``/``["docker", "cp", ...]`` list
     or tuple literal — i.e. "docker" and the risky subcommand are adjacent,
     with nothing (in particular no "compose") wedged between them.
+
+    Exception: an argv whose container argument is a
+    ``container_id(...)`` call is already addressing the real container,
+    which is exactly what this guard wants (see
+    :data:`CONTAINER_ID_RESOLVERS`).
     """
     try:
         tree = ast.parse(text)
@@ -89,6 +118,8 @@ def _bad_calls_in_python(text):
             else:
                 break
         if len(first_two) == 2 and first_two[0] == "docker" and first_two[1] in BAD_SUBCOMMANDS:
+            if any(_resolves_container_id(elt) for elt in node.elts):
+                continue
             bad_lines.append(node.lineno)
     return bad_lines
 

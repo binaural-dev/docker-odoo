@@ -45,33 +45,21 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-import time
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
 
 
-def _container_id(service: str) -> str:
-    """Resolve a compose service name to its real container ID.
-
-    ``docker compose`` names containers ``<project>-<service>-<n>``, not
-    the bare service name — raw ``docker exec``/``docker inspect`` calls
-    against the service name fail with 'no such object' whenever the
-    compose project has a name prefix (the normal case). ``docker compose
-    ps -q`` is what actually knows the mapping.
-    """
-    result = subprocess.run(
-        ["docker", "compose", "-f", COMPOSE_FILE, "ps", "-q", service],
-        capture_output=True, text=True,
-    )
-    container_id = result.stdout.strip()
-    if not container_id:
-        raise RuntimeError(
-            f"No se encontró un contenedor corriendo para el servicio "
-            f"'{service}' (¿está levantado con 'docker compose up'?)."
-        )
-    return container_id
+# Container resolution and the break-glass dance live in
+# ``generators.db_bootstrap`` so this module and ``scripts/odoo_restore``
+# (standalone, no Runner) can't drift apart. The wrappers below only add
+# Runner-aware output on top.
+from generators.db_bootstrap import (  # noqa: E402
+    container_id as _container_id,
+    bootstrap_needs_breakglass as _bootstrap_needs_breakglass,
+    bootstrap_breakglass_enable as _bootstrap_breakglass_enable_impl,
+)
 
 if TYPE_CHECKING:
     from odoo_cli.core.runner import Runner
@@ -344,53 +332,21 @@ def _resolve_provision_target(runner: "Runner", config: dict, instance: str) -> 
     }
 
 
-def _bootstrap_needs_breakglass(
-    db_container: str, bootstrap_user: str, bootstrap_password: str
-) -> bool:
-    check = subprocess.run(
-        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", _container_id(db_container),
-         "psql", "-U", bootstrap_user, "-d", "postgres", "-tAc", "SELECT 1;"],
-        capture_output=True,
-    )
-    return check.returncode != 0
-
-
 def _bootstrap_breakglass_enable(
     runner: "Runner", db_container: str, bootstrap_user: str, db_conf: dict, db_name: str
 ) -> None:
     """Stop the db service, flip the bootstrap role to ``LOGIN`` via
     ``postgres --single`` (bypasses normal auth — the only way in once
     ``NOLOGIN``, since creating roles needs ``CREATEROLE``), then start it
-    back up."""
-    runner.warn(
-        f"\n→ Rol bootstrap '{bootstrap_user}' no puede loguear, "
-        f"aplicando break-glass en {db_container}..."
-    )
-    pg_version = db_conf["postgres_version"]
-    from generators.compose_generator import _project_slug
+    back up.
 
-    image = f"local_odoo_db_{_project_slug('.')}_{db_name}:{pg_version}"
-    volume = subprocess.check_output(
-        ["docker", "inspect", _container_id(db_container), "--format",
-         '{{range .Mounts}}{{if eq .Destination "/var/lib/postgresql/data"}}{{.Name}}{{end}}{{end}}']
-    ).decode().strip()
-    if not volume:
-        runner.error(
-            f"Error: no se pudo determinar el volumen de datos de {db_container}."
-        )
-        sys.exit(1)
-
-    subprocess.run(["docker", "compose", "-f", COMPOSE_FILE, "stop", db_container])
-    subprocess.run(
-        ["docker", "run", "--rm", "-i", "--user", "postgres",
-         "-v", f"{volume}:/var/lib/postgresql/data",
-         "--entrypoint", "", image,
-         "postgres", "--single", "-D", "/var/lib/postgresql/data/pgdata", "postgres"],
-        input=f"ALTER ROLE {bootstrap_user} LOGIN;", text=True,
+    The mechanics live in :func:`generators.db_bootstrap.bootstrap_breakglass_enable`
+    (shared with ``scripts/odoo_restore``); this only binds this project's
+    ``COMPOSE_FILE`` and keeps the Runner-shaped signature the callers use.
+    """
+    _bootstrap_breakglass_enable_impl(
+        db_container, bootstrap_user, db_conf, db_name, COMPOSE_FILE
     )
-    subprocess.run(["docker", "compose", "-f", COMPOSE_FILE, "up", "-d", db_container])
-    runner.info("→ Esperando a que el servicio vuelva a estar disponible...")
-    time.sleep(6)
 
 
 def provision_role_sql(runner: "Runner", target: dict) -> list[str]:
@@ -622,3 +578,336 @@ __all__ = [
     "provision_instances_grouped",
     "provision_role_sql",
 ]
+
+
+# ============================================================
+# psql: conexión sin filtrar (--ps) y borrado de bases (remove)
+# ============================================================
+
+
+def _list_all_databases(
+    runner: "Runner", db_container: str, pg_user: str, pg_password: str
+) -> list[str] | None:
+    """Lista todas las bases reales (no template) de un servicio de Postgres,
+    conectando directo al contenedor de la base con el rol dado. Devuelve
+    ``None`` (y ya imprimió el error) si el listado en sí falla."""
+    result = subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T",
+         "-e", f"PGPASSWORD={pg_password}", db_container,
+         "psql", "-U", pg_user, "-d", "postgres", "-tAc",
+         "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname;"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        if result.stdout:
+            runner.info(result.stdout.rstrip())
+        if result.stderr:
+            runner.error(result.stderr.rstrip())
+        runner.error("❌ No se pudieron listar las bases.")
+        return None
+    return [d.strip() for d in result.stdout.splitlines() if d.strip()]
+
+
+def _drop_database(
+    runner: "Runner",
+    service: str,
+    pg_user: str,
+    pg_password: str,
+    dbname: str,
+    host_args: list[str] | None = None,
+) -> bool:
+    """Ejecuta ``dropdb`` contra ``dbname``. Si falla porque hay sesiones
+    activas (el caso normal mientras la instancia de Odoo sigue corriendo —
+    mantiene un pool de conexiones abierto), ofrece terminarlas
+    (``pg_terminate_backend``) y reintenta una vez, en vez de obligar a un
+    ``./odoo stop <instancia>`` manual antes de poder borrar una base cuyo
+    borrado ya se confirmó."""
+    host_args = host_args or []
+    base = [
+        "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T",
+        "-e", f"PGPASSWORD={pg_password}", service,
+    ]
+
+    def run_dropdb() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [*base, "dropdb", "-U", pg_user, *host_args, dbname],
+            capture_output=True, text=True,
+        )
+
+    result = run_dropdb()
+    if result.returncode == 0:
+        return True
+
+    if "being accessed by other users" in result.stderr:
+        runner.error(result.stderr.strip())
+        if not runner.confirm(
+            "\n¿Terminar esas sesiones activas y reintentar el borrado?"
+        ):
+            return False
+
+        subprocess.run(
+            [*base, "psql", "-U", pg_user, *host_args, "-d", "postgres", "-tAc",
+             f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+             f"WHERE datname = '{dbname}' AND pid <> pg_backend_pid();"],
+            capture_output=True, text=True,
+        )
+        result = run_dropdb()
+        if result.returncode == 0:
+            return True
+
+    if result.stdout:
+        runner.info(result.stdout.rstrip())
+    if result.stderr:
+        runner.error(result.stderr.rstrip())
+    return False
+
+
+def _confirm_drop(runner: "Runner", dbnames: list[str], scope_desc: str) -> bool:
+    """Confirm gate para ``DROP DATABASE``, mismo estilo (y mismo nivel de
+    fricción) que ``remove_odoo()`` usa para eliminar contenedores/volúmenes —
+    consistente en toda la CLI, y obligatorio para cualquier operación que
+    borre datos sin vuelta atrás. Con varias bases las lista todas antes de
+    pedir una única confirmación."""
+    if len(dbnames) == 1:
+        runner.warn(
+            f"\n⚠️  PELIGRO: esto eliminará (DROP DATABASE) '{dbnames[0]}' de "
+            f"{scope_desc}. Esto NO se puede deshacer."
+        )
+    else:
+        listado = "\n".join(f"  - {d}" for d in dbnames)
+        runner.warn(
+            f"\n⚠️  PELIGRO: esto eliminará (DROP DATABASE) {len(dbnames)} "
+            f"base(s) de datos de {scope_desc}:\n{listado}\n"
+            f"Esto NO se puede deshacer."
+        )
+    return runner.confirm("¿Estás seguro de que deseas continuar?")
+
+
+def _prompt_pg_service(runner: "Runner", config: dict) -> tuple | None:
+    """Elegí un servicio de Postgres y devolvé todo lo que hace falta para
+    hablarle con el rol bootstrap. ``None`` si el usuario cancela."""
+    from generators.config_loader import (
+        get_managed_databases,
+        resolve_db_bootstrap_creds,
+    )
+
+    managed = get_managed_databases(config)
+    if not managed:
+        runner.error("No hay servicios de base de datos administrados en instances.json.")
+        sys.exit(1)
+
+    db_name = runner.select_one(
+        "Selecciona el servicio de Postgres", [(name, name) for name in managed]
+    )
+    if db_name is None:
+        runner.info("No se seleccionó ningún servicio.")
+        return None
+
+    db_conf = config["databases"][db_name]
+    db_container = f"db-{db_name}"
+    bootstrap_user, bootstrap_password = resolve_db_bootstrap_creds(db_conf)
+
+    runner.warn(
+        f"\n⚠️  Vas a entrar con el rol bootstrap ('{bootstrap_user}'), que ve "
+        f"TODAS las bases de '{db_name}' sin filtrar por instancia. Si está en "
+        f"NOLOGIN (lo normal), esto requiere una ventana breve de mantenimiento "
+        f"de TODO el servicio (se reinicia {db_container}), no solo de una "
+        f"instancia puntual."
+    )
+    if not runner.confirm("¿Continuar?"):
+        runner.info("Cancelado.")
+        return None
+
+    if _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password):
+        _bootstrap_breakglass_enable(
+            runner, db_container, bootstrap_user, db_conf, db_name
+        )
+    else:
+        runner.info(
+            f"\n→ Rol bootstrap '{bootstrap_user}' ya puede loguear (sesión "
+            f"previa sin cerrar), sigo sin break-glass."
+        )
+
+    return db_name, db_container, bootstrap_user, bootstrap_password
+
+
+def _relock_bootstrap(
+    runner: "Runner", db_container: str, bootstrap_user: str, bootstrap_password: str
+) -> None:
+    runner.info(
+        f"\n→ Volviendo a poner el rol bootstrap '{bootstrap_user}' en NOLOGIN..."
+    )
+    _pg_exec(
+        runner, db_container, bootstrap_user, bootstrap_password, "postgres",
+        f"ALTER ROLE {bootstrap_user} NOLOGIN;", check=False,
+    )
+
+
+def psql_connect_all(runner: "Runner", config: dict) -> None:
+    """Conectar por psql a CUALQUIER base de un servicio de Postgres, sin
+    filtrar por instancia/db_filter.
+
+    Hace falta porque, una vez que una instancia se aprovisiona con su rol
+    dedicado (``./odoo provision-role``), se le revoca el CONNECT a cualquier
+    otro rol sobre sus bases (ver :func:`provision_role_sql`) — ya no existe
+    un rol "de menor privilegio" que pueda ver todo el servicio. La única
+    llave que abre todas las puertas es el rol bootstrap, y se mantiene en
+    NOLOGIN en reposo a propósito. Por eso esto lo habilita solo brevemente
+    (break-glass), te deja elegir una base entre TODAS las reales, y siempre
+    lo vuelve a poner en NOLOGIN al salir, incluso si algo falla.
+    """
+    selected = _prompt_pg_service(runner, config)
+    if selected is None:
+        return
+    db_name, db_container, bootstrap_user, bootstrap_password = selected
+
+    try:
+        all_dbs = _list_all_databases(
+            runner, db_container, bootstrap_user, bootstrap_password
+        )
+        if not all_dbs:
+            if all_dbs is not None:
+                runner.info(f"No hay bases en '{db_name}'.")
+            return
+
+        dbname = runner.select_one(
+            f"Selecciona base de datos en '{db_name}' (TODAS, sin filtrar)",
+            [(d, d) for d in all_dbs],
+        )
+        if dbname is None:
+            runner.info("No se seleccionó ninguna base de datos.")
+            return
+
+        runner.info(
+            f"\n=== 🐘 CONECTANDO PSQL (bootstrap, SIN filtrar) A: "
+            f"{db_name.upper()} (DB: {dbname}) ===\n"
+        )
+        runner.run_interactive(
+            ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-it",
+             "-e", f"PGPASSWORD={bootstrap_password}", db_container,
+             "psql", "-U", bootstrap_user, "-d", dbname],
+            cwd=".",
+        )
+    finally:
+        _relock_bootstrap(runner, db_container, bootstrap_user, bootstrap_password)
+
+
+def psql_remove_database(
+    runner: "Runner", config: dict, instance: str | None, dbname: str | None, use_ps: bool
+) -> None:
+    """Elimina (DROP DATABASE) una o varias bases. Siempre pide confirmación
+    explícita (ver :func:`_confirm_drop`) porque es irreversible.
+
+    Sin ``--ps``: usa el rol de la instancia (dueño de sus propias bases vía
+    ``provision-role``, o el rol compartido del servicio en instancias sin
+    aprovisionar) — mismo camino de credenciales que ``psql_connect()``, sin
+    necesitar el rol bootstrap.
+
+    Con ``--ps``: ignora instancias/db_filter y deja elegir CUALQUIER base de
+    CUALQUIER servicio, autenticando con el rol bootstrap.
+    """
+    from generators.config_loader import (
+        resolve_db_config,
+        resolve_instance_db_creds,
+        get_db_host,
+        get_db_internal_port,
+    )
+    from odoo_cli.core.instance import get_databases
+    from odoo_cli.core.prompts import prompt_for_database, prompt_for_instance
+
+    if use_ps:
+        selected = _prompt_pg_service(runner, config)
+        if selected is None:
+            return
+        db_name, db_container, bootstrap_user, bootstrap_password = selected
+
+        try:
+            all_dbs = _list_all_databases(
+                runner, db_container, bootstrap_user, bootstrap_password
+            )
+            if not all_dbs:
+                if all_dbs is not None:
+                    runner.info(f"No hay bases en '{db_name}'.")
+                return
+
+            target_dbs = [dbname] if dbname else runner.select_many(
+                f"Selecciona base(s) de datos en '{db_name}' a ELIMINAR "
+                f"(TODAS, sin filtrar)",
+                [(d, d) for d in all_dbs],
+            )
+            if not target_dbs:
+                runner.info("No se seleccionó ninguna base de datos.")
+                return
+            invalidas = [d for d in target_dbs if d not in all_dbs]
+            if invalidas:
+                runner.error(
+                    f"Error: {', '.join(invalidas)} no existe(n) en el servicio "
+                    f"'{db_name}'."
+                )
+                sys.exit(1)
+
+            if not _confirm_drop(
+                runner, target_dbs, f"servicio de Postgres '{db_name}'"
+            ):
+                runner.info("Cancelado.")
+                return
+
+            hubo_error = False
+            for target_db in target_dbs:
+                runner.info(f"\n→ Eliminando base de datos '{target_db}' en '{db_name}'...")
+                if _drop_database(
+                    runner, db_container, bootstrap_user, bootstrap_password, target_db
+                ):
+                    runner.info(f"✅ Base de datos '{target_db}' eliminada.")
+                else:
+                    runner.error(f"❌ No se pudo eliminar la base de datos '{target_db}'.")
+                    hubo_error = True
+            if hubo_error:
+                sys.exit(1)
+        finally:
+            _relock_bootstrap(runner, db_container, bootstrap_user, bootstrap_password)
+        return
+
+    if instance is None:
+        instance = prompt_for_instance(runner, config, "psql")
+
+    if dbname:
+        target_dbs = [dbname]
+    else:
+        databases = get_databases(config, instance)
+        if databases:
+            target_dbs = runner.select_many(
+                f"Selecciona base(s) de datos para '{instance}' a ELIMINAR",
+                [(db, db) for db in databases],
+            )
+        else:
+            single = prompt_for_database(runner, config, instance)
+            target_dbs = [single] if single else []
+    if not target_dbs:
+        runner.info("No se seleccionó ninguna base de datos.")
+        return
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
+    db_port = get_db_internal_port(db_conf)
+    service = f"odoo-{instance}"
+
+    if not _confirm_drop(runner, target_dbs, f"instancia '{instance}'"):
+        runner.info("Cancelado.")
+        return
+
+    host_args = ["--host", db_host, "--port", str(db_port)]
+    hubo_error = False
+    for target_db in target_dbs:
+        runner.info(f"\n→ Eliminando base de datos '{target_db}' de '{instance}'...")
+        if _drop_database(
+            runner, service, db_user, db_password, target_db, host_args=host_args
+        ):
+            runner.info(f"✅ Base de datos '{target_db}' eliminada.")
+        else:
+            runner.error(f"❌ No se pudo eliminar la base de datos '{target_db}'.")
+            hubo_error = True
+    if hubo_error:
+        sys.exit(1)

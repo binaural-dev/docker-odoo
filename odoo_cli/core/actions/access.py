@@ -103,12 +103,15 @@ def psql_connect(
         resolve_db_config,
         get_db_host,
         get_db_internal_port,
+        resolve_instance_db_creds,
     )
 
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
+    # Rol dedicado de la instancia si lo tiene: tras ./odoo provision-role
+    # el rol compartido del servicio pierde CONNECT sobre sus bases.
+    db_user, _db_password = resolve_instance_db_creds(inst_conf, db_conf)
     db_port = get_db_internal_port(db_conf)
     service = f"odoo-{instance}"
 

@@ -172,6 +172,7 @@ def reset_password(
     """
     from generators.config_loader import (
     resolve_db_config, get_db_host, get_db_internal_port,
+    resolve_instance_db_creds,
 )
     from generators.pw_helpers import _check_db_exists
     from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
@@ -183,8 +184,9 @@ def reset_password(
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
+    # Rol dedicado de la instancia si lo tiene: tras ./odoo provision-role
+    # el rol compartido del servicio pierde CONNECT sobre sus bases.
+    db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
     db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
 

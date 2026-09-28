@@ -115,6 +115,7 @@ def get_databases(config: dict, instance: str) -> list[str]:
     # only added to sys.path by the ./odoo launcher.
     from generators.config_loader import (
     resolve_db_config, get_db_host, get_db_internal_port,
+    resolve_instance_db_creds,
     resolve_instance_config,
 )
 
@@ -122,8 +123,11 @@ def get_databases(config: dict, instance: str) -> list[str]:
         inst_conf = config["instances"][instance]
         db_conf = resolve_db_config(inst_conf, config)
         db_host = get_db_host(inst_conf["database"], db_conf)
-        db_user = db_conf["user"]
-        db_password = db_conf["password"]
+        # Credenciales dedicadas de la instancia: una instancia migrada a
+        # rol propio (./odoo provision-role) tiene REVOKE CONNECT ... FROM
+        # PUBLIC sobre sus bases, asi que el rol compartido del servicio ya
+        # no puede conectarse (ver resolve_instance_db_creds).
+        db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
         db_port = get_db_internal_port(db_conf)
         service = f"odoo-{instance}"
 
@@ -168,14 +172,18 @@ def get_users(config: dict, instance: str, dbname: str) -> list[str]:
     """
     from generators.config_loader import (
     resolve_db_config, get_db_host, get_db_internal_port,
+    resolve_instance_db_creds,
 )
 
     try:
         inst_conf = config["instances"][instance]
         db_conf = resolve_db_config(inst_conf, config)
         db_host = get_db_host(inst_conf["database"], db_conf)
-        db_user = db_conf["user"]
-        db_password = db_conf["password"]
+        # Credenciales dedicadas de la instancia: una instancia migrada a
+        # rol propio (./odoo provision-role) tiene REVOKE CONNECT ... FROM
+        # PUBLIC sobre sus bases, asi que el rol compartido del servicio ya
+        # no puede conectarse (ver resolve_instance_db_creds).
+        db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
         db_port = get_db_internal_port(db_conf)
         service = f"odoo-{instance}"
 
@@ -204,13 +212,17 @@ def _instance_has_db(
     """
     from generators.config_loader import (
     resolve_db_config, get_db_host, get_db_internal_port,
+    resolve_instance_db_creds,
 )
 
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
+    # Credenciales dedicadas de la instancia: una instancia migrada a
+    # rol propio (./odoo provision-role) tiene REVOKE CONNECT ... FROM
+    # PUBLIC sobre sus bases, asi que el rol compartido del servicio ya
+    # no puede conectarse (ver resolve_instance_db_creds).
+    db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
     db_port = get_db_internal_port(db_conf)
     service = f"odoo-{instance}"
     env = {"PGPASSWORD": db_password, "PATH": os.environ.get("PATH", "")}
