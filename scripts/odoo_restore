@@ -862,10 +862,14 @@ class RestoreOrchestrator:
             linux_dump_user=self.linux_dump_user,
         )
 
-    def run(self):
-        effective_db_name = self.new_db_name
+    @property
+    def effective_db_name(self):
         if self.db_prefix:
-            effective_db_name = f"{self.db_prefix}{self.new_db_name}"
+            return f"{self.db_prefix}{self.new_db_name}"
+        return self.new_db_name
+
+    def run(self):
+        effective_db_name = self.effective_db_name
 
         print("\n=== Iniciando proceso de restore ===\n")
         print(
@@ -933,6 +937,44 @@ class RestoreOrchestrator:
         print("Limpieza completada.\n")
 
 
+def run_post_restore(container_name, db_name, environment=None, verbose=False):
+    script_path = os.path.join(BASE_PATH, "scripts", "post_restore_db")
+    if not os.path.isfile(script_path):
+        raise FileNotFoundError(
+            f"No se encontró el script de configuración post-restore: {script_path}"
+        )
+
+    cmd = [
+        sys.executable,
+        script_path,
+        "--container",
+        container_name,
+        "--db-name",
+        db_name,
+    ]
+    if environment:
+        cmd.extend(["--environment", environment])
+    if verbose:
+        cmd.append("--verbose")
+
+    print(
+        "\n=== Post-restore: actualizar módulos, Environment, rama, "
+        f"Sandbox Mode y assets en '{db_name}' ===\n",
+        flush=True,
+    )
+    # Best-effort: la base ya quedó restaurada; si la configuración falla se
+    # avisa, pero no se da el restore por fallido (odoo_restore_scp restaura
+    # 2 bases por corrida y la segunda no debe depender de la primera).
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(
+            f"AVISO: la configuración post-restore de '{db_name}' terminó "
+            f"con código {result.returncode}. Revisa esta base manualmente o "
+            "vuelve a ejecutar scripts/post_restore_db.",
+            file=sys.stderr,
+        )
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Script de restore de Odoo")
     subparsers = parser.add_subparsers(dest="run", help="Acciones")
@@ -989,6 +1031,24 @@ def parse_args():
         default="",
         help="Prefijo opcional para el nombre de la base de datos restaurada",
     )
+    restore_parser.add_argument(
+        "--skip-post-restore",
+        action="store_true",
+        help=(
+            "Restaurar la base tal cual: no ejecutar post_restore_db "
+            "(-u all, Environment, rama, Sandbox Mode ni assets)"
+        ),
+        default=False,
+    )
+    restore_parser.add_argument(
+        "--environment",
+        default=None,
+        help=(
+            "Valor del parámetro de sistema 'Environment' en el post-restore. "
+            "Default: según la instancia (bp-staging -> Staging, bp-qa -> QA); "
+            "cualquier otra -> QA"
+        ),
+    )
 
     return parser.parse_args(), parser
 
@@ -1044,6 +1104,17 @@ def main():
         restorer.run()
     finally:
         restorer.cleanup()
+
+    if args.skip_post_restore:
+        print("--skip-post-restore activo: se omite la configuración post-restore.\n")
+        return
+
+    run_post_restore(
+        container_name=container_name,
+        db_name=restorer.effective_db_name,
+        environment=args.environment,
+        verbose=args.verbose,
+    )
 
 
 if __name__ == "__main__":

@@ -425,7 +425,14 @@ class DatabaseNameBuilder:
 
 
 class OdooRestoreScriptRunner:
-	def __init__(self, restore_script_path, workdir=None, psql_bin=None, verbose=False, db_prefix=None):
+	def __init__(
+		self,
+		restore_script_path,
+		workdir=None,
+		psql_bin=None,
+		verbose=False,
+		db_prefix=None,
+	):
 		self.restore_script_path = restore_script_path
 		self.workdir = workdir
 		self.psql_bin = psql_bin
@@ -461,6 +468,9 @@ class OdooRestoreScriptRunner:
 		print("\nEjecutando restore con script existente odoo_restore...\n")
 		subprocess.run(cmd, check=True)
 
+		# El post-restore (-u all, Environment, rama, Sandbox Mode y assets) lo
+		# ejecuta odoo_restore al final de cada restore vía post_restore_db.
+
 
 class ExpiredDatabaseCleaner:
 	FILESTORE_BASE_PATH = "/home/odoo/data/filestore"
@@ -492,7 +502,11 @@ class ExpiredDatabaseCleaner:
 			sql,
 		]
 
-		result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+		try:
+			result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+		except subprocess.CalledProcessError as exc:
+			print(f"psql stderr: {(exc.stderr or '').strip()}", file=sys.stderr)
+			raise
 		return result.stdout
 
 	def _list_user_databases(self):
@@ -586,15 +600,10 @@ class ExpiredDatabaseCleaner:
 		if not DatabaseNameBuilder.EXPIRY_PATTERN.match(db_name):
 			raise ValueError(f"Nombre de base fuera de patrón permitido: {db_name}")
 
-		terminate_sql = (
-			"SELECT pg_terminate_backend(pid) "
-			"FROM pg_stat_activity "
-			f"WHERE datname = '{db_name}' "
-			"AND pid <> pg_backend_pid();"
-		)
-		self._run_psql(terminate_sql)
-
-		self._run_psql(f'DROP DATABASE IF EXISTS "{db_name}";')
+		# WITH (FORCE) cierra las conexiones y borra en un solo paso; con un
+		# pg_terminate_backend previo, la instancia podía reconectarse antes del
+		# DROP y dejar la base marcada como inválida.
+		self._run_psql(f'DROP DATABASE IF EXISTS "{db_name}" WITH (FORCE);')
 
 	def drop_filestore(self, db_name):
 		if not DatabaseNameBuilder.EXPIRY_PATTERN.match(db_name):
