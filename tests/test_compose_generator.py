@@ -130,5 +130,38 @@ class NginxGeneratorServiceNameTest(unittest.TestCase):
         self.assertNotIn("odoo-pgadmin", content)
 
 
+class NginxGeneratorWebsocketPortTest(unittest.TestCase):
+    """``/websocket`` must go where Odoo actually serves it.
+
+    With ``workers = 0`` Odoo does not start the gevent server (8071) and
+    serves the websocket on 8069; proxying to 8071 returned 502 and the IoT
+    boxes never received their print jobs (2026-09-29).
+    """
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_nginx_ws_")
+        os.makedirs(os.path.join(self.tmpdir, ".resources", "nginx_configs"))
+        self.config = _sample_config()
+
+    def _websocket_upstream(self):
+        with open(generate_nginx_config(self.tmpdir, self.config)) as f:
+            content = f.read()
+        block = content.split("location /websocket {", 1)[1].split("}", 1)[0]
+        return block
+
+    def test_multi_worker_uses_gevent_port(self):
+        self.config["odoo_configs"]["base"]["workers"] = 2
+        self.assertIn("http://odoo-acme:8071;", self._websocket_upstream())
+
+    def test_threaded_mode_uses_http_port(self):
+        self.config["odoo_configs"]["base"]["workers"] = 0
+        self.assertIn("http://odoo-acme:8069;", self._websocket_upstream())
+
+    def test_instance_overwrite_is_respected(self):
+        self.config["odoo_configs"]["base"]["workers"] = 2
+        self.config["instances"]["acme"]["overwrite_odoo_config"] = {"workers": 0}
+        self.assertIn("http://odoo-acme:8069;", self._websocket_upstream())
+
+
 if __name__ == "__main__":
     unittest.main()

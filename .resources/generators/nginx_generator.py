@@ -15,6 +15,8 @@ not bleed across instances.
 
 import os
 
+from .config_loader import resolve_instance_config
+
 
 ODOO_HTTP_PORT = 8069
 ODOO_GEVENT_PORT = 8071
@@ -34,8 +36,11 @@ def generate_nginx_config(base_path, config):
     for inst_name, inst_conf in config["instances"].items():
         external_port = inst_conf["external_port"]
         container_name = f"odoo-{inst_name}"
+        websocket_port = _websocket_port(resolve_instance_config(inst_conf, config))
         blocks.append(
-            _odoo_server_block(inst_name, external_port, container_name, is_first)
+            _odoo_server_block(
+                inst_name, external_port, container_name, is_first, websocket_port
+            )
         )
         is_first = False
 
@@ -72,6 +77,20 @@ def generate_nginx_config(base_path, config):
     return output_path
 
 
+def _websocket_port(odoo_conf):
+    """Port where the instance serves ``/websocket``.
+
+    Odoo only starts the gevent server (8071) in multi-worker mode. With
+    ``workers = 0`` (threaded mode) the websocket is served by the HTTP server
+    itself (8069), and proxying it to 8071 returns 502 for every connection:
+    the bus never reaches the browser nor the IoT boxes, which receive their
+    print jobs through it. Same default as the compose generator.
+    """
+    if int(odoo_conf.get("workers", 2) or 0) > 0:
+        return ODOO_GEVENT_PORT
+    return ODOO_HTTP_PORT
+
+
 def _listen_lines(port_a, port_b, is_default_server):
     """Build ``listen`` directives. The first block becomes the default_server
     on port 80 so unmatched Host headers don't trigger nginx warnings.
@@ -83,7 +102,7 @@ def _listen_lines(port_a, port_b, is_default_server):
     ]
 
 
-def _odoo_server_block(inst_name, external_port, container_name, is_first):
+def _odoo_server_block(inst_name, external_port, container_name, is_first, websocket_port):
     listen_lines = _listen_lines(external_port, NGINX_HTTP_PORT, is_first)
     listen_block = "\n".join(listen_lines)
     return f"""# Instance: {inst_name} (port {external_port} | {inst_name}.local)
@@ -114,8 +133,8 @@ server {{
     }}
 
     location /websocket {{
-        set $proxy_upstream_{ODOO_GEVENT_PORT} http://{container_name}:{ODOO_GEVENT_PORT};
-        proxy_pass $proxy_upstream_{ODOO_GEVENT_PORT};
+        set $proxy_upstream_{websocket_port} http://{container_name}:{websocket_port};
+        proxy_pass $proxy_upstream_{websocket_port};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "Upgrade";
