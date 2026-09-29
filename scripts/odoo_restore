@@ -27,6 +27,10 @@ from generators.db_bootstrap import (
     bootstrap_breakglass_enable,
 )
 
+# The container's real name is namespaced by the Compose project, not a
+# bare "odoo-<instance>" — everything here must go through ``docker
+# compose exec``/``docker compose cp`` (by *service* name), never plain
+# ``docker exec``/``docker cp`` against a container name.
 COMPOSE_FILE = os.path.join(BASE_PATH, "docker-compose.generated.yml")
 
 
@@ -190,11 +194,11 @@ class CleanupManager:
         try:
             if os.path.isdir(path):
                 print(f"Eliminando carpeta temporal local: {path}")
-                subprocess.run(["rm", "-rf", path], check=True)
+                shutil.rmtree(path, ignore_errors=True)
             else:
                 print(f"Eliminando archivo temporal local: {path}")
-                subprocess.run(["rm", "-f", path], check=True)
-        except subprocess.CalledProcessError as exc:
+                os.remove(path)
+        except OSError as exc:
             print(f"Advertencia: no se pudo limpiar el path local {path}: {exc}")
             return
 
@@ -214,7 +218,11 @@ class CleanupManager:
             subprocess.run(
                 [
                     "docker",
+                    "compose",
+                    "-f",
+                    COMPOSE_FILE,
                     "exec",
+                    "-T",
                     "-u",
                     "root",
                     self.container,
@@ -294,7 +302,11 @@ class DatabaseRestoreManager:
     def _psql_command(self, *args):
         return [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             self.container,
             self.psql_bin,
             "-U",
@@ -321,7 +333,11 @@ class DatabaseRestoreManager:
 
         verify_cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             self.container,
             "bash",
             "-lc",
@@ -335,7 +351,11 @@ class DatabaseRestoreManager:
             )
             install_cmd = [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 "root",
                 self.container,
@@ -408,7 +428,10 @@ class DatabaseRestoreManager:
         return match.group("version")
 
     def _get_psql_binary_version(self):
-        cmd = ["docker", "exec", self.container, self.psql_bin, "--version"]
+        cmd = [
+            "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T",
+            self.container, self.psql_bin, "--version",
+        ]
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
         version_text = (result.stdout or result.stderr).strip()
         match = self.PSQL_VERSION_PATTERN.search(version_text)
@@ -516,7 +539,11 @@ class DatabaseRestoreManager:
 
         check_cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             self.container,
             "bash",
             "-c",
@@ -533,7 +560,11 @@ class DatabaseRestoreManager:
 
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             "-u",
             "root",
             self.container,
@@ -554,8 +585,9 @@ class DatabaseRestoreManager:
             f"Creando nueva base de datos '{self.db_name}' dentro del contenedor {self.container}"
         )
 
+        safe_db = self.db_name.replace("'", "''")
         check_cmd = self._psql_command(
-            "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{self.db_name}'"
+            "-tAc", f"SELECT 1 FROM pg_database WHERE datname='{safe_db}'"
         )
 
         result = subprocess.run(check_cmd, capture_output=True, text=True)
@@ -567,7 +599,11 @@ class DatabaseRestoreManager:
 
         create_cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             self.container,
             "createdb",
             "-U",
@@ -628,7 +664,11 @@ class DatabaseRestoreManager:
         )
         cmd = [
             "docker",
+            "compose",
+            "-f",
+            COMPOSE_FILE,
             "exec",
+            "-T",
             "-e",
             f"PGPASSWORD={self.bootstrap_password}",
             self.container,
@@ -669,7 +709,11 @@ class DatabaseRestoreManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 self.linux_dump_user,
                 self.container,
@@ -683,6 +727,9 @@ class DatabaseRestoreManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "cp",
                 self.local_dump_path,
                 f"{self.container}:{self.container_db_dump_path}",
@@ -702,8 +749,11 @@ class DatabaseRestoreManager:
         try:
             cmd = [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
-                "-i",
+                "-T",
                 self.container,
                 self.psql_bin,
                 "-U",
@@ -780,7 +830,11 @@ class FilestoreRestoreManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 self.container,
                 "mkdir",
                 "-p",
@@ -792,6 +846,9 @@ class FilestoreRestoreManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "cp",
                 f"{self.local_filestore_path}/.",
                 f"{self.container}:{self.container_filestore_path}",
@@ -802,7 +859,11 @@ class FilestoreRestoreManager:
         subprocess.run(
             [
                 "docker",
+                "compose",
+                "-f",
+                COMPOSE_FILE,
                 "exec",
+                "-T",
                 "-u",
                 "root",
                 self.container,
@@ -1014,7 +1075,13 @@ def main():
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user, _db_password = resolve_instance_db_creds(inst_conf, db_conf)
-    bootstrap_user, bootstrap_password = resolve_db_bootstrap_creds(db_conf)
+    # ``resolve_db_config`` ya sobreescribió user/password con el rol dedicado
+    # de la instancia, así que el bootstrap (superuser del cluster) hay que
+    # resolverlo contra la conf cruda del servicio -- si no, cae al fallback y
+    # termina siendo el propio rol de la instancia, que no puede auto-otorgarse
+    # SUPERUSER ("permission denied to alter role").
+    service_db_conf = config["databases"][inst_conf["database"]]
+    bootstrap_user, bootstrap_password = resolve_db_bootstrap_creds(service_db_conf)
     db_port = get_db_internal_port(db_conf)
     container_name = f"odoo-{instance}"
     db_service_name = inst_conf["database"]
@@ -1033,7 +1100,7 @@ def main():
         psql_bin=psql_bin,
         bootstrap_user=bootstrap_user,
         bootstrap_password=bootstrap_password,
-        bootstrap_db_conf=db_conf,
+        bootstrap_db_conf=service_db_conf,
         bootstrap_db_service_name=db_service_name,
         bootstrap_db_container=db_container,
         verbose=args.verbose,

@@ -1,18 +1,14 @@
 [run]
 branch = True
+source =
+    /home/odoo/src/custom/mds-telecom/mds_splynx
+    /home/odoo/src/custom/mds-telecom/mds_splynx_third_party
+    /home/odoo/src/custom/mds-telecom/mds_splynx_unidigital
+omit =
+    */tests/*
+    */__manifest__.py
+    */migrations/*
 
 [report]
-omit =
-    */__init__.py
-    */__manifest__.py
-    */tests/*
-    */test/*
-exclude_lines =
-    ^\s*"""[^"]*"""$
-    ^\s*'''[^']*'''$
-    pragma: no cover
-    if __name__ == "__main__":
-    raise NotImplementedError
-    except Exception as e:
-    def __repr__
-    def __str__
+show_missing = True
+skip_covered = False

@@ -31,10 +31,15 @@ from pathlib import Path
 
 BASE_PATH = str(Path(__file__).resolve().parent.parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+
+# El nombre real del contenedor lo namespacea el proyecto de Compose, asi que
+# no coincide con el nombre del servicio (odoo-<instancia>): todo va por
+# `docker compose exec` (ver tests/test_docker_exec_hygiene.py).
+COMPOSE_FILE = os.path.join(BASE_PATH, "docker-compose.generated.yml")
 from generators.config_loader import load_config
 
 
-# Ejecutado dentro del contenedor Odoo vía `docker exec -i <container> python3 -`.
+# Ejecutado dentro del contenedor Odoo vía `docker compose exec -T <servicio> python3 -`.
 # Usa PGHOST/PGPORT/PGUSER/PGPASSWORD ya presentes en el entorno del contenedor.
 PAYLOAD = r'''
 import sys
@@ -171,9 +176,9 @@ def main():
         print(f"Error: instancia '{args.instance}' no existe")
         sys.exit(1)
 
-    container = f"odoo-{args.instance}"
+    service = f"odoo-{args.instance}"
     cmd = [
-        "docker", "exec", "-i", container,
+        "docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", service,
         "python3", "-",
         str(args.minutes),
         "1" if args.include_portal else "0",

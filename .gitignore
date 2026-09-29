@@ -1,7 +1,10 @@
 .env
 instances.json
+instances.json.bak
+coverage_data/
 pwa.json
 src
+!mcp-server/src
 logs/
 .resources/Dockerfile
 .resources/Dockerfile.*
@@ -11,7 +14,7 @@ logs/
 docker-compose.generated.yml
 **/.vscode/
 *.code-workspace
-*antigractivy*
+*antigravity*
 venv
 __pycache__
 .atl/
@@ -21,3 +24,10 @@ __pycache__
 .codegraph
 # Temporales de odoo_restore (odoo-apk usa .ignore/). Nunca versionar.
 .tmp_ignored/
+.claude/
+.playwright-mcp/
+
+# Stray generated files
+click
+os
+sys
