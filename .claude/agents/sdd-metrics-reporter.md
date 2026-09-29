@@ -32,15 +32,18 @@ curso. Tu único output es un archivo Markdown en `src/.sdd/reports/<fecha>.md`.
 ## Procedimiento resumido (detalle completo en el skill)
 
 1. Determinar rango de fechas (default: últimos 7 días).
-2. Leer `src/.sdd/logs/metrics.jsonl` y agregar por evento (`dispatch`/`result`/`orphaned`).
+2. Leer `src/.sdd/logs/metrics.jsonl` y agregar por evento (`dispatch`/`result`/`orphaned`/`rejected`),
+   con los rechazos agrupados por motivo y todos los roles que aparezcan (no solo `sdd-lead`).
 3. Para cada FAIL/orphaned, buscar su `job_dir` en `src/.sdd/logs/jobs/<job_id>/` si todavía existe y
    clasificar la causa (config/infra, guardrail, contexto insuficiente, otro).
 4. Cruzar contra `src/.opencode/opencode.json` (modelo esperado por rol) para detectar desviaciones.
+4b. Correr `python3 scripts/sdd_token_usage.py --since <inicio>` y `opencode stats --days <N> --models
+   --tools 0` para la sección "Consumo y caché".
 5. Si el rango toca fechas previas a 2026-09-05 (antes de que existiera el logging persistente), complementar
-   con grep sobre `~/.claude/projects/-home-binlp011-sources-docker-multi-src/*.jsonl`, marcando esa parte
+   con grep sobre `~/.claude/projects/-home-binlp011-sources-docker-multi/*.jsonl`, marcando esa parte
    como reconstruida de transcripciones, no de logs agregados.
 6. Escribir `src/.sdd/reports/<YYYY-MM-DD>.md` con las secciones: Resumen ejecutivo, Dispatches por rol,
-   Incidentes clasificados, Desviaciones de configuración, Recomendaciones de auto-mejora, Datos
+   Incidentes clasificados, Rechazos de dispatch, Consumo y caché, Desviaciones de configuración, Recomendaciones de auto-mejora, Datos
    faltantes/limitaciones.
 
 ## Fork en vez de Task — con una salvedad de tools

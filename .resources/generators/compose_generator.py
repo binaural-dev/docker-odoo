@@ -145,6 +145,10 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     odoo_version = inst_conf["odoo_version"]
     odoo_minor = get_odoo_minor(odoo_version)
     container_name = f"odoo-{inst_name}"
+    # Docker exige que el repository name de una imagen sea lowercase; el
+    # nombre de instancia (usado tal cual en container_name/service) puede
+    # traer mayúsculas, así que se normaliza solo para el tag de imagen.
+    image_tag_name = inst_name.lower()
     db_host = get_db_host(db_name, db_conf)
     # NOTE: db_conf["port"] is the HOST-side port (only published when
     # expose_host_port is set) — not reachable from sibling containers.
@@ -175,7 +179,7 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
         "    build:",
         "      context: .",
         f"      dockerfile: ./{dockerfile}",
-        f"    image: local_odoo_{inst_name}:{odoo_minor}",
+        f"    image: local_odoo_{image_tag_name}:{odoo_minor}",
         "    extra_hosts:",
         '      - "host.docker.internal:host-gateway"',
         "    dns:",

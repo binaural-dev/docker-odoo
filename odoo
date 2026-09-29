@@ -512,8 +512,7 @@ def psql_connect(config, instance, dbname):
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
+    db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
     db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
 
@@ -757,8 +756,7 @@ def reset_password(config, instance, dbname, login, password):
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
+    db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
     db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
 

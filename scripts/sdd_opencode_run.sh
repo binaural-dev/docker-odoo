@@ -137,9 +137,41 @@ PY
 # handles single-line values (allowed_files is captured as its raw list text,
 # e.g. "[models/*.py, views/*.xml]", not parsed into an array) — good enough
 # for an audit trail, not meant to be a full SudoLang parser.
+# Context{} values arrive as free text from an LLM-written prompt, and in
+# practice callers wrap them in quotes (`repo: "custom/cadipa1/integra-addons"`)
+# or append prose (`branch: 19.0 (rama principal, NO hagas checkout)`).
+# Unnormalized, the quotes made the cwd/repo guardrail below reject ~33
+# otherwise-valid dispatches (2026-09-16..22), and the prose ended up as
+# literal cycle directory names under src/.sdd/logs/cycles/. Every field gets
+# its surrounding quotes stripped; identifier fields (repo/branch/environment/
+# odoo_version) are additionally cut at the first trailing comment.
+IDENTIFIER_CONTEXT_FIELDS=" repo branch environment odoo_version "
+
 extract_context_field() {
-  local field="$1"
-  grep -m1 -E "^[[:space:]]*${field}:" <<<"$PROMPT" | sed -E "s/^[[:space:]]*${field}:[[:space:]]*//"
+  local field="$1" value
+  value="$(grep -m1 -E "^[[:space:]]*${field}:" <<<"$PROMPT" | sed -E "s/^[[:space:]]*${field}:[[:space:]]*//")"
+  value="$(sed -E 's/[[:space:]]+$//' <<<"$value")"
+  if [[ "$IDENTIFIER_CONTEXT_FIELDS" == *" $field "* ]]; then
+    value="$(sed -E 's/[[:space:]]+(\(|#|—|--).*$//' <<<"$value")"
+  fi
+  value="$(sed -E "s/^[\"'\`](.*)[\"'\`]$/\1/" <<<"$value")"
+  printf '%s' "$value"
+}
+
+# Model actually used for the dispatch: the explicit 3rd arg if given,
+# otherwise what OpenCode resolves from src/.opencode/opencode.json
+# (agent.<name>.model, then the top-level model). Only used for metrics —
+# OC_ARGS still passes --model only when explicitly given.
+resolve_model() {
+  if [[ -n "$MODEL" ]]; then
+    printf '%s' "$MODEL"
+    return
+  fi
+  python3 - "$REPO_ROOT/src/.opencode/opencode.json" "$AGENT" 2>/dev/null <<'PY' || true
+import json, sys
+cfg = json.load(open(sys.argv[1]))
+print((cfg.get("agent", {}).get(sys.argv[2], {}) or {}).get("model") or cfg.get("model") or "", end="")
+PY
 }
 
 reject_dispatch() {
@@ -188,6 +220,17 @@ fi
 DISPATCH_REPO="$(extract_context_field repo)"
 if [[ -n "$DISPATCH_REPO" ]] && [[ "$WORK_DIR" != *"$DISPATCH_REPO"* ]]; then
   reject_dispatch "cwd does not match declared repo: WORK_DIR='${WORK_DIR}' repo='${DISPATCH_REPO}' — pass the repo-scoped path as the 4th arg (e.g. src/${DISPATCH_REPO}), not the src/ default"
+fi
+
+# --- branch must be a real git ref name ------------------------------------
+# After normalization, anything still containing whitespace or parentheses is
+# prose (e.g. "(ninguna — trabajar directo sobre el working tree)"), not a
+# branch. It keys cycles/<branch>/ (read by sdd-judge) and the dispatch lock,
+# so reject it instead of creating a directory named after a sentence.
+DISPATCH_BRANCH_CHECK="$(extract_context_field branch)"
+if [[ "$DISPATCH_BRANCH_CHECK" =~ [[:space:]\(\)] ]]; then
+  DISPATCH_BRANCH_RAW="$(grep -m1 -E "^[[:space:]]*branch:" <<<"$PROMPT" | sed -E 's/^[[:space:]]*branch:[[:space:]]*//')"
+  reject_dispatch "branch must be a git branch name or 'none', got '${DISPATCH_BRANCH_RAW}' — put instructions like 'do not checkout' in the prompt body, not in the Context branch field"
 fi
 
 # --- duplicate-dispatch lock ----------------------------------------------
@@ -358,7 +401,7 @@ fi
 DISPATCH_MODULE="$(extract_context_field module)"
 DISPATCH_BRANCH="$(extract_context_field branch)"
 append_metric "dispatch" \
-  "agent=$AGENT" "model=$MODEL" "repo=$DISPATCH_REPO" "module=$DISPATCH_MODULE" \
+  "agent=$AGENT" "model=$(resolve_model)" "repo=$DISPATCH_REPO" "module=$DISPATCH_MODULE" \
   "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH"
 
 OC_ARGS=("run" "--agent" "$AGENT" "--auto")

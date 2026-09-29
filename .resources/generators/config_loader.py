@@ -90,6 +90,15 @@ def _validate_instance(inst_name, inst_conf, config):
             f"no existe en la sección odoo_configs"
         )
 
+    if inst_name != inst_name.lower():
+        print(
+            f"⚠️  Instancia '{inst_name}': el nombre contiene mayúsculas. "
+            f"Docker exige repository names en lowercase, así que el tag de "
+            f"imagen generado se normaliza automáticamente a "
+            f"'local_odoo_{inst_name.lower()}'. Se recomienda renombrar la "
+            f"instancia a lowercase para evitar inconsistencias."
+        )
+
     # Validate unique external_port
     ports = [
         v["external_port"]
