@@ -24,9 +24,9 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
     │   └── run_tests.sh               ← Tests con coverage
     ├── reports/coverage/              ← Reportes de coverage
     └── .opencode/                     ← OpenCode config
-        ├── agents/                    ← Agentes SDD (7 agentes)
-        ├── skills/                    ← Skills del proyecto (58 dirs)
-        ├── commands/                  ← Comandos del proyecto (7 commands)
+        ├── agents/                    ← Agentes SDD + Binaural (13 agentes)
+        ├── skills/                    ← Skills del proyecto (108 dirs)
+        ├── commands/                  ← Comandos del proyecto (12 commands)
         ├── docs/                      ← Documentación Odoo 19 (654 .md)
         ├── plans/                     ← Planes de migración
         ├── goals/                     ← Goal tracking
@@ -46,14 +46,14 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | Categoría | Cantidad |
 |-----------|----------|
 | skills/19.0/skills/ (161 dirs) | **161** |
-| skills/.opencode/skills/ (project: 67 dirs) | **67** |
-| skills/17.0/skills/ (326 dirs) | **326** |
+| skills/.opencode/skills/ (project: 118 dirs) | **118** |
+| skills/17.0/skills/ (325 dirs) | **325** |
 | skills/16.0/skills/ (100 dirs) | **100** |
-| skills/global (~/.config/opencode/skills/, 156 dirs) | **156** |
-| **TOTAL WORKSPACE (unique)** | **~810** |
-| Claude symlinks (~/.claude/skills/) | **807** |
+| skills/global (~/.config/opencode/skills/, 169 dirs) | **169** |
+| **TOTAL WORKSPACE (unique)** | **~873** |
+| Claude symlinks (~/.claude/skills/) | **~854** |
 | Archivos documentación (.opencode/docs/) | 654 |
-| Chunks indexados en OpenSearch | ~23,658 |
+| Chunks indexados en OpenSearch | **5,738** (855 skills) |
 
 ## Skills del Proyecto
 
@@ -71,6 +71,11 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `odoo_documentation-19.0` | Full Odoo 19 docs (654 files) |
 | `odoo_devops-19.0` | Module system, CLI, deployment, DB management |
 | `odoo-migration-19` | Migration guide 17→19 (45 lessons) |
+| `odoo-migration-audit-methodology` | **NUEVO** — Metodología de 8 pasos para auditar migraciones de módulos Odoo |
+| `odoo-19-breaking-changes-checklist` | **NUEVO** — Checklist consolidado de breaking changes 17→19 (Python, XML, JS, SQL) |
+| `odoo-migration-classification-taxonomy` | **NUEVO** — Taxonomía de clasificación: MIGRADO-VIGENTE, EN-PROGRESO-CON-BUG, etc. |
+| `odoo-19-pos-js-migration` | **NUEVO** — Guía completa de migración JS del POS: imports, APIs removidas, patrones de patch |
+| `odoo-cross-repo-module-tracking` | **NUEVO** — Cómo rastrear módulos across repos: integra-addons, odoo-venezuela, custom checkouts |
 | `odoo-performance-19` | Performance: N+1, batch-first, indexes |
 | `odoo-code-review-19.0` | Code review checklist (58 rules incl. recordset safety, scope creep, security, dead assets, start() lifecycle, ES2020, RPC error handling, focus restoration, compute-group-visibility, button-xpath) |
 | `odoo-context-keys-19` | **NUEVO** — Context keys: warehouse_id, location, stock filtering |
@@ -80,6 +85,14 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `skill-sync-daemon` | **NUEVO** — Daemon systemd user service: sync OpenCode→Claude vía symlinks, polling 30s, 5 fuentes, name-collision protection |
 | `agents-md-maintenance` | **NUEVO** — Protocolo de mantenimiento de AGENTS.md: cuándo actualizar, qué secciones, formato de reglas |
 | `skills-inventory-protocol` | **NUEVO** — Inventario maestro de skills: ubicaciones, conteos, naming conventions, estructura de directorios |
+| `odoo-approval-workflow-patterns` | **NUEVO** — Approval workflows: state machine, write guards, self-approval blocking, dual notification, mail.activity lifecycle, security groups, testing patterns, 10 anti-patterns |
+| `odoo-dual-notification-patterns` | **NUEVO** — Dual-channel notifications: message_notify + forced second channel, mt_note subtype, customer exclusion, verification queries, 7 anti-patterns |
+| `odoo-currency-convert-mandatory` | **NUEVO** — Regla: SIEMPRE usar `res.currency._convert()` para conversiones de moneda. API completa, anti-patterns (multiplicación manual), short-circuit same-currency. Aplica a 17+ |
+| `odoo-vendor-override-patterns` | **NUEVO** — Patrones para override de módulos vendor: full-copy vs inheritance, template ID naming (module prefix), PresenceIndicator collisions, defensive field checks, barcode fallback paths |
+| `openrag` | **NUEVO** — OpenRAG RAG system: architecture (OpenSearch/Ollama/MCP), ingestion workflow, knowledge filters, backend source management, verification commands |
+| `openrag-embedding-fix` | **NUEVO** — OpenRAG embedding model fix + batch ingestion: nomic-embed-text:latest naming, _is_exact_token_query bug, batch ingest script pattern, filter update via HTTP |
+| `skills-inventory-protocol` | **NUEVO** — Inventario maestro de skills: ubicaciones (5 dirs), naming conventions, OpenRAG ingestion policy, version detection protocol |
+| `claude-opencode-port-protocol` | **NUEVO** — Protocolo de sincronización OpenCode→Claude: unidireccional via symlinks, format adaptation, post-port checklist |
 
 ### Módulos Binaural (`.opencode/skills/`)
 
@@ -98,6 +111,12 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | `cadipa-sale-suscription-testing` | **NUEVO** — Testing helpers, coverage patterns y anti-patterns para cadipa_sale_suscription (Odoo 17.0): _setup_ves_company, mock parent via __mro__[1], l10n_ve constraint patterns |
 | `odoo-l10n-ve-test-patterns` | **NUEVO** — Patrones de testing para modulos que dependen de l10n_ve_* (Odoo 17.0): currency_foreign_id setup, action_post con move_action_post_alert, product_id en lineas de factura, correlative conflicts, VES/VEF currency, enterprise constraints. 6 anti-patrones (L1-L6) |
 | `binaural-stock-barcode` | Barcode picking con fake lines |
+| `binaural-checker-kiosk` | **NUEVO** — Kiosko de precios: vendor extension pattern, barcode fallback paths, pricelist resolution via sh_pricelist_ids, res.currency._convert(), PresenceIndicator collision, test fixtures (allowed_company_ids, raw SQL for foreign_currency_id) |
+| `binaural-openupgrade-simulation` | **NUEVO** — Simulación de upgrade con OpenUpgrade: metodología 17→18→19, gotchas operativos del cluster docker-multi, scripts de migración pre/post/end |
+| `odoo-analytic-distribution-limit-pattern-19.0` | **NUEVO** — Patrón completo: límite 100% distribución analítica por plan. Boolean en res.company + related settings + xpath analytic block + constraint @api.constrains agrupando por root_plan_id + float_compare + .format() translations. 12 tests TDD, 100% coverage. Caso real: TI-15326 |
+| `odoo-19-boolean-setting-pattern` | **NUEVO** — Patrón reutilizable setting boolean Odoo 19: campo res.company + related res.config.settings + xpath en block (analytic/invoicing/tax/etc). Convenciones naming, grupos, CSS classes. Caso real: TI-15326 |
+| `odoo-constraint-module-test-pattern-19.0` | **NUEVO** — Estructura tests para módulos @api.constrains: 12 tests (reject/allow, boundary, single, no-dist, multi-plan, multi-key, precision, multi-company). Helper parametrizado, post_install tag. Caso real: TI-15326 |
+| `odoo-e2e-verification-playwright-rpc-19.0` | **NUEVO** — Verificación E2E híbrida: Playwright (login, settings UI) + JSON-RPC (crear records, validar constraints). Formato analytic_distribution dict, buscar account IDs reales, toggle setting via RPC. Caso real: TI-15326 |
 
 ### Workflows (`.opencode/skills/`)
 
@@ -120,6 +139,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 |-------|-----------|-------------|
 | `playwright-mcp-usage` | `~/.config/opencode/skills/` | **NUEVO** — Playwright MCP tools: navigate, snapshot, click, type, mock, assert, trace. Automatización de browser agentic. |
 | `odoo-website-testing-mcp-19.0` | `src/.opencode/19.0/skills/` | **NUEVO** — Testing de portales/websites Odoo 19.0 con Playwright MCP: login, shop, checkout, e-commerce, responsive, evidencia. |
+| `odoo-backend-testing-mcp-19.0` | `src/.opencode/19.0/skills/` | **NUEVO** — Testing de formularios backend Odoo 19.0 (no portal) con Playwright MCP: dirty-tracking OWL del botón Guardar, diagnóstico de guardado silencioso vía `.o_field_invalid`, confirmación de que el save llegó al backend. |
 | `e2e-testing` | `~/.config/opencode/skills/` | Playwright test framework: POM, config, CI/CD, flaky tests. Archivos `.spec.ts` con `@playwright/test`. |
 
 ### Globales (`~/.config/opencode/skills/`)
@@ -143,6 +163,13 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 - `img` → `chafa`, `imgt` → `timg`
 
 **Symlinks:** `/usr/local/bin/bat` → `/usr/bin/batcat`, `/usr/local/bin/fd` → `/usr/bin/fdfind`
+
+### DevOps & Systemd Tooling (`.opencode/skills/`)
+
+| Skill | Ubicación | Descripción |
+|-------|-----------|-------------|
+| `devops-systemd-tooling` | `src/.opencode/skills/` | **NUEVO** — Patrones DevOps: systemd user services (service+timer), bash/curl scripting para Odoo JSON2 API (Bearer auth, /json/2/ endpoints), bashrc modification safety (sed+backup+validate), key masking, locking patterns, error handling. Incluye templates completos para scripts, anti-patrones (6), troubleshooting. |
+| `docker-filesystem-cleanup` | `src/.opencode/skills/` | **NUEVO** — Metodología completa de limpieza Docker (imágenes/volúmenes huérfanos vía instances.json, build cache) y filesystem (Downloads, .cache, .local/share, custom/ dirs huérfanos). Incluye: detección de huérfanos, 5 fases de limpieza, umbrales de disco, Playwright reinstall post-purge, 7 anti-patrones. Referencia: R254-R259. |
 
 ### SDD Multi-Agent System (`.opencode/skills/`)
 
@@ -232,6 +259,84 @@ responde `"status":"skipped"` con el `attach_cmd` manual (`tmux -S /tmp/sdd-tmux
 `sdd_opencode_run.sh` la invoca automáticamente al dispatchar solo si `SDD_TMUX_AUTO_VIEW=1` está seteada en
 el entorno del usuario — por defecto queda desactivado para no abrir ventanas en corridas headless/CI.
 
+### SudoLang Cache Engine (`.opencode/skills/`)
+
+Skills del plugin `sudolang-cache-engine` portado de Claude Code a OpenCode (septiembre 2026).
+Define la gobernanza de cache de agentes: Frente Estable/Fondo Volátil, Context{} block conventions,
+y las 6 reglas SudoLang para optimizar uso de contexto de LLMs.
+
+| Skill | Descripción |
+|-------|-------------|
+| `sudolang-cache-architecture` | Layout Frente Estable/Fondo Volátil, sizing guidance, authoring checklist |
+| `sudolang-temporal-layering` | Forbidden/required in stable vs dynamic blocks, relay-fidelity fix |
+| `sudolang-stigmergic-coordination` | Shared state via file refs, SDD artifact table, Context{} stage field |
+| `sudolang-fork-agent-patterns` | Fork vs fresh subagent decision, two-phase fan-out rejected |
+| `sudolang-progressive-disclosure` | Keep stable prompt small, load on demand via Skills |
+| `sudolang-ttl-management` | TTL mechanics (5min/1hr), append-only state, model-gated exception |
+| `sudolang-cache-engine` | **Umbrella skill** — tying all rules together, token reduction, anti-patterns |
+
+Agentes asociados: `cache-analyzer` (read-only), `cache-optimizer` (read+write).
+Comandos: `/cache-audit`, `/cache-optimize`, `/cache-test`.
+Ver skill `sudolang-cache-engine-governance` para gobernanza completa en OpenCode.
+
+### IA-Stack Business Skills (`.opencode/skills/`)
+
+Skills de negocio de Binaural portados desde los plugins IA-stack de Claude Code (septiembre 2026).
+Cubren flujos departamentales, gestión de clientes, requerimientos, release notes y QA.
+
+| Skill | Departamento | Líneas | Descripción |
+|-------|-------------|--------|-------------|
+| `atencion-cliente-flujo` | ATC | 215 | Triage, 3 verticales (soluciones/nuevos desarrollos/migraciones), clasificación |
+| `consultar-para-decidir` | Gerencia | 149 | Queries MCP Odoo, decision-first, reliability reporting |
+| `estado-cola` | Coordinación | 157 | Queue status, señales por costo, preparación de triaje |
+| `levantamiento-requerimiento` | Consultoría | 104 | GIVEN/WHEN/THEN, 7 secciones, reusable vs custom |
+| `proyectos-especiales-flujo` | Especiales | 105 | "Mini Binaural", co-dirigido, flujo independiente |
+| `release-notes` | Producto | 131 | Formato release, versionado (línea+trimestre+estado), 🔴/🟣 |
+| `solicitud-vs-alcance` | Consultoría | 127 | 8 veredictos, 5 fuentes ordenadas, formato basado en evidencia |
+| `validar-entrega-vs-spec` | QA | 193 | 3 roles QA, validación spec→alcance→comportamiento |
+| `implementacion-flujo` | Implementación | 354 | Flujo completo: kickoff, gaps, producción, handoff ATC |
+| `producto-flujo` | Producto | 329 | Verticales, licencias, versionado, catálogo de niveles |
+| `auditar-documentacion` | Producto | 116 | Gap detection código vs artículos Knowledge |
+| `configurar-cliente-nuevo` | Implementación | 118 | Clasificación modelo negocio, reuso de clientes similares |
+| `construir-solucion` | Consultoría | 116 | Auto-construcción con matriz rojo/amarillo/verde |
+| `historial-decisiones` | Producto | 93 | Timeline de decisiones desde Drive+Odoo+git+specs |
+| `documentar-funcionalidad` | Producto | 130 | Pipeline código→spec→artículo Knowledge |
+
+**NO portados** (genéricos Claude-specific): docx, pdf, pptx, xlsx, morning, docs, import-memory.
+
+### Binaural Agents — OpenCode (`.opencode/agents/`)
+
+Agentes Binaural definidos para OpenCode, portados desde plugins Claude (septiembre 2026).
+Todos usan `opencode-go/mimo-v2.5`.
+
+| Agente | Archivo | Modelo | Descripción |
+|--------|---------|--------|-------------|
+| `senior-dev` | `senior-dev.md` | mimo-v2.5 | Desarrollo Odoo: routing departamento/repo, checklist validación, gate protocol |
+| `code-reviewer` | `code-reviewer.md` | mimo-v2.5 | Review requirement-first (Paso 0: leer tarea+imágenes antes del diff), 7 prioridades |
+| `sdd-metrics-reporter` | `sdd-metrics-reporter.md` | mimo-v2.5 | Observer read-only: agrega metrics.jsonl, escribe reportes en src/.sdd/reports/ |
+| `cache-analyzer` | `cache-analyzer.md` | mimo-v2.5 | Scanner read-only: detecta pollution risks en prompts de agentes |
+| `cache-optimizer` | `cache-optimizer.md` | mimo-v2.5 | Rewriter: reestructura templates en layout stable+dynamic |
+
+**Agentes SDD** (pre-existentes): sdd-lead, sdd-spec, sdd-architect, sdd-pm, sdd-builder, sdd-qc, explore, sdd-audit-writer.
+Ver sección `SDD Multi-Agent System` para detalles de los agentes SDD.
+
+### Commands — OpenCode (`.opencode/commands/`)
+
+| Comando | Descripción |
+|---------|-------------|
+| `cache-audit` | Escanea agentes .md para pollution risks de cache |
+| `cache-optimize` | Reestructura un agente en layout stable+dynamic |
+| `cache-test` | Verifica estabilidad byte-for-byte entre variantes |
+| `pre-commit` | Pre-commit para módulos Odoo (Binaural) |
+| `tests` | Ejecución de tests con coverage |
+| `test_coverage` | Coverage de tests |
+| `index-17` | Indexación de skills Odoo 17.0 |
+| `index-19` | Indexación de skills Odoo 19.0 |
+| `re-index` | Re-indexación de skills |
+| `ejecutar-flujo` | Ejecución de flujos SDD |
+| `crear_actualiza_documentacion` | Crear/actualizar documentación |
+| `actualiza_ambiente_staging` | Actualizar ambiente de staging |
+
 ### Odoo 17.0 Skills (`.opencode/17.0/skills/`)
 
 | Skill | Descripción |
@@ -244,7 +349,7 @@ el entorno del usuario — por defecto queda desactivado para no abrir ventanas 
 | `odoo_reports-17.0` | QWeb reports, PaperMuncher (media-baja) |
 | `odoo_devops-17.0` | CLI, deployment, DB management (media-baja) |
 | `odoo_documentation-17.0` | Documentación oficial Odoo 17 (raw) |
-| `odoo-code-review-17.0` | Checklist code review (FIX-001 a FIX-036) |
+| `odoo-code-review-17.0` | Checklist code review (FIX-001 a FIX-070) |
 | `odoo-performance-17` | N+1, batch-first, CRUD optimizado, índices |
 | `owl-framework-v2-17.0` | Referencia pura OWL 2.x (hooks, useState) |
 | `odoo-design-patterns-creational-17.0` | **NUEVO** — Patrones GoF creacionales: Singleton, Factory, Builder, Prototype aplicados a Odoo 17.0 |
@@ -384,6 +489,7 @@ Ciclo de automejoramiento de 20 loops para PostgreSQL/BD en Odoo 17.0. Analiza `
 | 80 | `odoo-xml-views-basic-19.0` | XML views basic |
 | 81 | `odoo-core-guardrails-19.0` | **NUEVO** — Core modification guardrails: prohibición de modificar odoo-19.0/ y enterprise-19.0/, alternativas legales, detección CI |
 | 82 | `oca-19-contributing-guidelines` | **NUEVO** — OCA Contributing Guidelines aplicadas a Odoo 19.0: naming de módulos, estructura de directorios, XML/Python/JS/CSS convenciones, Domain.AND/OR, models.Constraint, @api.ondelete, HOOT testing, ES2020+. 1,128 líneas. |
+| 83 | `odoo-19-boolean-setting-pattern` | **NUEVO** — Patrón reutilizable setting boolean Odoo 19: campo res.company + related res.config.settings + xpath en block (analytic/invoicing/tax/etc). Convenciones naming, grupos, CSS classes. Caso real: TI-15326 |
 
 ### Referencia Global (`~/.config/opencode/skills/`)
 
@@ -393,6 +499,7 @@ Ciclo de automejoramiento de 20 loops para PostgreSQL/BD en Odoo 17.0. Analiza `
 | `qweb-template-patterns` | QWeb server-side syntax |
 | `assets-bundling-patterns` | Asset bundles, SCSS, lazy loading |
 | `guia_precommit_odoo` | Guía de pre-commit para módulos |
+| `odoo-translation-precommit-patterns` | **NUEVO** — Patrones de traducción que pasan precommit: W8301/W8120/W8303, `.format()` como único patrón válido, mandatory vs optional checks |
 | `odoo-development-skills` | Universal dev skill (14-19) |
 
 ## Pre-commit
@@ -484,13 +591,23 @@ docker exec odoo-qa-consultoria-19-tests odoo -d odoo19_clean_cart -u <modulo> -
 ### OpenRAG MCP
 - **Config**: `~/.config/opencode/opencode.jsonc` como `type: "local"`
 - **Tools** (10): openrag_chat, openrag_search, openrag_ingest, openrag_delete_document, openrag_update_settings, openrag_create_knowledge_filter, openrag_search_knowledge_filters, openrag_update_knowledge_filter, openrag_delete_knowledge_filter, openrag_delete_chat
-- **Skills indexados**: 324 skills, 2,211 chunks en OpenSearch
+- **Skills indexados**: 855 skills, 5,738 chunks en OpenSearch
+- **Ingest tool BUG**: `openrag_ingest` retorna HTTP 422 — usar script directo `ingest_document.py` (ver skill `openrag`)
+- **Knowledge filter**: `odoo-skills-long-tail` (id: `94ecfff6-a584-4772-a8df-cdae572ad5e2`), 855 entries
 - **Ver skill**: `openrag`
 
 ### Postgres-DB MCP
 - **Config**: `~/.config/opencode/opencode.jsonc` como `type: "local"`
 - **Tools**: query, execute, list_databases, list_tables, describe_table, search_tables, explain
 - **DB URL**: `postgresql://odoo:odoo@localhost:5432/`
+
+### codebase-memory-mcp
+- **Config**: `~/.config/opencode/opencode.jsonc` como `type: "local"`
+- **Tools**: search_graph, trace_path, get_code_snippet, query_graph, get_architecture, index_repository, detect_changes, list_projects, search_code, manage_adr, ingest_traces, get_graph_schema, index_status, delete_project
+- **Repos indexados**: 22 repos across 16.0-19.0 (integra-addons, odoo-venezuela, third-party-addons + maintenance + l10nve)
+- **Project IDs**: `home-binlp011-sources-<repo-name>` pattern
+- **Indexing mode**: `moderate` (filtered files + similarity/semantic)
+- **Re-index after git pull**: `codebase-memory-mcp cli detect_changes '{"project":"<name>"}'` then `index_repository` if changed_count > 0
 
 ### Playwright MCP
 - **Config**: `~/.config/opencode/opencode.jsonc` como `type: "local"`
@@ -679,7 +796,7 @@ Reglas para la infraestructura de skills, sharing entre herramientas, y mantenim
 
 124. **Skill Directory Structure**: Cada skill = 1 directorio con `SKILL.md` dentro. Max 500 líneas archivo principal, referencias externas para más contenido. Front-matter: Trigger, Descripción, Contenido principal, Referencias. Referencia: skill `skills-inventory-protocol`.
 
-125. **Skills Sharing Protocol**: OpenCode sources → Claude symlinks (unidireccional vía daemon). 5 fuentes: project (66), 17.0 (326), 19.0 (161), 16.0 (100), global (156). Primera fuente gana en caso de nombre duplicate. Daemon: `src/scripts/skill-sync-daemon.sh`. Service: `~/.config/systemd/user/skill-sync.service`. Referencia: skill `skill-sync-daemon`.
+125. **Skills Sharing Protocol**: OpenCode sources → Claude symlinks (unidireccional vía daemon). 5 fuentes: project (66), 17.0 (326), 19.0 (161), 16.0 (100), global (156). Primera fuente gana en caso de nombre duplicate. **Curado desde 2026-09-25** (~250 symlinks, antes 878): de 16.0/17.0/19.0 solo se enlaza lo listado en `src/scripts/skill-sync-versioned-allowlist.txt`, y nada de lo que matchee `src/scripts/skill-sync-exclude.txt`; la fase 4 borra los symlinks que dejan de calificar. Daemon: `src/scripts/skill-sync-daemon.sh`. Service: `~/.config/systemd/user/skill-sync.service`. Referencia: skill `skill-sync-daemon`.
 
 126. **OpenRAG Ingestion Policy**: Skills del proyecto, versionadas (16.0/17.0/19.0), y documentación se ingieren a OpenRAG. Chunking: max 2048 tokens (~3600 chars) por chunk. Re-ingestion: post-cambio de skill, post-V-cycle. Credenciales: admin/OpenRag2026!Secure, index documents. Referencia: skill `openrag`.
 
@@ -810,6 +927,154 @@ Reglas para la infraestructura de skills, sharing entre herramientas, y mantenim
 196. **Un agente fresco de reporte (`sdd-metrics-reporter`) puede afirmar una tabla de "modelo esperado" desactualizada de memoria en vez de leer el archivo de config real, pese a una instrucción explícita de "verificar el estado real"**: un principio general ("verificá contra el filesystem") no basta para un modelo barato bajo presión de producir un reporte rápido — hace falta un comando literal obligatorio (`cat src/.opencode/opencode.json`) en el procedimiento, no solo la advertencia. Skill `sdd-metrics-reporter-agent`. Referencia: sesión de supervisión SDD/OpenCode, 2026-09-05.
 
 197. **Auditoría de cumplimiento del plugin `sudolang-cache-engine` (2026-09-05) sobre los agentes SDD tocados esa sesión**: encontró violaciones reales de `temporal-layering.sudo.md` (narrativas de incidente con job-id/fecha literal incrustadas en el bloque estable/siempre-cargado de `src/.opencode/agents/sdd-lead.md` y `.claude/agents/sdd-opencode-runner.md`) — movidas a sus skills respectivas (carga on-demand). También corrigió referencias stale a `/tmp/sdd-jobs/` dentro de las propias reglas del plugin, y extendió la regla 155 (bloque `Context{}` fijo) a una cuarta delegación (`Task(sdd-metrics-reporter)`). Skills `sdd-opencode-guardrails`, `sdd-metrics-reporter-agent`, plugin `sudolang-cache-engine`. Referencia: sesión de supervisión SDD/OpenCode, 2026-09-05.
+
+198. **Un módulo con código ya migrado a una versión mayor puede seguir teniendo un gap real de dato en el upgrade in-place, invisible desde una instalación limpia**: `binaural_club_socios` reemplazó `type_relation` (Selection, 17.0) por `beneficiary_classification_id` (Many2one a un modelo nuevo, 19.0), sembrado vía `post_init_hook` — que solo corre en instalación nueva, nunca en upgrade de un módulo ya instalado. Sin script de migración, cualquier base de cliente real que ya tenía el módulo en 17.0 quedaría con la clasificación nueva en `NULL` tras el upgrade. Patrón de fix: script `pre-*.py` que renombra la columna vieja a temporal antes de que el `_auto_init` cree la columna nueva, y `post-*.py` que siembra los datos semilla (reusando la función del hook, idempotente) y hace el backfill vía SQL directo desde la columna temporal. Al escribir el backfill, ojo con comparar contra campos `translate=True` (se almacenan como jsonb, requieren `->> 'en_US'`, no `=` directo — bug real cometido y corregido en el mismo script). Skills `odoo-migration-19` (lecciones 51-55), `binaural-openupgrade-simulation` (nuevo). Referencia: TA-82204, rama `19.0_mig_ta_82204_migration_scripts_club_socios`, 2026-09-08.
+
+199. **Verificar un script de migración con un "smoke test" (invocar `migrate()` a mano) no prueba que Odoo realmente lo dispare en un upgrade real — hace falta simular el hop completo, y esa simulación tiene sus propios gotchas de infraestructura no relacionados al módulo que se está migrando**: en la simulación de 3 saltos (17.0→18.0→19.0) de TA-82204, el hop 18→19 crasheó con lo que parecía un bug de Core (`ir_model.state` cast a jsonb inválido) — causa real: faltaba el flag `--load=base,web,openupgrade_framework` en el comando del hop, sin el cual los parches propios de `openupgrade_framework` (que ya cubren exactamente ese caso) nunca se importan. Además: el paquete oficial `odoo/upgrade-util` no debe pinearse a `@master` (puede resolver a un commit dev roto), y clonar una base entre instancias en clusters Postgres DISTINTOS requiere `pg_dump`/`pg_restore`, no `CREATE DATABASE ... TEMPLATE` (que solo funciona dentro del mismo cluster). Nuevo skill `binaural-openupgrade-simulation` con la metodología completa y checklist. Referencia: TA-82204, 2026-09-08.
+
+200. **Crear una `res.company` con `country_id` seteado dispara automáticamente `install_l10n_modules()` (sin wizard manual)**: en Odoo 19, `res.company.create()` (`base/models/res_company.py`) instala la localización del país y carga su chart template (`account.chart.template._load()` → `_post_load_data()`) en el mismo `create()` — cualquier validación custom sobre `product.template`/`account.tax` que se dispare por ese batch `write()` debe soportar un recordset multi-registro real, no solo el caso de un producto a la vez. Skill `l10n-ve-accountant` (sección TI-15065). Referencia: PR #1305, verificación E2E 2026-09-10.
+
+201. **Crear una BD manualmente vía `docker exec -u root <container> odoo -d <db> -i <mod> --stop-after-init` deja el filestore con owner `root`, causando `PermissionError`/`500` al servir assets web cuando el worker normal (usuario `odoo`) intente generarlos**: correr `./odoo fix-files <instancia>` inmediatamente después, antes de cualquier verificación por UI (Playwright u otra). Skill `binaural-docker-odoo`. Referencia: verificación E2E TI-15065, 2026-09-10.
+
+202. **En un formulario backend OWL de Odoo 19, `.o_form_button_save` puede quedar `disabled` pese a haber "escrito" un valor con `browser_fill_form`/`.fill()` de Playwright — ese método no siempre dispara el tracking de "dirty" de OWL**: usar `browser_type` con `slowly: true` (keystrokes reales) en su lugar, y verificar `disabled`/`.o_form_dirty` vía `browser_evaluate` antes de reintentar el guardado. Un guardado sin efecto y sin error visible casi siempre es un campo requerido vacío — diagnosticar con `document.querySelectorAll('.o_field_invalid')` antes de asumir un bug de la herramienta. Nueva skill `odoo-backend-testing-mcp-19.0`. Referencia: verificación E2E TI-15065, 2026-09-10.
+
+203. **Widget JS legacy (`Class.include()`) con método `async`: `this._super()` llamado después de un `await` lanza `TypeError`** — el mixin restaura `_super` de forma síncrona al retornar la promesa (primer `await`, no cuando se resuelve); capturar `const _super = this._super.bind(this, ...arguments)` como primera línea del método, antes de cualquier `await`, y usar esa variable en vez de `this._super(...)` después. Nueva entrada FIX-057 (`odoo-code-review-17.0`) / FIX-075 (`odoo-code-review-19.0`). Referencia: PR #247 (countryclub), bloqueante N4, 2026-09-11.
+
+204. **Al batchear un loop per-registro con `try/except` para arreglar un N+1 (FIX-042), verificar que el método interno invocado ya capture los MISMOS tipos de excepción antes de eliminar el except externo** — de lo contrario se pierde aislamiento de errores y una excepción de un solo registro puede tumbar todo el batch, y a callers que dependían de ese aislamiento (ej. `cr.savepoint()` por-lote). Nueva entrada FIX-058 (`odoo-code-review-17.0`) / FIX-076 (`odoo-code-review-19.0`). Referencia: countryclub, ronda de mejora proactiva ciclo 3→5, regresión detectada por un ciclo de descubrimiento abierto posterior, 2026-09-12.
+
+205. **El guardrail de `sdd-opencode-guardrails` bloqueaba `docker exec*psql*` pero no `docker exec*odoo*-d <BD real>*` — un job de OpenCode instaló/testeó un módulo directamente contra la BD real `countryclub` (`docker exec -u root odoo-countryclub odoo -d countryclub -i country_basic_payments --stop-after-init`) en vez de usar `./odoo test`** — se refuerza el bloque de ejemplo bash allow/deny de la skill con una entrada explícita por cliente conocido; no confundir con la regla 201 (crear una BD NUEVA vía el mismo comando es válido, el problema es apuntar contra el nombre de una BD real preexistente). Seguimiento técnico pendiente: replicar el deny real (no solo el ejemplo de la skill) en `src/.opencode/agents/*.md`/`opencode.json`. Referencia: countryclub, ronda de mejora proactiva ciclo 4 (primer intento), 2026-09-12.
+
+206. **Nueva metodología: ronda de N ciclos de mejora proactiva con ciclo final de descubrimiento abierto** — en vez de reaccionar a un solo comentario de review humano, correr N ciclos sucesivos (cada uno con su propio review→spec/tasks acotado→build TDD→QC vía `sdd-judge`), donde el ÚLTIMO ciclo revisa el diff acumulado completo del round buscando específicamente regresiones introducidas por los ciclos anteriores del mismo round (caso real: el ciclo 5 encontró y corrigió una regresión que el ciclo 3 había introducido, ver regla 204). Nueva skill `sdd-proactive-improvement-rounds`. Referencia: countryclub, 2026-09-12.
+
+207. **Odoo 19.0 removió la clase `Product` del frontend JS del POS — se dividió en
+`ProductTemplate`/`ProductProduct`, y `get_price` pasó a `getPrice` con 7 parámetros** — cualquier
+override/`patch()` de pricing en el POS portado desde 16.0/17.0 (que usaba
+`odoo.define(...)`/`Registries.Model.extend` sobre `Product`, o `pricelist.items?.[0]`) necesita
+reescribirse contra la API real de 19.0: import desde `@point_of_sale/app/models/product_template`
+(no `@point_of_sale/app/store/models`, que ya no existe en código 19.0-nativo), `patch()` sobre
+`ProductTemplate.prototype`, y resolución de reglas vía
+`pricelist.getRulesByProductId/getRulesByTmplId/getCategoryRulesIds/getGlobalRulesIds/findBestRule`
+(no `pricelist.items`). No existe un punto de extensión de una sola línea para un `base` custom de
+pricelist — hay que sobrescribir `getPrice` completo, copiando fielmente (no de memoria) el ajuste
+de cantidad por lote y la resolución de reglas del core, sin duplicar el `push` sobre
+`related_lines` (se pasa por referencia — duplicar el push allí infla la cantidad usada para
+resolver la regla). Ver skill `odoo-pos-pricelist-getprice-19.0` y `odoo-code-review-19.0`
+FIX-077/FIX-078/FIX-079/FIX-080 para el detalle completo y el caso real (`binaural_brand_pos`,
+`binaural_pos_last_cost`, TA-15107, PR
+https://github.com/binaural-dev/integra-addons/pull/2802).
+
+208. **Un prompt de dispatch a OpenCode muy grande puede matar la sesión tmux en silencio
+(`orphaned`), aunque el dispatch reporte `"status":"running"`** — `scripts/sdd_opencode_run.sh`
+embebe el prompt completo (ya escapado) dentro del comando `tmux new-session ... bash -c
+"$INNER_CMD"`; con un prompt de ~16KB (ej. citando bloques de código extensos del core textual para
+darle contexto exacto a OpenCode) la sesión murió inmediatamente sin error visible en el resultado
+del dispatch — solo se detecta revisando `sdd_opencode_status.sh <job_id>` y viendo
+`"status":"orphaned"`. Mitigación confirmada: no pegar bloques de código extensos dentro del
+prompt — apuntar a la ruta/rango de líneas del archivo real e indicarle a OpenCode que lo lea él
+mismo. Ver skill `sdd-opencode-delegate-agent`, sección de límite de tamaño del prompt.
+
+209. **Un contador `Integer` incrementado manualmente en un controlador (ej. `partner.appointments_count += 1` al crear una cita) y sin decremento equivalente en el camino de cancelación/archivado (`action_archive()`, que solo pone `active=False`) queda desincronizado indefinidamente — el único fix robusto es convertirlo en `compute(store=False)` sobre `search_count()`/`One2many`, no agregar un decremento puntual**: además, si el compute se extiende entre módulos vía un hook con parámetro (`_get_x_domain(member=False)`), verificar SIEMPRE que el call-site real (no solo los tests, que pueden invocar el hook directo con el parámetro) propague ese parámetro — y que la ventana de fecha resultante tenga cota inferior Y superior, no solo inferior. Ver FIX-059/060/061 en `odoo-code-review-17.0` y skill `cadipa-appointment-membership-limits`. Referencia: ticket helpdesk #13019 (mail.message 879732), PR #233 (`cadipa1`) — 3 rondas delegadas a OpenCode con hallazgos reales de `sdd-judge`/`code-reviewer` antes del fix final.
+
+### Port Protocol & Cross-Tool Sync (2026-09-17)
+
+Reglas para sincronizar conocimiento entre Claude Code y OpenCode.
+
+210. **OpenCode es la fuente de verdad para skills/proyecto; Claude consume via symlinks**: `src/.opencode/skills/` → `~/.claude/skills/` (unidireccional via `skill-sync-daemon.sh`). NUNCA editar directamente un symlink en `~/.claude/skills/` — siempre editar el archivo fuente en `src/.opencode/skills/` y ejecutar `skill-sync-daemon.sh --once`. Referencia: skill `claude-opencode-port-protocol`.
+
+211. **Agentes OpenCode requieren DOS artefactos**: (1) archivo `.md` en `src/.opencode/agents/` con frontmatter (model, mode, permission) + instrucciones, Y (2) entry en `src/.opencode/opencode.json` → sección `agent`. Sin ambos, `Task(subagent_type: "<name>")` falla silenciosamente. OpenCode usa `opencode-go/mimo-v2.5` para TODOS los agentes (no split Haiku/Sonnet/Opus como Claude). Referencia: skill `claude-opencode-port-protocol`.
+
+212. **Plugins Claude → OpenCode: adaptar formato, no copiar**: Claude rules (`.sudo.md`) → OpenCode skills (`SKILL.md` con frontmatter). Claude agents (`.md` con tools/model) → OpenCode agents + opencode.json. Claude hooks (`.sh`) → función en `scripts/precommit`, NUNCA como hook standalone. NO portar plugins genéricos (docx, pdf, pptx, xlsx, morning, docs, import-memory). Referencia: skill `claude-opencode-port-protocol`.
+
+213. **Secret-scan integrado en pre-commit, no como hook**: `_check_secrets()` en `scripts/precommit` con 8 patrones regex (AWS, GitHub PATs, private keys, Slack, Google, Stripe, Anthropic + generic). Corre ANTES del pre-commit real. NO implementar como PreToolUse hook de Claude ni como standalone. Referencia: `scripts/precommit:53-109`, skill `claude-opencode-port-protocol`.
+
+214. **Post-port: SIEMPRE ejecutar sync + actualizar AGENTS.md**: Después de portar skills/agents/commands de Claude→OpenCode: (1) `skill-sync-daemon.sh --once`, (2) actualizar inventarios en AGENTS.md (líneas 27-29, 44-56, 1600-1612), (3) agregar sección si es categoría nueva, (4) agregar regla si el port revela patrón repetible. Referencia: skill `claude-opencode-port-protocol`.
+
+215. **Odoo Version Detection: NUNCA asumir versión, SIEMPRE detectar**: Leer `__manifest__.py` → campo `version` (formato `MAJOR.MINOR.PATCH.MODULE.BUILD`). La versión MAJOR.MINOR es la que importa. Si no hay manifest, detectar desde contexto (directorio, branch, instance name). Skills version-specific van en `src/.opencode/<version>/skills/`, skills version-agnósticos en `src/.opencode/skills/`. NUNCA usar skill de 17.0 para código 19.0 sin verificar BREAKING changes. Referencia: skill `odoo-version-detection`.
+
+216. **Cache Engine Governance: Context{} block fijo ~80 tokens, Skills on demand**: Todo agente SDD invocado via `Task()` debe tener bloque `Context{}` fijo (task_id, ears_requirement, plan_ref, tasks_ref, branch, repo, module, stage). Máximo ~80 tokens. Skills se cargan via tool `skill` cuando el agente las necesita (Fondo Volátil). Usar `cache-analyzer` para auditar prompts, `cache-optimizer` para reestructurar. Referencia: skill `sudolang-cache-engine-governance`.
+
+### Translation & Precommit Rules
+
+217. **Translation patterns that pass OCA precommit mandatory**: The ONLY `_()` format that passes `translation-not-lazy` (W8301) in mandatory precommit is `.format()`. Patterns like `_('...%s...') % (value)` and `_('...%(name)s...') % {'name': value}` both FAIL. The "lazy" second-argument pattern `_('...%s', value)` also FAILS. Only `.format()` works. Reference: skill `odoo-translation-precommit-patterns`, PR `cadipa1#235`.
+
+218. **Cherry-pick to release branch workflow**: When cherry-picking a commit from staging to release, create a NEW branch from release (`rls_<description>`), apply the fix, update submodule pointers by creating a branch from release's submodule hash, cherry-pick the fix there, then update the parent repo's submodule reference. NEVER push directly to release. Reference: skill `workspace-structure`, PR `cadipa1#235`.
+
+219. **Guard de aprobación: proteger también el campo de estado, no solo las líneas que condiciona** — un `write()` guard que bloquea `price_unit`/`discount` en base a un campo Selection (`*_approval_state`) es cosmético si ese mismo campo no está protegido contra escritura directa: cualquier usuario puede `write({"approval_state": "approved"})` por RPC y auto-desbloquearse sin aprobador. Declarar un set explícito de "campos protegidos del workflow" y bloquear su escritura salvo un context flag interno que solo las acciones oficiales seteen. Nueva entrada FIX-068 (`odoo-code-review-17.0`) / FIX-087 (`odoo-code-review-19.0`). Referencia: PR #254 (countryclub), TA-82205, ronda 2.
+
+220. **Guard de x2many commands: cubrir los 6 ops, no solo delete/unlink** — un guard que bloquea remoción/reemplazo de líneas vía comandos x2many (`invoice_line_ids`, etc.) debe revisar explícitamente los 6 ops de Odoo (`CREATE=0, UPDATE=1, DELETE=2, UNLINK=3, LINK=4, CLEAR=5, SET=6`), no asumir que delete/unlink (2/3) agota "quita/reemplaza registros" — `Command.clear()`/`Command.set()` (5/6) logran el mismo bypass. Nueva entrada FIX-069 (`odoo-code-review-17.0`) / FIX-088 (`odoo-code-review-19.0`). Referencia: PR #254 (countryclub), TA-82205, ronda 2.
+
+221. **Guard de "no tocar el monto": enumerar TODOS los campos económicamente equivalentes** — bloquear `price_unit`/`discount` bajo un lock de aprobación sin cubrir `quantity` deja un bypass con el mismo efecto económico. Al definir el set de campos protegidos, preguntar "¿qué otro campo, combinado con los ya cubiertos, logra el mismo resultado?" en vez de limitarse a lo mencionado literalmente en el ticket. Replicar el set en el guard Python (modelo padre Y modelo hijo) y en el `readonly` de la vista. Nueva entrada FIX-070 (`odoo-code-review-17.0`) / FIX-089 (`odoo-code-review-19.0`). Referencia: PR #254 (countryclub), TA-82205, ronda 2.
+
+222. **Testing mail_notification: `message_ids` excluye `user_notification` por diseño — no basta para detectar regresión de `message_type`** — el dominio del campo `message_ids` en `mail.thread` excluye `message_type='user_notification'` siempre, sea el código correcto o buggy (`'notification'` en vez de `'user_notification'` también queda fuera). Verificar contra `mail.message` directamente, con un dominio acotado (ej. `subject`) — un dominio amplio (`model`+`res_id`+`message_type`) también captura el mensaje automático de field-tracking (`tracking=True` en el campo) que Odoo postea con `message_type='notification'` por defecto, dando falsos positivos/negativos no relacionados al código bajo prueba. Skill `mail-notification-patterns` §Testing Gotchas. Referencia: PR #254 (countryclub), test `test_dual_channel_followup_not_in_chatter`.
+
+223. **Reconciliar STATE.md/tasks.md/checklists locales contra el diff real antes de cerrar una ronda de review** — un ítem marcado "DEFER"/pendiente en un tracking doc puede llevar implementado desde una ronda anterior sin que el archivo lo refleje (o viceversa), confundiendo a un revisor futuro que confía en el checklist en vez de en el código. Antes de reportar un punto como "aplicado"/"diferido", `grep` el código real por la palabra clave y actualizar el tracking doc para que coincida. Skill `sdd-pr-review-fix`. Referencia: PR #254 (countryclub) — `openspec/changes/ta-82205-.../STATE.md` marcaba "Fix 7: DEFER" sobre código ya shippeado.
+
+224. **El daemon Docker puede quedar contendido por sesiones concurrentes**: si otra sesión (agente u otra terminal) está construyendo una imagen pesada de Odoo al mismo tiempo, comandos básicos como `docker ps`/`docker images` pueden colgarse varios minutos sin fallar — no asumir que el daemon está caído. Skill `binaural-docker-odoo`. Referencia: PR #2691 (integra-addons), setup de instancia de test aislada, 2026-09-21/22.
+
+225. **El orden de salida de `scripts/precommit`/`scripts/run_tests.sh` puede aparecer invertido al redirigir a archivo o `| tail`**: mezclan `print()` de Python (bufferizado cuando stdout no es TTY) con subprocesos (`docker exec`, `pre-commit`) que heredan el stdout sin buffer — el output del subproceso puede salir ANTES que los `print()` del wrapper. No diagnosticar fallos por el orden visual; confiar en el exit code y, si hace falta, capturar el output completo sin `tail` intermedio. Skill `binaural-docker-odoo`. Referencia: PR #2691 (integra-addons).
+
+226. **Una corrida verde de `scripts/precommit` reportada por el bot no garantiza que siga verde después**: el script re-clona/actualiza `precommit-config-files` desde el remoto en cada corrida, así que la config puede endurecerse sin que el código del PR cambie. Re-ejecutar localmente antes de dar un PR por listo, sobre todo si estuvo abierto varias semanas. Skill `guia_precommit_odoo`. Referencia: PR #2691 (integra-addons) — 4 corridas previas del bot en verde, `W0404 reimported` (triple import idéntico) detectado recién al re-ejecutar localmente.
+
+227. **Un review de bot IA puede reportar falso positivo sobre una dependencia/infra que vive en un archivo gitignored** (ej. `instances.json`) que el bot no ve en el diff del PR: verificar contra el estado real del workspace antes de aceptar el hallazgo como válido, en vez de "corregir" algo que ya funciona. Skill `sdd-pr-review-fix`. Referencia: PR #2691 (integra-addons) — `binauralbot` marcó `odoo.upgrade.util` como no verificado sin ver el pin ya existente en `instances.json`.
+
+228. **Antes de publicar en el chatter de una tarea/ticket de Odoo, SIEMPRE seguir la skill `core:escribir-en-chatter`** (gate de confirmación humana antes de publicar, vínculo de PRs como registros `github_pr_ids` en vez de mencionarlos en prosa, mention real vía `data-oe-model`/`data-oe-id` resolviendo homónimos por `res.users`) — un `post_message` directo sin mostrar el borrador ni linkear los PRs, aunque publique, no cumple el gate y deja de proveer la trazabilidad esperada (los PRs no vinculados como registro son indistinguibles de "no hecho" para quien audite el ticket después). El conector que esa skill necesita para mentions/HTML reales (`mcp__plugin_core_odoo__post_message`, con `body_is_html`/`partner_ids`) devolvió `Invalid credentials or insufficient permissions` en una sesión (confirmado también con `get_current_context`) — verificar con esa tool ANTES de asumir que funciona; si sigue roto, avisar al usuario en vez de degradar silenciosamente a `mcp__claude_ai_Binaural_MCP__post_message` (funciona, pero solo texto plano, sin `partner_ids` ni acceso a `mail.followers`). Referencia: sesión TA-82204, 2026-09-22 — comentario publicado en `project.task` 82204 sin draft/confirmación ni `github_pr_ids`, detectado retroactivamente al revisar la skill.
+
+229. **Workarounds no disruptivos para 3 problemas de infraestructura Docker compartida detectados en TA-82204 (2026-09-21)**: (a) el bug conocido de índice nombre→ID corrupto (ver `workspace-structure`) se puede evitar SIN reiniciar el daemon compartido — renombrar la instancia en `instances.json` y reconstruir solo ese servicio; (b) `./odoo build` compila TODAS las instancias en una sola invocación de `docker compose build` — el fallo de red de una instancia ajena (ej. un `curl` roto para una imagen 17.0 de otro cliente) aborta la build completa con `[exited with code 0]` engañoso; regenerar config vía los generadores Python directamente y correr `docker compose build <servicio>` acotado evita depender de instancias ajenas; (c) `docker compose` serializa invocaciones concurrentes del mismo proyecto entre sesiones distintas — un `./odoo start`/`build` propio puede parecer colgado mientras espera el lock de otra sesión; verificar procesos vivos y evidencia de trabajo real antes de matar nada (matar a mitad de un `docker compose up` es justamente lo que puede producir (a)). Ver skill `workspace-structure` para el detalle completo y los comandos exactos.
+
+230. **El worktree de un review-fix puede (y a veces debe) crearse con ORIGEN en un clon externo fuera de `docker-multi`** (ej. `/home/binlp011/sources/<repo>`, un checkout personal del usuario) cuando el checkout de `docker-multi/src/<repo>` está sucio o en otra rama y no se lo quiere tocar — el DESTINO del worktree sigue teniendo que caer dentro de `docker-multi/src/` (mount único de los contenedores), pero `git worktree add <destino-en-docker-multi/src> <branch>` se corre parado en el repo origen externo. Patrón ya existente en el workspace (`integra-addons-19.0-wt-pr2691`). Ver skill `workspace-structure`.
+
+231. **Un script de migración que asigna un campo con `UPDATE` SQL crudo (por rendimiento) y LUEGO necesita que un campo calculado-y-almacenado (`store=True`) que depende de ese campo se recalcule, debe invalidar la cache de la transacción ANTES de leer/recomputar** — si el mismo cursor tuvo actividad ORM previa sobre esos registros en la misma transacción (ej. un test que los creó, u otro hook), el `env` fresco creado dentro del script de migración comparte esa cache (es por-transacción, no por-instancia de `Environment`) y lee el valor viejo aunque el `UPDATE` crudo ya haya cambiado la fila en la base. Fix: `env.invalidate_all()` antes de `browse()`+recompute+`flush_recordset()`. Nueva entrada FIX-090 (`odoo-code-review-19.0`), lección #56 (`odoo-migration-19`). Referencia: `binaural_club_socios/migrations/19.0.1.1.3/post-migrate_beneficiary_classification.py`, TA-82204, detectado por un test propio antes de mergear (no en producción).
+
+232. **Un mismo ticket puede generar reviews de IA en más de un PR de repos distintos, sobre ramas con el mismo nombre** — se resuelve con un worktree por repo (posiblemente en un mismo ambiente Docker nuevo para correr ambos test suites) pero SIEMPRE un commit y una respuesta de PR separados por repo; si ambos PRs referencian la misma tarea de Odoo, un solo comentario consolidado (siguiendo `core:escribir-en-chatter`, no un `post_message` directo) cubre ambos. Nueva sección en skill `sdd-pr-review-fix`. Referencia: TA-82204, PRs `integra-addons#2766` + `odoo-venezuela#1293`, 2026-09-21/22.
+
+233. **Teardown de worktree + instancia de test Docker: 4 gotchas confirmados (PR #2691, 2026-09-22)** — (a) `__pycache__` owned por `root` (dejado por el contenedor Odoo corriendo como root sobre `./src` montado) bloquea `rm -rf`/`git worktree remove` con `Permission denied`; sin `sudo`, resolver con un contenedor descartable (`docker run --rm -v <path>:/target alpine sh -c "find /target -name __pycache__ -type d -exec rm -rf {} +"`); (b) `git worktree remove` puede desregistrar el worktree pero dejar el directorio físico si el permiso falla a mitad de camino — verificar con `find <ruta> -not -user "$USER"` después, no confiar en el mensaje; (c) `git branch -d` sobre la rama de un worktree de PR abierto falla con "not fully merged" porque compara contra el HEAD del checkout LOCAL, no contra origin — confirmar `git rev-parse <rama>` == `git ls-remote origin <rama-remota>` antes de forzar con `-D`; (d) `./odoo remove <instancia>` no borra la imagen Docker ni garantiza que los volúmenes nombrados desaparezcan — verificar y limpiar con `docker volume rm`/`docker rmi` explícitos. Skill `workspace-structure` §"Teardown de un worktree + instancia de test".
+
+234. **2 gotchas adicionales de teardown no cubiertos por la regla 233 (TA-82204, 2026-09-22)**: (a) el índice nombre→ID corrupto de Docker (ver regla de `workspace-structure` sobre "referencia de nombre de contenedor corrupta") puede resolverse SOLO con el tiempo — un contenedor fantasma invisible en un momento dado puede volverse visible y borrable normalmente más tarde sin reiniciar el daemon; re-chequear `docker ps -a` antes de escalar al restart/rename; (b) al limpiar el propio ambiente, NUNCA correr `docker system prune`/`builder prune`/`volume prune` sin acotar — el build cache compartido (decenas de GB) es usado por TODAS las instancias de TODAS las sesiones activas en el host; limpiar solo por nombre exacto de la propia instancia (contenedor, imagen, volúmenes). Ver skill `workspace-structure`.
+
+235. **Reconciliar un PR marcado `CONFLICTING` contra su rama base es un modo de trabajo distinto al pipeline spec→build→qc y a `sdd-pr-review-fix`** — nueva skill `sdd-pr-conflict-reconcile`. Tres lecciones confirmadas: (a) un clon local shallow rompe `git merge-base` con exit 1 y sin mensaje, indistinguible de "historias no relacionadas" — siempre `git fetch --unshallow` antes de analizar un conflicto en un clon de origen incierto; (b) `git merge-tree --write-tree --merge-base=<X>` enumera los conflictos reales sin tocar el working tree, y puede revelar que el conflicto real es mucho menor que "todo el PR" (4 de 5 módulos sin ningún conflicto en el caso real); (c) cuando el conflicto es porque el mismo módulo fue migrado dos veces en paralelo (la rama base lo migró de forma independiente después de que la rama del PR divergiera), NO hay que confiar en el autoreporte de OpenCode sobre qué se resolvió — verificado dos veces en la misma tarea: reportó "tests corridos" habiendo solo hecho `python3 -m py_compile`, y reportó "docs ya completos" cuando un `grep` directo mostraba 16 menciones de una feature ya eliminada. Referencia: PR #2731 (integra-addons), tarea 81271/81283, 2026-09-22.
+
+236. **Teardown de un ambiente Docker/worktree renombrado a mitad de tarea deja huérfanos bajo el nombre viejo si solo se limpia por el nombre actual** — dos gotchas confirmados (PR #2731, integra-addons, 2026-09-22): (a) el teardown estándar (`./odoo remove`, `docker volume rm`/`docker rmi` por nombre) solo encuentra recursos bajo el nombre vigente en `instances.json` — si la instancia fue renombrada en algún momento de su vida (ej. workaround del bug de índice corrupto de Docker), hay que repetir la búsqueda explícitamente con el nombre pre-rename; (b) un contenedor fantasma del bug de índice corrupto puede estar realmente `Up` (no solo `Created`) por horas sin aparecer en ninguna consulta directa — el disparador confiable para descubrirlo es un error de `docker volume rm`/`docker rmi` ("volume is in use - [hash]"/"must be forced") durante el propio teardown, que revela el hash real. Skill `workspace-structure` §"Teardown de un worktree + instancia de test" y §"Docker Troubleshooting", nueva sección "Teardown" en `sdd-pr-conflict-reconcile`.
+
+237. **Un módulo base que rediseña una vista rompe el `-u` desde versiones viejas si un puente tenía una vista heredada con otro xmlid anclada a lo eliminado** (Odoo 19.0, tarea 82676, 2026-09-23): `_process_end` borra los huérfanos recién al final, y la vista vieja sigue activa al validar la nueva (`ParseError ... no se puede localizar en la vista principal`). Solución: `pre-migrate.py` en el módulo base que desactiva esas vistas por xmlid. Solo se detectó restaurando una base real de cliente; `./odoo test` con base limpia no lo ve. Skills `odoo-upgrade-scripts-19.0` §6.4 y `binaural-product-catalog-19.0`.
+
+238. **Odoo 19 hace commit después de cada módulo durante `-u`** (`odoo/modules/loading.py:273`): si la actualización falla a mitad de camino, los módulos ya cargados quedan con su `latest_version` nueva y sus scripts de migración no vuelven a correr en el reintento. Para validar una migración, restaurar la base desde cero y actualizar una sola vez; no dar por probada una migración "porque el segundo intento pasó". Skill `binaural-restore-client-backup`.
+
+239. **`./odoo update` (y cualquier comando del CLI que use `docker exec -it`) no hace nada, sin error, en sesiones sin TTY** (agentes, background): los módulos quedan sin instalar ni actualizar. Usar `docker exec -u root <container> odoo --stop-after-init -p 90 --workers=0 -u|-i <mods> -d <db>` sin `-it`, solo sobre bases propias. Relacionada con la regla 99 (`scripts/coverage`). Skill `binaural-docker-odoo` §Troubleshooting.
+
+240. **Restaurar un backup de cliente en un ambiente de worktree**: preferir `scripts/odoo_restore`; neutralizar siempre (`odoo neutralize`); armar los addons con el mismo orden que la instancia del cliente, reemplazando solo su `integra-addons` por el worktree, y confirmar con `comm` que no falte ningún módulo instalado. Los backups `*_nofs` dan 500 en imágenes (esperable). `./odoo pw` puede no dejar entrar; usar `odoo shell`. Skill `binaural-restore-client-backup`.
+
+241. **La rama `staging` de un repo cliente puede apuntar `integra-addons` a una rama de integración `<sha9>_<rama>` que junta varias features** (ej. posv19: SITEF + checker kiosk). Para llevar un PR a staging: rama de integración nueva desde ese commit + merge del PR (si la integración tiene copias viejas de los mismos commits, tomar la versión del PR por módulo y verificar con `git write-tree --prefix`), y un PR en el repo cliente que solo mueva el submódulo. Nunca apuntar el submódulo directo al commit del PR. Skill `binaural-submodule-maintenance-merge` §Paso 8.
+
+242. **Un reclamo de "precio incorrecto" en un reporte que usa lista de precios se diagnostica con datos, no cambiando el código**: leer el snapshot con que se generó (moneda, lista, "precio sin IVA", que puede venir de preferencias guardadas), extraer el valor real del PDF (`pdftotext`), y comparar con `_get_product_price_rule` para cada `min_quantity` y con una orden de venta simulada en memoria. Los reportes calculan con cantidad 1, así que los escalones por volumen nunca aparecen. Antes de tocar código, preguntar de dónde sale el valor que espera el usuario. Skill `binaural-product-catalog-19.0`.
+
+243. **Un core y sus puentes solo son independientes si el core no nombra a ningún puente ni lee sus campos** (Odoo 19.0, TA-82676): hooks genéricos extendidos con `super()`, cada puente dueño de su campo, vista y lógica, `auto_install` en los puentes "pegamento", y la lógica de un cliente en un puente del repo del cliente. Probar con `./odoo test` en el core solo, cada puente solo y todos juntos, y E2E progresivo. Skill `odoo-bridge-module-independence-19.0`.
+
+244. **Hooks encadenados de "ámbito" deben intersectar y distinguir `None` (sin ámbito) de `[]` (ámbito sin coincidencias)**; `wizard.read()` entrega los Many2one como `(id, nombre)`. Uniones con `set(a + b)` o `or None` pasan los tests felices y fallan con dos puentes. `odoo-code-review-19.0` FIX-092/FIX-093.
+
+245. **Un `required=True` en un asistente bloquea sus botones auxiliares** ("Faltan algunos campos obligatorios" antes de llamar al método): validar el dato en la acción final, no en el campo. `odoo-code-review-19.0` FIX-091.
+
+246. **`-u` no sobrescribe traducciones de vista ya guardadas en la base**: para que un cambio de `.po` llegue a clientes existentes, `post-migrate` que recargue solo ese módulo con `_load_module_terms(..., overwrite=True)`. Verificar con `arch_db` en `with_context(lang=...)`. Skill `odoo-translations-19.0` §14.
+
+247. **OpenCode no es confiable para lógica de código aunque reciba el código exacto** (TA-82676: 3 rondas sin aplicar una intersección, validación marcada como hecha sin tests, alcance inventado). Para código, usar payload literal (`cp` + `diff -r`) o aplicarlo directamente; siempre verificación propia y code-review por ronda. Y el heredoc del prompt SIEMPRE entre comillas (`<<'EOF'`). Skill `sdd-opencode-delegate-agent`.
+
+248. **Si el MCP de Playwright se desconecta, seguir con Playwright de Node** (`npx --no-install playwright --version`, `npm i playwright@<versión>` en scratch, script propio con descargas). Skill `playwright-mcp-usage` §Troubleshooting.
+
+249. **Archivar OpenSpec**: `MODIFIED`/`REMOVED` sobre requisitos que no existen en el spec principal abortan el archivado; un requisito nuevo va en `ADDED`. En repos de cliente el OpenSpec es a nivel de repo y el archivado es mover la carpeta. Skill `sdd-openspec-bridge`.
+
+### Reglas — Vendor Override & Currency (Ticket 15386)
+
+250. **Currency conversion: SIEMPRE usar `res.currency._convert()`** — NUNCA multiplicar/dividir manualmente por `company_rate` o cualquier tasa. `_convert()` maneja short-circuit same-currency, redondeo, inverse rate (USD en sistema VEF), y caching. Signature: `source_currency._convert(from_amount, to_currency, company=None, date=None, round=True)`. Skill `odoo-currency-convert-mandatory`. Referencia: ticket 15386, fix commit `8b152b2`.
+251. **Full-copy template override: eliminar sub-templates sin prefijo de módulo** — Si el vendor define `<t-name="Foo">` (sin module prefix), nuestra copia NO debe incluirlo. Odoo registra `t-name` globalmente → duplicado = `"Template already exists"` → bundle completo muere → página en blanco. Skill `odoo-vendor-override-patterns` Patrón 1. Referencia: ticket 15386, commit `6e7ef03`.
+252. **Vendor barcode fallback path: verificar datos faltantes antes de setear** — Vendors de POS/kiosko tienen DOS paths (configured-fields vs barcode fallback). El fallback típicamente NO resuelve pricelist, stock, ni weight. Override DEBE verificar `if "key" not in res:` antes de compute cada campo. Skill `binaural-checker-kiosk` §Barcode Fallback Path. Referencia: ticket 15386, commits `8ae24b0` + `db9d6f0`.
+253. **`_get_product_price()` kwargs-only en Odoo 19** — positional args después de `products` causan `TypeError`. Usar `quantity=1.0, uom=..., date=...`. Skill `odoo-19-breaking-changes-checklist`. Referencia: ticket 15386.
+254. **Defensive field check para campos de vendor** — `if "field" in model._fields and model.field:` — necesario porque versiones viejas del vendor no tienen campos nuevos. Skill `odoo-vendor-override-patterns` Patrón 2. Referencia: ticket 15386, Rule #174.
+255. **`allowed_company_ids` en tests para vendor code** — Vendor modules que usan `env.context.get('allowed_company_ids')` fallan con `TypeError` en tests. Pattern: `cls.env = cls.env(context=dict(cls.env.context, allowed_company_ids=[company.id]))`. Skill `odoo-l10n-ve-test-patterns`. Referencia: ticket 15386.
+256. **`foreign_currency_id` ORM write trigger** — Escribir `foreign_currency_id` via ORM dispara `l10n_ve_rate` → busca `account.move.line.foreign_currency_id` que puede no existir en test DB. Usar raw SQL: `UPDATE res_company SET foreign_currency_id = %s WHERE id = %s` + `invalidate_all()`. Skill `odoo-l10n-ve-test-patterns`. Referencia: ticket 15386.
+257. **`db_name` vs `db_filter` en `instances.json`** — `db_name` define la BD exacta. `db_filter` es regex para selection. Usar `db_name` (override) para instancias de testing, no `db_filter`. El entrypoint regenera `odoo.conf` en cada restart — fixes via `sed` no persisten. Skill `binaural-docker-odoo`. Referencia: ticket 15386.
+
+258. **`groups=` en la definición Python de un campo bloquea el campo ENTERO a nivel ORM (`check_field_access_rights`), no solo la UI** — a diferencia de `groups=` en la vista XML (solo oculta), el atributo en el campo Python hace que cualquier usuario sin ese grupo reciba `AccessError` al leer/escribir el campo, incluso si nunca lo toca en su flujo. Si ya existe un guard runtime (`has_group()` + `UserError`) protegiendo el uso real del campo, el `groups=` Python es redundante y debe quitarse, dejando la restricción solo en la vista + el guard. Gotcha de testing: un test con `TransactionCase` sin `.with_user()` corre como superusuario (`env.su=True`) y NO detecta este bug — usar `new_test_user()` + `.with_user()` + `invalidate_recordset()`. Referencia: ticket #15446 (countryclub, 2026-09-28), FIX-073 (17.0)/FIX-097 (19.0) en `odoo-code-review-17.0`/`-19.0`.
+
+259. **`sdd-judge`: forense de mtime para descartar falsos positivos de SCOPE, y checklist de tests huecos en dispatches de coverage** — cuando `allowed_files.txt` no explica un archivo flaggeado (ediciones directas de `sdd-lead` fuera de cualquier dispatch), comparar el mtime del archivo contra la ventana de ejecución del job (timestamp en el propio `job_id` + `completed_at` de `result.handoff`) en vez de asumir violación. Además, para dispatches de "cerrar gap de coverage", releer el contenido real de los tests nuevos buscando antipatrones de padding (aserciones que pasarían igual sin el fix, fixtures que evitan la rama bajo prueba, mocks innecesarios de descriptores, fechas relativas al día de ejecución, tests tautológicos) — el número de coverage solo no es evidencia suficiente. Referencia: ciclo #15446 (countryclub, 2026-09-28). Skill `sdd-judge-agent`.
 
 ## Plugins (opencode.jsonc)
 
@@ -1552,7 +1817,7 @@ Ver skill `skill-sync-daemon` para documentación completa.
 
 | # | Fuente | Count | Prioridad |
 |---|--------|-------|-----------|
-| 1 | `src/.opencode/skills/` | 58 | 1 (primera fuente) |
+| 1 | `src/.opencode/skills/` | 108 | 1 (primera fuente) |
 | 2 | `src/.opencode/17.0/skills/` | 326 | 2 |
 | 3 | `src/.opencode/19.0/skills/` | 161 | 3 |
 | 4 | `src/.opencode/16.0/skills/` | 100 | 4 |
@@ -1560,7 +1825,7 @@ Ver skill `skill-sync-daemon` para documentación completa.
 
 ### Target Claude
 
-`~/.claude/skills/` — 798 dirs (795 symlinks + 3 real dirs)
+`~/.claude/skills/` — ~854 dirs (~851 symlinks + 3 real dirs)
 
 ### OpenRAG
 
@@ -1568,3 +1833,65 @@ Skills, versionadas y documentación se ingieren a OpenRAG para búsqueda semán
 Ver skill `openrag` para política de ingestion y credenciales.
 
 <!-- END Skill Sharing Infrastructure -->
+
+### Migration Audit Skills (2026-09-18)
+
+Skills creadas a partir de la auditoría de migración 17→19 (24 módulos auditados, 8 pasos por módulo).
+
+| Skill | Scope | Ubicación | Descripción |
+|-------|-------|-----------|-------------|
+| `odoo-migration-audit-methodology` | Global | `~/.config/opencode/skills/` | Metodología de 8 pasos para auditar migraciones de módulos Odoo |
+| `odoo-19-breaking-changes-checklist` | Global | `~/.config/opencode/skills/` | Checklist consolidado de breaking changes 17→19 (Python, XML, JS, SQL) |
+| `odoo-migration-classification-taxonomy` | Global | `~/.config/opencode/skills/` | Taxonomía de clasificación: MIGRADO-VIGENTE, EN-PROGRESO-CON-BUG, SIN-MIGRAR, etc. |
+| `odoo-19-pos-js-migration` | Project | `src/.opencode/skills/` | Guía completa de migración JS del POS: imports, APIs removidas, patrones de patch |
+| `odoo-cross-repo-module-tracking` | Project | `src/.opencode/skills/` | Cómo rastrear módulos across repos: integra-addons, odoo-venezuela, custom checkouts |
+| `odoo-approval-workflow-patterns` | Global | `src/.opencode/skills/` | Approval workflows: state machine, write guards, self-approval blocking, dual notification, activity lifecycle |
+| `odoo-dual-notification-patterns` | Global | `src/.opencode/skills/` | Dual-channel notifications: message_notify + forced second channel, mt_note, customer exclusion |
+
+### Migration Rules (R217-R231)
+
+| # | Regla | Scope | Fuente |
+|---|-------|-------|--------|
+| R217 | **Migration Audit 8-Step Methodology** — SIEMPRE seguir los 8 pasos: manifest, gap 17→19, syntax+XML IDs, PR chain, i18n, CSS/assets, classification, write report | Global | 24 módulos auditados |
+| R218 | **POS JS API Breaking Changes Odoo 19** — `@point_of_sale/app/store/models` REMOVIDO, `Product.get_pricelist_item()` REMOVIDO, `TicketScreen._onDoRefund()` REMOVIDO, `ErrorPopup`→`AlertDialog`, `DiscountButton`→`PosStore.applyDiscount`. Requiere reescritura completa (~8-16h por módulo). | Module | pos_commissions, pos_discount, subsidiary_pos_hr |
+| R219 | **XML Inheritance tree→list Migration Risk** — Cuando una vista target renombra `<tree>` a `<list>`, el `inherit_id` que referencia el viejo XML ID (ej. `product_pricelist_item_tree_view`) ROMPE la herencia. SIEMPRE verificar que el target existe en 19.0. | Module | costs_matrix (CRITICAL) |
+| R220 | **i18n PO Header Staleness Detection** — Archivos `.po` copiados de 17.0 sin re-export mantienen header `Odoo Server 17.0+e`. Regenerar con `odoo --i18n-export` contra base 19.0. | Module | Múltiples módulos |
+| R221 | **Cross-Repo Module Tracking** — Módulos viven en repos distintos: `integra-addons-19.0` (Binaural), `odoo-venezuela-19.0` (l10n_ve_*), `custom/<client>/` (checkouts). Verificar existencia en TODOS los repos antes de asumir que un módulo "no existe". | Project | 239 módulos totales |
+| R222 | **Migration Classification Taxonomy** — Usar clasificación estándar: MIGRADO-VIGENTE (CERO/deuda técnica/deuda CRÍTICA), EN-PROGRESO-CON-BUG, EN-PROGRESO-PR, SIN-MIGRAR, NO-REQUIERE, NO-EXISTE, NOT IN SHARED POOL. | Global | Taxonomía R4 |
+| R223 | **Odoo 19 group_operator→aggregator** — `fields.Float(group_operator="avg")` DEBE ser `fields.Float(aggregator="avg")` en 19.0. Causa `ValueError` en registro de campos si no se migra. Aplica a TODOS los report models (sale.report, purchase.report, account.invoice.report). | Module | margin (6 fields), 3 report models |
+| R224 | **Odoo 19 SQL() Class for Report Models** — `_select()` y `_group_by()` en report models DEBEN retornar objetos `SQL()`, NO strings. `from odoo.tools import SQL`. Sin esto, los reportes crash con TypeError. | Module | location_report, margin, 3+ report models |
+| R225 | **Odoo 19 currency_table→account_currency_table** — El alias SQL para la tabla de tasas de cambio en `sale.report` y `purchase.report` cambió de `currency_table` a `account_currency_table`. Usar el viejo alias causa SQL error en pivot/graph views. | Module | margin (sale_report.py) |
+| R226 | **Approval Workflow Pattern** — Flujo de aprobación con state machine (Selection: none→requested→approved/rejected), audit fields (requested_by, decided_by, dates), computed visibility booleans con `@api.depends_context("uid")`, y self-approval blocking. Aplica a CUALQUIER modelo Odoo que requiera aprobación humana antes de permitir una acción (editar precios, confirmar órdenes, publicar contenido). Skill: `odoo-approval-workflow-patterns`. | Global | TA-82205 country_invoice |
+| R227 | **Write Guard Pattern** — Bloqueo de escritura vía `write()` override en AMBOS modelos (padre e hijo). El guard en el padre previene bypass vía `move.write({'line_ids': [(1, id, vals)]})`; el guard en el hijo previene bypass vía wizards/RPC directos. Usar context key `__approval_write__` para bypass del sistema. El guard DEBE examinar TODAS las operaciones Command (op=0 a op=6): op=0 (CREATE con locked field), op=1 (UPDATE con locked field), op=2/3 (DELETE/UNLINK remueven línea), op=5/6 (CLEAR/SET reemplazan todas las líneas). Ver R233 para detalle completo. Skill: `odoo-approval-workflow-patterns` Pattern 4-5. | Global | TA-82205 country_invoice |
+| R228 | **Dual Notification Pattern** — Notificaciones que DEBEN llegar por AMBOS canales (Discuss inbox + email). Usar `message_notify()` para el canal preferido, luego `mail.message.create()` + `_notify_thread_by_inbox()`/`_notify_thread_by_email()` para forzar el otro canal. NUNCA usar `message_post()` para el follow-up (colisiona con auto-notificación de followers). Subtype `mt_note` para que nunca llegue al cliente. Skill: `odoo-dual-notification-patterns`. | Global | TA-82205 country_invoice |
+| R229 | **Customer Exclusion en Notificaciones** — El partner externo (cliente) NUNCA debe recibir notificaciones de flujos internos (aprobaciones, cambios de estado, etc.). Tres capas de protección: (1) `message_notify()` solo con partners de usuarios internos, (2) `mt_note` subtype en follow-up messages, (3) `message_post()` sin `partner_ids`. Verificar con query SQL que el customer partner tiene 0 notificaciones en `mail_notification`. Skill: `odoo-dual-notification-patterns`. | Global | TA-82205 country_invoice |
+| R230 | **mail.activity Lifecycle** — Para flujos con múltiples aprobadores: schedule UNA activity POR aprobador (cada uno ve su to-do), close TODAS las activities **del tipo aprobación** en approve/reject con `action_done()` (NO `action_unlink()`). **SIEMPRE filtrar por `activity_type_id`** en el dominio de búsqueda — sin este filtro, se cierran activities no relacionadas (meetings, calls, etc.) que existan en el mismo registro. Activity type: `mail.mail_activity_data_todo` (o el custom definido para el flujo de aprobación). Las activities complementan las notificaciones: son visibles en el Dashboard sin importar el `notification_type` del usuario. Skill: `odoo-approval-workflow-patterns` Pattern 10. | Global | TA-82205 country_invoice |
+| R231 | **Dual Delivery Verification** — Para verificar que la notificación dual funciona: query `mail_notification` agrupando por `notification_type` por cada `mail_message_id`. Cada usuario interno DEBE tener exactamente 2 rows (inbox + email). Customer partner DEBE tener 0 rows. Subtype de los messages DEBE ser `mt_note` o `NULL`. Usar `docker exec db-pg16 psql` o el MCP `postgres-db` para verificación. Skill: `odoo-dual-notification-patterns` Verification Queries. | Global | TA-82205 country_invoice |
+| R232 | **Bashrc Modification Safety** — CUALQUIER modificación programática de `~/.bashrc` (sed, awk, manual) DEBE seguir el patrón: (1) backup con timestamp (`cp "$BASHRC" "${BASHRC}.bak.$(date +%s)"`), (2) sed con pattern exacto (`^export VAR=`), (3) validación post-write con `grep -q`, (4) restore automático si falla. NUNCA ejecutar durante sesión interactiva (solo systemd/service). Nunca loggear valores completos de variables sensibles (API keys, passwords) — usar `${VAR: -8}` para masking. Skill: `devops-systemd-tooling`. | Global | odoo-apikey-renewal |
+| R233 | **Write Guard Command Completeness** — Todo guard de escritura en x2many que valide campos bloqueados DEBE examinar TODAS las 7 operaciones Command (op=0 a op=6), no solo op=1 (UPDATE). Un guard que solo chequea op=1 se bypasea con: op=0 (CREATE con valor bloqueado), op=2 (DELETE remueve la línea con precio), op=5 (CLEAR reemplaza todas las líneas), op=6 (SET reemplaza todas las líneas). La función `_line_commands_touch_locked_field()` o equivalente DEBE iterar cada tupla de comando y verificar: op=0 → chequear `vals` por campos bloqueados; op=1 → chequear `vals`; op=2/3 → la línea eliminada tenía el campo bloqueado; op=5/6 → tratar como DELETE-all + CREATE-all. Skill: `odoo-approval-workflow-patterns` Pattern 4. | Global | PR #254 country_invoice |
+| R234 | **reply_to=False con message_type no-thread** — Al crear `mail.message` directamente via `mail.message.create()` (NO `message_post()`) con `message_type` igual a `"user_notification"` o cualquier tipo no-thread, DEBE pasar `reply_to=False` explícitamente. `is_thread_message()` retorna False para tipos no-thread, causando que `_get_reply_to()` produzca un recordset vacío y lance `KeyError` al indexar `[res_id]`. El patrón dual-channel (`odoo-dual-notification-patterns`) con `message_type="notification"` (que SÍ es thread type) NO se afecta. Aplica a cualquier `mail.message.create()` custom con `message_type` fuera de `("notification", "comment")`. Skill: `odoo-dual-notification-patterns`. | Global | PR #254 country_invoice |
+| R250 | **Odoo 19: type='product' eliminado** — En Odoo 19, `type='product'` ya NO existe. Tipos válidos: `consu` (Bienes), `service`, `combo`. Para productos almacenableables usar `type='consu'` + `is_storable=True` explícito al crear. El stock quant constraint verifica `product_id.is_storable`, NO `type='product'`. Tests que creen productos con stock DEBEN usar este patrón. `is_storable` default es `False` — el compute solo lo resetea a False para tipos no-consu, NO lo pone en True. Skill: `odoo-19-breaking-changes-checklist`. | Global | PR #2850 binaural_product_catalog |
+| R251 | **Paridad de métodos de exportación en bridges** — Cuando el core define múltiples métodos de exportación/acción (PDF, XLS, etc.) y los puentes usan hook methods, verificar que TODOS los métodos reciban los mismos datos resueltos. Un puente que sobreescribe `_get_filter_product_sets()` resuelve productos para `print_report()` pero `print_report_xls()` puede no invocar la resolución. Patrón: si el core tiene `print_report()` + `print_report_xls()`, ambos DEBEN llamar `_resolve_products_from_filters()` cuando `product_ids` está vacío. Skill: `odoo-bridge-module-independence-19.0`. | Global | PR #2850 binaural_product_catalog |
+| R252 | **Multi-company: búsquedas ORM con company_id** — Búsquedas ORM sobre modelos con campo `company_id` DEBEN incluir `('company_id', 'in', [self.env.company.id, False])` para backward compat con registros legacy sin company_id (NULL). Aplica a `stock.quant`, `product.catalog`, `ir.property`, y cualquier modelo multi-compañía. El patrón `[False, company_id]` es consistente con las record rules de Odoo (`multi_company_rules.xml`). Skill: `binaural-product-catalog-19.0`. | Global | PR #2850 binaural_product_catalog |
+| R253 | **TransientModel: limitations de wizard_snapshot** — Los wizards TransientModel son vacuumed por sesión. `wizard_snapshot` (JSON) captura el estado completo para regeneración. Si un modelo base (ej. `product.catalog`) tiene `company_id` pero el wizard NO tiene ese campo, agregarlo requiere schema change (nuevo campo en el wizard). Mientras tanto, la búsqueda del wizard por `catalog_name` en `show_catalog()` NO puede filtrar por compañía — es una inconsistencia conocida de bajo riesgo (wizards son session-scoped, snapshot carry full state). Skill: `binaural-product-catalog-19.0`. | Project | PR #2850 binaural_product_catalog |
+
+### Infrastructure Maintenance Rules (R254-R259)
+
+| # | Regla | Scope | Fuente |
+|---|-------|-------|--------|
+| R254 | **Docker orphan detection via instances.json** — `instances.json` es la source of truth. Cualquier imagen Docker cuyo nombre NO matchee una instancia definida (pattern: `<instance_name>:<odoo_version>`) es huérfana y DEBE eliminarse. Volúmenes huérfanos siguen el pattern `docker-multi_<instance>-{data,py,py3,web}`. Antes de eliminar, verificar con `docker ps -a` que no haya contenedores stopped usando esa imagen. Skill: `docker-filesystem-cleanup`. | Global | Limpieza 133GB session |
+| R255 | **custom/ orphan detection** — Directorios en `src/custom/` que NO tienen entrada correspondiente en `instances.json` son huérfanos. Clasificar antes de eliminar: (1) repos clonados sin instance → verificar si son source de alguna instance, (2) directorios vacíos o sin `.git` → eliminar, (3) worktrees de PRs cerrados → eliminar. Directorios con `__pycache__` owned by root requieren `sudo rm -rf`. Skill: `docker-filesystem-cleanup`. | Global | 23 directorios eliminados |
+| R256 | **Filesystem cache cleanup hierarchy** — Limpiar en orden de mayor a menor impacto: (1) `.cache/uv/archive-v0/` (~19G, Python cache), (2) `.cache/codebase-memory-mcp/` (~7.6G, re-indexable), (3) `Downloads/*.zip` (~7.4G, backups temporales), (4) `.cache/ms-playwright/` (~1.3G, requiere reinstalación), (5) `.cache/google-chrome/` + `.cache/mozilla/` (~2.1G, browser cache), (6) `.local/share/claude/versions/` (~893M, old CLI), (7) `.npm/` (~1.5G, `npm cache clean --force`). NUNCA eliminar `~/.claude/skills/`, `~/.claude/agents/`, ni `~/.local/share/fonts/`. Skill: `docker-filesystem-cleanup`. | Global | Limpieza 70GB filesystem |
+| R257 | **Playwright reinstall after cache purge** — Si se limpió `.cache/ms-playwright/`, DEBE ejecutarse `npx playwright install --with-deps chromium firefox webkit` para restaurar navegadores. Sin esto, Playwright MCP (`--browser=chrome --executable-path=/usr/bin/google-chrome-stable`) y tests E2E fallan silenciosamente. Verificar con `npx playwright --version` y `ls ~/.cache/ms-playwright/` post-reinstall. Skill: `docker-filesystem-cleanup`. | Global | Post-purge verification |
+| R258 | **Disk space monitoring thresholds** — Monitorear `/home` partition periódicamente: <70% OK, 70-85% WARNING (revisar Downloads/.cache), 85-95% CRITICAL (ejecutar limpieza completa), >95% EMERGENCY (todo + considerar eliminar `docker-odoo/` si existe como directorio alternativo de ~6.9G). Usar `df -h /home` y `du -h --max-depth=1 ~/ 2>/dev/null | sort -rh | head -10`. Skill: `docker-filesystem-cleanup`. | Global | Monitoreo preventivo |
+| R259 | **Stale docker-compose.generated.yml** — `docker-compose.generated.yml` en la raíz del workspace es generado por `./odoo build` y puede quedar stale referenciando instancias eliminadas. Si `instances.json` cambió y el compose no se regeneró, el compose puede causar confusiones al revisar el estado del sistema. Regenerar con `./odoo build` o eliminar manualmente si no se usa. Skill: `docker-filesystem-cleanup`. | Global | Post-cleanup detection |
+
+### OpenRAG & codebase-memory-mcp Rules (R260-R264)
+
+| # | Regla | Scope | Fuente |
+|---|-------|-------|--------|
+| R260 | **OpenRAG MCP ingest tool BROKEN (HTTP 422)** — `openrag_openrag_ingest` retorna `{'type': 'missing', 'loc': ['body', 'file'], 'msg': 'Field required'}` sin importar el formato de input. El tool espera contenido de archivo como bytes, no paths. **Workaround**: usar script directo `cat file.md \| python3 /home/binlp011/openrag/scripts/ingest_document.py --text - --name "odoo-skills/<cat>/<name>"`. Skill: `openrag`. | Global | Session 2026-09-25 |
+| R261 | **OpenRAG embedding model name MUST include `:latest`** — `ingest_document.py` línea 37 usa `EMBEDDING_MODEL = "nomic-embed-text"` (sin `:latest`) pero Ollama tiene `nomic-embed-text:latest`. Embeddings se almacenan en campo `chunk_embedding_nomic_embed_text` (float) en vez de `chunk_embedding_nomic_embed_text_latest` (knn_vector, jvector, 768). El backend registry solo reconoce `nomic-embed-text:latest` → `UnknownEmbeddingProvider` → search degradado a solo-texto. **Fix**: cambiar default en `ingest_document.py` a `nomic-embed-text:latest`, o pasar `--embedding-model nomic-embed-text:latest`. Para docs existentes: `update_by_query` para fix `embedding_model` + copiar vectores al campo knn correcto. Skill: `openrag-embedding-fix`. | Global | Session 2026-09-25 |
+| R262 | **OpenRAG `_is_exact_token_query()` kills queries with numbers** — `search_service.py` función `_is_exact_token_query()` retorna `True` para CUALQUIER query con letras Y dígitos. Queries con números de versión ("odoo 16 core ORM") siempre retornan 0 resultados. **Fix**: agregar word-count guard (`len(words) > 4` → False). Archivo: `/home/binlp011/openrag/src/services/search_service.py:27-42`, copiar a container vía `docker cp` + restart. Skill: `openrag-embedding-fix`. | Global | Session 2026-09-25 |
+| R263 | **OpenRAG backend source NOT volume-mounted** — `/app/src/` en el container está baked into la imagen. Para aplicar cambios de código: (1) editar en host `/home/binlp011/openrag/src/`, (2) `docker cp` al container, (3) `docker restart openrag-backend`. Los cambios NO persisten en recreación del container. Skill: `openrag`. | Global | Session 2026-09-25 |
+| R264 | **codebase-memory-mcp: 22 repos indexados across 16.0-19.0** — Repos indexados: integra-addons-{16.0,17.0,18.0,19.0}, integra-addons-l10nve-{17.0,18.0}, integra-addons-maintenance-{17.0,19.0,l10nve_17.0}, odoo-venezuela-{16.0,17.0,18.0,19.0}, odoo-venezuela-maintenance-{17.0,19.0}, third-party-addons-{16.0,17.0,18.0,19.0} + 3 worktrees. Project IDs: `home-binlp011-sources-<repo-name>`. Re-index after git pull: `codebase-memory-mcp cli detect_changes '{"project":"<name>"}'` then `index_repository` if changed_count > 0. Skills `codebase-memory-mcp-usage` para referencia completa. | Global | Session 2026-09-25 |

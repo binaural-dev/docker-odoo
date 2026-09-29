@@ -10,9 +10,9 @@ sharing a common pool of addon repos, generated into Docker Compose via Python g
 
 **Before doing anything else, read the two authoritative rules files — do not duplicate their content here:**
 - `/home/binlp011/sources/docker-multi/AGENTS.md` — repo-root rules: workspace structure, skill inventory summary,
-  Docker instance docs, ~184 numbered "Reglas Clave" (versioning, module-reuse search order, JS `_t()` conventions,
-  `warehouse_id` context, `float_compare`, recordset safety), **FIX-032 to FIX-057** paired code-review lessons
-  (17.0/19.0), **core-modification guardrails** (never edit `odoo-*.0/` or `enterprise-*.0/`, enforced by CI
+  Docker instance docs, ~259 numbered "Reglas Clave" (versioning, module-reuse search order, JS `_t()` conventions,
+  `warehouse_id` context, `float_compare`, recordset safety), **FIX-032 to FIX-073** (17.0) / **FIX-097** (19.0)
+  paired code-review lessons, **core-modification guardrails** (never edit `odoo-*.0/` or `enterprise-*.0/`, enforced by CI
   git-diff check), MCP server docs, multi-currency/l10n_ve rules, compute-cache/xpath rules. The tail of the file
   (from "Conductor Methodology" onward) is a historical changelog of self-improvement loops — not actionable.
 - `/home/binlp011/sources/docker-multi/src/Agents.md` — the more current combined index for work under `src/`:
@@ -63,6 +63,11 @@ Key subcommands: `build` (regenerate + `docker compose build`), `start`, `stop`,
 (stash/checkout/pull a `src/custom/<repo>`). See `readme.md` for the full command table and FAQ (adding an
 instance, sharing a DB across instances, running two instances of the same version).
 
+Agent sessions (no TTY): `./odoo update` shells out to `docker exec -it` and silently does nothing — run the same
+`docker exec -u root <container> odoo --stop-after-init ... -u <mods>` without `-it` (AGENTS.md rule 239). To restore
+a client backup into a worktree instance for manual/upgrade testing, use skill `binaural-restore-client-backup`
+(AGENTS.md rules 238/240).
+
 Instances share one Docker image per Odoo version; all mount `./src` and filter visible addons per-container
 via the `INSTANCE_ADDONS` env var.
 
@@ -77,6 +82,8 @@ via the `INSTANCE_ADDONS` env var.
   recommends using `scripts/run_tests.sh` instead of copy-pasting from it. `--http-tests` has a known caveat of
   3 expected `at_install` HttpCase failures.
 - **Higiene de bases de datos**: el clúster Postgres (`db-pg16`) es compartido entre casi todas las instancias y contiene bases reales de otros clientes junto a las de test — ver AGENTS.md regla 139 antes de borrar cualquier base.
+- E2E with Playwright: if the Playwright MCP server disconnects mid-flow, continue with Node Playwright
+  (`npx --no-install playwright --version`; skill `playwright-mcp-usage` §Troubleshooting, AGENTS.md rule 248).
 
 ## Linting / pre-commit
 
@@ -111,49 +118,34 @@ Codebase Memory section — connect to them rather than re-implementing equivale
 - **`openrag`** — proxies to an externally-run RAG stack (Ollama, OpenSearch, Langflow, Docling Serve — none of
   which are started by `./odoo`; see AGENTS.md's "Stack Tercerizado" notes) for semantic search. Also hosts the
   long-tail skill catalog — see "Skills: where to look" below.
+- **Odoo record access (`plugin:core:odoo` / `claude_ai_Binaural_MCP`)** — two different MCP
+  connectors expose read/search/post_message over Binaural's central Odoo (`project.task`,
+  `helpdesk.ticket`, etc.), not documented above historically. `plugin:core:odoo` is the richer one
+  (supports `body_is_html`, `partner_ids`, real Odoo mentions) but was **confirmed broken** in a
+  2026-09-22 session (`get_current_context`/`post_message` return "Invalid credentials or
+  insufficient permissions") — verify with `get_current_context` before relying on it, don't assume
+  it works. `claude_ai_Binaural_MCP` works but is plain-text only (no `partner_ids`/HTML, no
+  `mail.followers` query). **Always post to a task/ticket chatter via skill
+  `core:escribir-en-chatter`** (draft-then-confirm gate, links PRs as `github_pr_ids` records,
+  resolves real mentions) — never call `post_message` directly ad-hoc. Ver AGENTS.md regla 228.
 
 Don't confuse these with the unrelated Odoo addon module named `mcp_server` found under some
 `src/custom/*/third-party-addons/` trees — that's an Odoo module, not agent tooling.
 
 ## Skills: where to look
 
-**Current state (verified 2026-08-11) diverges from the original design below**: `skill-sync-daemon.sh`
-currently symlinks ALL 5 sources unconditionally (project, 17.0, 19.0, 16.0, global — ~807 skills total,
-including ~324 versioned 17.0/19.0/16.0 catalogs) into `~/.claude/skills`, with no exclusion mechanism.
-The curation described in the rest of this section — a small always-loaded kept set plus a long-tail
-ingested only into OpenRAG — is **not actually enforced today**; it remains the intended target design
-(and still describes correctly which skills the OpenRAG `odoo-skills-long-tail` filter covers), but
-`~/.claude/skills` is not currently pruned to match it. Fixing the daemon/pruning is a separate
-infrastructure task, not something to assume has already happened. See AGENTS.md rule 125 for the
-verified-current daemon behavior.
+`~/.claude/skills` is **curated** (since 2026-09-25, ~250 symlinks, down from 878): project skills
+(`src/.opencode/skills/`) and global skills (`~/.config/opencode/skills/`) are linked, minus the regexes in
+`src/scripts/skill-sync-exclude.txt`; from the versioned catalogs (`src/.opencode/{16.0,17.0,19.0}/skills/`)
+only the names in `src/scripts/skill-sync-versioned-allowlist.txt` are linked. To promote a versioned skill
+to the always-loaded set, add it to the allowlist and run `src/scripts/skill-sync-daemon.sh --once`. See skill
+`skill-sync-daemon`. Why: every listed skill costs tokens on every turn. With 878 skills, sessions started
+at a median of ~87k tokens, and only 4 of the 593 versioned skills had ever been invoked.
 
-Original/intended design: `~/.claude/skills` should hold only the ~70 highest-frequency skills
-(Binaural/Odoo-19 project skills, SDD multi-agent skills, and the
-`*-master-reference`/`*-core-guardrails`/`oca-1{7,9}-index` synthesis skills) that auto-discover normally.
-The other ~614+ skills (deep versioned 17.0/19.0 catalogs — including two full PostgreSQL/BD deep-dive
-series, one per Odoo version (`odoo-db-*-17.0` and `odoo-db-*-19.0`, ~20 skills each) — OCA phase skills
-F0-VIII, per-module view-pattern analyses like `account-a/b/c-mods-*` and `sale-subscription-views-*`, and
-generic non-Odoo patterns like React/Angular/AWS) are meant to live only in `openrag`'s `documents`
-OpenSearch index (filenames prefixed `odoo-skills/<name>.md`) to avoid an ~8-15K token/turn recurring cost
-from listing hundreds of skills every turn. New skill batches should still follow the same one-by-one
-ingestion pattern (see `openrag`'s ingestion notes below) rather than being added to `~/.claude/skills`
-directly, unless they're core/high-frequency enough to earn a spot in the kept set — and unversioned
-project skills (`src/.opencode/skills/`) and global skills (`~/.config/opencode/skills/`) are, by daemon
-design, always in the kept set regardless of frequency (e.g. `binaural-docker-odoo`,
-`binaural-submodule-maintenance-merge`). `odoo-combo-product-validation-19.0` (2026-08-03, combo-product
-tax-validation bug class) earned a core spot: it's a cross-module recurring pattern referenced from
-`odoo-code-review-19.0` (FIX-059) and `l10n-ve-accountant`, likely to recur on any future PR touching
-`taxes_id`/`supplier_taxes_id`.
-
-**Before assuming a very specific skill doesn't exist, search for it with `mcp__openrag__openrag_search`** —
-a knowledge filter named `odoo-skills-long-tail` (id `94ecfff6-a584-4772-a8df-cdae572ad5e2`) scopes searches to
-exactly this migrated set if you want to exclude unrelated documents already in that OpenSearch index (generic
-PDFs unrelated to this project). Ingestion quirk if re-ingesting more content the same way: the embedding
-vector must be written to the `chunk_embedding_nomic_embed_text_latest` field (768-dim `knn_vector`) — NOT the
-field the stock `~/openrag/scripts/ingest_document.py` naively computes for `EMBEDDING_MODEL=nomic-embed-text`
-(`chunk_embedding_nomic_embed_text`, which is mistakenly mapped as a plain `float`, not `knn_vector`, in this
-index) — and documents need `owner_email`/`connector_type`/`allowed_users`/`allowed_groups` fields matching the
-"anonymous/local" shape or the backend's search silently excludes them.
+**Before assuming a very specific skill doesn't exist, search for it with `mcp__openrag__openrag_search`**
+using the knowledge filter `odoo-skills-long-tail` (id `94ecfff6-a584-4772-a8df-cdae572ad5e2`), or read its
+`SKILL.md` directly under the versioned catalog. For the ingestion rules for adding skills to that index, see
+skill `openrag`.
 
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 
@@ -200,12 +192,9 @@ that file doesn't need to change. `odoo-lsp` itself has no standalone CLI diagno
 `init`/`tsconfig`/`self-update` subcommands plus the bare stdio LSP server), so this plugin registration is the
 only way to get its diagnostics into Claude Code.
 
-**Falsos positivos conocidos (confirmados 2026-08-21)**: el diagnóstico puede marcar
-`"<modelo> is not a valid model name"` o `"Model '<modelo>' has no property '<campo>'"` para
-modelos/campos que SÍ existen pero viven en `enterprise-17.0`/`enterprise-19.0` o en addons
-`l10n_ve_*` que el índice local de `odoo-lsp` no alcanza a resolver completamente (ej.
-`sale.subscription.pricing` de `enterprise-17.0/sale_subscription`, o
-`res.company.currency_foreign_id` de `odoo-venezuela-17.0/l10n_ve_rate`). Antes de "corregir" código
-que ya funciona en runtime por un error de este tipo, confirmar con
-`grep -rn "_name = '<modelo>'"` en el addon-pool correspondiente — si el modelo/campo existe en el
-código fuente real, es un hueco del índice del LSP, no un bug.
+**Falsos positivos conocidos (2026-08-21, extendido 2026-09-16 ticket #13019)**: el diagnóstico puede marcar
+`"<modelo> is not a valid model name"` / `"Model '<modelo>' has no property '<campo>'"` sobre modelos/campos
+que sí existen: de enterprise o `l10n_ve_*` (ej. `sale.subscription.pricing`, `res.company.currency_foreign_id`),
+pero **también de core** (`calendar.event.start`, `res.partner.company_id`, `res.users.tz`). Antes de "corregir"
+código que corre, confirmar con `grep -rn "_name = '<modelo>'"` / `grep -rn "<campo> = fields\."` en el pool
+correspondiente: si existe en el fuente real, es un hueco del índice del LSP, no un bug.
