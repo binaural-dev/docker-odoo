@@ -58,9 +58,14 @@ odoo_version, external_port, database ref, odoo_config ref, addon paths, optiona
 from `instances.json`.
 
 Key subcommands: `build` (regenerate + `docker compose build`), `start`, `stop`, `restart`, `bash <instance>`
-(root shell in container), `logs`, `list`, `remove` (destructive, confirms), `fix-files` (filestore perms),
-`psql`, `pw` (reset user password), `update -u <modules>`, `init` (verify/clone missing addon paths), `sync`
-(stash/checkout/pull a `src/custom/<repo>`). See `readme.md` for the full command table and FAQ (adding an
+(root shell in container), `shell` (structured ORM ops/REPL via `scripts/odoo-shell` — `create`/`write`/`unlink`
+COMMIT by default, use `--no-commit` for a dry run; not the same as Odoo's own interactive `odoo shell`, see
+skill `binaural-odoo-shell-live-verification`), `logs`, `list`, `remove` (destructive, confirms), `fix-files`
+(filestore perms), `psql` (`--ps`/`remove --ps` for break-glass access across a whole Postgres service),
+`provision-role <instance>` (dedicated Postgres role + DB isolation, see skill `binaural-docker-odoo`), `pw`
+(reset user password), `update -u <modules>`, `init` (verify/clone missing addon paths), `sync` (stash/checkout/
+pull a `src/custom/<repo>`), `apk` (build TWA APK/AAB), `restore` (restore a client backup zip, see skill
+`binaural-restore-client-backup`). See `readme.md` for the full command table and FAQ (adding an
 instance, sharing a DB across instances, running two instances of the same version).
 
 Agent sessions (no TTY): `./odoo update` shells out to `docker exec -it` and silently does nothing — run the same
@@ -114,7 +119,7 @@ Codebase Memory section — connect to them rather than re-implementing equivale
   back to `grep`/`glob` only for: literal strings/error messages, non-code files (Dockerfiles, shell scripts,
   configs), or when the MCP tools return insufficient results.
 - **`postgres-db`** — `scripts/mcp_servers/postgres_server.py`, connects to `postgresql://odoo:odoo@localhost:5432/postgres`,
-  read-only (`MCP_ALLOW_WRITE=false`). Tools: query/execute/list_databases/list_tables/describe_table/search_tables/explain. Nota: si el contenedor `db-pg16` no publica el puerto 5432 al host (`docker port db-pg16` vacío), este MCP no puede conectar — ver AGENTS.md regla 188 y skill `postgresql-db-work` para el fallback (`docker exec db-pg16 psql`) y para escrituras vía ORM (`odoo shell`).
+  read-only (`MCP_ALLOW_WRITE=false`). Tools: query/execute/list_databases/list_tables/describe_table/search_tables/explain. Nota: si el contenedor `db-pg16` no publica el puerto 5432 al host (`docker port db-pg16` vacío), este MCP no puede conectar — ver AGENTS.md regla 188 y skill `postgresql-db-work` para el fallback (`docker exec db-pg16 psql`) y para escrituras vía ORM (`odoo shell`). Nota adicional: si alguna instancia de ese servicio ya fue aprovisionada con `./odoo provision-role`, el rol `odoo` (bootstrap) puede estar en NOLOGIN en reposo — un fallo de conexión/autenticación en ese caso no es necesariamente el caveat del puerto, ver AGENTS.md regla 261.
 - **`openrag`** — proxies to an externally-run RAG stack (Ollama, OpenSearch, Langflow, Docling Serve — none of
   which are started by `./odoo`; see AGENTS.md's "Stack Tercerizado" notes) for semantic search. Also hosts the
   long-tail skill catalog — see "Skills: where to look" below.
