@@ -1075,7 +1075,13 @@ def main():
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
     db_user, _db_password = resolve_instance_db_creds(inst_conf, db_conf)
-    bootstrap_user, bootstrap_password = resolve_db_bootstrap_creds(db_conf)
+    # ``resolve_db_config`` ya sobreescribió user/password con el rol dedicado
+    # de la instancia, así que el bootstrap (superuser del cluster) hay que
+    # resolverlo contra la conf cruda del servicio -- si no, cae al fallback y
+    # termina siendo el propio rol de la instancia, que no puede auto-otorgarse
+    # SUPERUSER ("permission denied to alter role").
+    service_db_conf = config["databases"][inst_conf["database"]]
+    bootstrap_user, bootstrap_password = resolve_db_bootstrap_creds(service_db_conf)
     db_port = get_db_internal_port(db_conf)
     container_name = f"odoo-{instance}"
     db_service_name = inst_conf["database"]
@@ -1094,7 +1100,7 @@ def main():
         psql_bin=psql_bin,
         bootstrap_user=bootstrap_user,
         bootstrap_password=bootstrap_password,
-        bootstrap_db_conf=db_conf,
+        bootstrap_db_conf=service_db_conf,
         bootstrap_db_service_name=db_service_name,
         bootstrap_db_container=db_container,
         verbose=args.verbose,
