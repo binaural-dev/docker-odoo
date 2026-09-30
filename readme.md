@@ -254,6 +254,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
 | `provision-role <instance>` | Aprovisiona el rol de Postgres dedicado de una instancia: crea el rol si no existe, transfiere el ownership de toda base que matchee su `db_filter`, y revoca `CONNECT` de `PUBLIC` sobre ellas. Requiere `db_user`/`db_password` y un `db_filter` específico ya definidos en `instances.json`. Puede pedir una ventana breve de mantenimiento de todo el servicio de Postgres (pide confirmación antes). Ver "Instancias que comparten un mismo servicio de Postgres" arriba. |
+| `agent [install\|on\|off\|status\|token\|logs]` | Agente HTTP para `micro_saas` (vive en `.resources/docker-odoo-agent`, desactivado hasta instalarlo). Sin subcomando lo activa o lo desactiva según su estado. Ver "`./odoo agent`" más abajo. |
 
 ### Ejemplos
 
@@ -523,6 +524,25 @@ Notas:
 - Al terminar genera `assetlinks.json` (huella SHA-256 del certificado)
   para pegarlo en Ajustes → Aplicación instalable del sitio; sin eso la
   TWA arranca con la barra de URL de Chrome encima.
+
+### `./odoo agent` — Agente HTTP para `micro_saas`
+
+El agente ([binaural-dev/docker-odoo-agent](https://github.com/binaural-dev/docker-odoo-agent)) expone una API con tokens para que el módulo `micro_saas` gestione las instancias de este checkout (leer/editar `instances.json`, build/start/stop, clonar y actualizar repos) sin montar `docker.sock` en ningún contenedor. Viene incluido en `.resources/docker-odoo-agent`, pero **no corre nada hasta instalarlo**.
+
+```bash
+./odoo agent install                  # venv, var/agent.env, servicio (systemd en Linux, LaunchAgent en macOS) y un token inicial
+./odoo agent install --check          # solo informa qué haría
+./odoo agent install --port 9100 --token-name general-18 --open-firewall
+./odoo agent                          # lo activa si está apagado, o lo apaga si está activo
+./odoo agent on | off                 # explícito; 'off' también quita el arranque automático
+./odoo agent status                   # servicio y /health
+./odoo agent token create <nombre> [--read-only] | token list | token revoke <nombre|id>
+./odoo agent logs [n]
+```
+
+`install` acepta los mismos flags que `install.sh` (ver `./odoo agent install --help`) y se puede repetir para aplicar cambios del agente tras un `git pull`. Configuración, tokens y auditoría quedan en `.resources/docker-odoo-agent/var/` (ignorado por git). La guía completa está en `.resources/docker-odoo-agent/INSTALL.md`.
+
+El agente antes vivía en un repo aparte (`binaural-dev/docker-odoo-agent`); ahora es parte de docker-odoo. Si estaba instalado desde ese clon, `./odoo agent status` avisa que el servicio apunta a otra copia, y `./odoo agent install` lo pasa a esta: copia los tokens y la auditoría de la instalación anterior (los tokens configurados en Odoo siguen valiendo) y reemplaza el servicio, que tiene el mismo nombre. Después se puede borrar el clon viejo.
 
 ### `scripts/precommit` — Linting sobre módulos Odoo
 

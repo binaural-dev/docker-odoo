@@ -41,10 +41,12 @@ COMPOSE_FILE = "docker-compose.generated.yml"
 
 
 def _docker_compose(*args):
-    """Run docker compose with the generated file."""
+    """Run docker compose with the generated file; returns its exit code."""
     cmd = f"docker compose -f {COMPOSE_FILE} {' '.join(args)}"
     print(cmd)
-    os.system(cmd)
+    status = os.system(cmd)
+    # os.system returns a wait status: exit code in the high byte
+    return 0 if status == 0 else (status >> 8) or 1
 
 
 def _get_instance_services(config, instance=None):
@@ -334,9 +336,17 @@ def build_odoo(config, no_cache, no_confirm=False):
     # 4. Build images
     print("\n=== Construyendo imágenes Docker ===\n")
     if no_cache:
-        _docker_compose("build", "--no-cache")
+        returncode = _docker_compose("build", "--no-cache")
     else:
-        _docker_compose("build")
+        returncode = _docker_compose("build")
+
+    # compose builds in parallel and cancels the rest when one image fails:
+    # without this the output ended in "Build completado" anyway, and the
+    # agent (micro_saas) reported the build as successful
+    if returncode != 0:
+        print(f"\n❌ Build fallido: 'docker compose build' terminó con código {returncode}. "
+              f"Revisa el primer 'failed to solve' de arriba.\n")
+        sys.exit(returncode)
 
     print("\n✅ Build completado.\n")
 
@@ -1534,6 +1544,14 @@ def main():
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
+    # Passthrough directo del subcomando agent: scripts/odoo-agent gestiona
+    # el agente HTTP de .resources/docker-odoo-agent y le pasa sus flags
+    # tal cual a install.sh, asi que se delega antes de parsear.
+    if len(sys.argv) >= 2 and sys.argv[1] == "agent":
+        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-agent")] + sys.argv[2:]
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
     parser = argparse.ArgumentParser(
         description="Multi-instance Odoo Docker management CLI."
     )
@@ -1789,6 +1807,15 @@ def main():
         help="Restaura una base de datos y filestore desde un ZIP. "
              "Uso: ./odoo restore <instancia> -z <zip> -d <db_destino> "
              "(ver ./odoo restore --help para el resto de flags)",
+    )
+
+    # agent: passthrough directo a scripts/odoo-agent antes de argparse
+    # (en main()). El subparser solo queda para listar el comando en el help.
+    subparsers.add_parser(
+        "agent",
+        help="Agente HTTP para micro_saas (.resources/docker-odoo-agent). "
+             "Uso: ./odoo agent install | ./odoo agent (activa/desactiva) | "
+             "./odoo agent status|on|off|token|logs",
     )
 
     args = parser.parse_args()
