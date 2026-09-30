@@ -1,0 +1,448 @@
+#!/usr/bin/env python3
+"""Restaura el acceso directo a la red interna del cliente (10.50.x.x)
+mientras una VPN de tunel completo (ProtonVPN, etc.) esta conectada, sin
+afectar el resto del trafico (que sigue yendo por la VPN, incluido el acceso
+a Claude).
+
+Que hace, en orden:
+  1. Detecta el sistema (macOS, Linux o Windows), la VPN activa y el gateway
+     de la red fisica (cada laptop puede tener uno distinto).
+  2. Revisa por donde sale hoy el trafico hacia la red interna. Si ya va por
+     la red fisica no toca nada; si va por la VPN o por otro gateway, pone
+     la ruta correcta.
+  3. Prueba por TCP los servicios del servidor de pruebas (SSH, Odoo, agente)
+     y explica el resultado. Si la VPN bloquea el trafico por encima de la
+     tabla de rutas (Kill Switch), lo dice y explica que cambiar: eso no se
+     arregla con rutas.
+
+Correr esto DESPUES de conectar la VPN, cada vez que te conectes: la ruta
+se pierde en cada reconexion. Agregar la ruta necesita permisos de
+administrador (sudo en macOS/Linux; en Windows, abrir la terminal "como
+Administrador").
+
+    fix-office-route               diagnostica y corrige la ruta
+    fix-office-route --check       solo diagnostica, no cambia nada
+    fix-office-route --gateway IP  usa ese gateway en vez de detectarlo
+"""
+import argparse
+import errno
+import platform
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+OFFICE_NETWORK = "10.50.0.0"
+OFFICE_PREFIX = 16
+OFFICE_MASK = "255.255.0.0"
+TEST_HOST = "10.50.27.76"
+# Servicios del servidor de pruebas: SSH, Odoo general-18, agente docker-odoo
+TEST_PORTS = (977, 8087, 9000)
+CLAUDE_URL = "https://api.anthropic.com/"
+CONNECT_TIMEOUT = 4
+
+# Palabras que delatan una interfaz virtual de VPN (para descartarla al
+# buscar el gateway real de la red local) en vez de la red fisica.
+VPN_HINTS_RE = re.compile(r"vpn|tap|tun|wireguard|proton|utun|ipsec|virtual|tunnel|wg\d|ppp", re.IGNORECASE)
+IP_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+
+# Errores que el sistema devuelve al instante cuando algo local (el Kill
+# Switch de la VPN o un firewall) impide que el paquete salga. Un host caido
+# o inalcanzable, en cambio, da timeout; un puerto cerrado, ECONNREFUSED.
+BLOCKED_ERRNOS = {
+    errno.EADDRNOTAVAIL,  # macOS: extension de VPN con "incluir todas las redes"
+    errno.EPERM,          # Linux: regla de nftables/iptables del Kill Switch
+    errno.EACCES,
+    errno.ENETUNREACH,
+    10013,                # Windows WSAEACCES: filtro WFP del Kill Switch
+    10049,                # Windows WSAEADDRNOTAVAIL
+    10051,                # Windows WSAENETUNREACH
+}
+REFUSED_ERRNOS = {errno.ECONNREFUSED, 10061}
+
+C_OK, C_WARN, C_ERR, C_B, C_0 = ("\033[32m", "\033[33m", "\033[31m", "\033[1m", "\033[0m") \
+    if sys.stdout.isatty() and platform.system() != "Windows" else ("", "", "", "", "")
+
+
+def step(title):
+    print("\n%s== %s%s" % (C_B, title, C_0))
+
+
+def ok(msg):
+    print("  %s✔%s %s" % (C_OK, C_0, msg))
+
+
+def warn(msg):
+    print("  %s!%s %s" % (C_WARN, C_0, msg))
+
+
+def fail(msg):
+    print("  %s✘%s %s" % (C_ERR, C_0, msg))
+
+
+def run(cmd):
+    print("  + %s" % " ".join(cmd))
+    return subprocess.run(cmd).returncode
+
+
+def _try(cmd, timeout=5):
+    """Corre un comando de diagnostico sin ruido y sin romper el script si
+    el binario no existe en esta maquina (ej. nmcli sin NetworkManager)."""
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=timeout)
+        return result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+
+
+def _powershell(script):
+    return _try(["powershell.exe", "-NoProfile", "-Command", script], timeout=15)
+
+
+# ----------------------------------------------------------------------
+# Deteccion: gateway fisico
+# ----------------------------------------------------------------------
+
+
+def detect_gateway_macos():
+    services = _try(["networksetup", "-listnetworkserviceorder"])
+    for iface in re.findall(r"Device: (\w+)", services):
+        if VPN_HINTS_RE.search(iface) or not _try(["ipconfig", "getifaddr", iface]):
+            continue  # interfaz de VPN o sin IP activa
+        gateway = _try(["ipconfig", "getoption", iface, "router"])
+        if IP_RE.match(gateway):
+            return gateway, iface
+    return None, None
+
+
+def detect_gateway_linux():
+    # Primero via NetworkManager (la mayoria de laptops Linux lo tienen).
+    devices = _try(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device", "status"])
+    for line in devices.splitlines():
+        parts = line.split(":")
+        if len(parts) < 3:
+            continue
+        device, dtype, state = parts[0], parts[1], parts[2]
+        if not state.startswith("connected") or dtype not in ("wifi", "ethernet"):
+            continue
+        gateway = _try(["nmcli", "-t", "-g", "IP4.GATEWAY", "device", "show", device])
+        if IP_RE.match(gateway):
+            return gateway, device
+
+    # Sin NetworkManager: cualquier ruta por defecto que no sea de la VPN
+    # (una VPN de tunel completo suele dejar la del router con otra metrica).
+    for line in _try(["ip", "route", "show"]).splitlines():
+        match = re.search(r"^default via (\S+) dev (\S+)", line)
+        if match and not VPN_HINTS_RE.search(match.group(2)):
+            return match.group(1), match.group(2)
+    return None, None
+
+
+def detect_gateway_windows():
+    # Get-NetIPConfiguration da nombres de propiedad en ingles sin importar
+    # el idioma de Windows (a diferencia del texto de "ipconfig /all").
+    script = (
+        "Get-NetIPConfiguration | Where-Object { "
+        "$_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' -and "
+        "$_.InterfaceDescription -notmatch 'VPN|TAP|WireGuard|Proton|Virtual|Tunnel' "
+        "} | Select-Object -First 1 | ForEach-Object { "
+        "$_.IPv4DefaultGateway.NextHop + '|' + $_.InterfaceAlias }"
+    )
+    out = _powershell(script)
+    gateway, _, iface = out.partition("|")
+    return (gateway, iface or None) if IP_RE.match(gateway) else (None, None)
+
+
+# ----------------------------------------------------------------------
+# Deteccion: VPN activa
+# ----------------------------------------------------------------------
+
+
+def detect_vpn(system):
+    """Nombre legible de la VPN conectada (o None)."""
+    if system == "Darwin":
+        for line in _try(["scutil", "--nc", "list"]).splitlines():
+            if "(Connected)" in line:
+                name = re.search(r'"([^"]+)"', line)
+                return name.group(1) if name else "VPN del sistema"
+        ifaces = re.findall(r"^(utun\d+|ipsec\d+|ppp\d+):.*\n(?:\s.*\n)*?\s+inet (\d+\.\d+\.\d+\.\d+)",
+                            _try(["ifconfig"]) + "\n", re.MULTILINE)
+        return ifaces[0][0] if ifaces else None
+    if system == "Linux":
+        for line in _try(["ip", "-o", "link", "show", "up"]).splitlines():
+            match = re.search(r"^\d+: ([^:@]+)", line)
+            if match and VPN_HINTS_RE.search(match.group(1)):
+                return match.group(1)
+        return None
+    if system == "Windows":
+        out = _powershell(
+            "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' -and "
+            "$_.InterfaceDescription -match 'VPN|TAP|WireGuard|Proton|Tunnel' } "
+            "| Select-Object -First 1 -ExpandProperty Name"
+        )
+        return out or None
+    return None
+
+
+# ----------------------------------------------------------------------
+# Ruta actual hacia la red interna
+# ----------------------------------------------------------------------
+
+
+def current_route(system):
+    """(gateway, interfaz) por donde el sistema enviaria hoy a TEST_HOST."""
+    if system == "Darwin":
+        out = _try(["route", "-n", "get", TEST_HOST])
+        gw = re.search(r"gateway: (\S+)", out)
+        iface = re.search(r"interface: (\S+)", out)
+        return (gw.group(1) if gw else None), (iface.group(1) if iface else None)
+    if system == "Linux":
+        out = _try(["ip", "route", "get", TEST_HOST])
+        gw = re.search(r" via (\S+)", out)
+        iface = re.search(r" dev (\S+)", out)
+        return (gw.group(1) if gw else None), (iface.group(1) if iface else None)
+    if system == "Windows":
+        out = _powershell(
+            "Find-NetRoute -RemoteIPAddress %s | Where-Object NextHop | Select-Object -First 1 "
+            "| ForEach-Object { $_.NextHop + '|' + $_.InterfaceAlias }" % TEST_HOST
+        )
+        gw, _, iface = out.partition("|")
+        return (gw or None), (iface or None)
+    return None, None
+
+
+def office_route_exists(system):
+    if system == "Darwin":
+        return bool(re.search(r"^10\.50/16\s", _try(["netstat", "-rn", "-f", "inet"]), re.MULTILINE))
+    if system == "Linux":
+        return bool(_try(["ip", "route", "show", "%s/%d" % (OFFICE_NETWORK, OFFICE_PREFIX)]))
+    if system == "Windows":
+        return OFFICE_NETWORK in _try(["route", "print", "-4", OFFICE_NETWORK])
+    return False
+
+
+def set_route(system, gateway, replace):
+    net = "%s/%d" % (OFFICE_NETWORK, OFFICE_PREFIX)
+    if system == "Darwin":
+        return run(["sudo", "route", "-n", "change" if replace else "add", "-net", net, gateway])
+    if system == "Linux":
+        return run(["sudo", "ip", "route", "replace", net, "via", gateway])
+    if system == "Windows":
+        if replace:
+            run(["route", "delete", OFFICE_NETWORK])
+        code = run(["route", "add", OFFICE_NETWORK, "mask", OFFICE_MASK, gateway])
+        if code != 0:
+            warn("Si fallo por permisos, abre la terminal con 'Ejecutar como Administrador' y vuelve a correrlo.")
+        return code
+    return 1
+
+
+# ----------------------------------------------------------------------
+# Pruebas de conectividad
+# ----------------------------------------------------------------------
+
+
+def probe(host, port):
+    """'open' | 'refused' | 'blocked' | 'timeout', ms, detalle."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(CONNECT_TIMEOUT)
+    start = time.time()
+    try:
+        sock.connect((host, port))
+        return "open", int((time.time() - start) * 1000), ""
+    except socket.timeout:
+        return "timeout", int((time.time() - start) * 1000), "sin respuesta"
+    except OSError as e:
+        ms = int((time.time() - start) * 1000)
+        code = getattr(e, "winerror", None) or e.errno
+        name = errno.errorcode.get(code, str(code))
+        if code in REFUSED_ERRNOS:
+            return "refused", ms, name
+        if code in BLOCKED_ERRNOS:
+            return "blocked", ms, name
+        return "timeout", ms, name
+    finally:
+        sock.close()
+
+
+def probe_services():
+    results = {}
+    for port in TEST_PORTS:
+        state, ms, detail = probe(TEST_HOST, port)
+        results[port] = state
+        label = {
+            "open": (ok, "conecta (%d ms)" % ms),
+            "refused": (warn, "rechazó la conexión (servicio caído o algo intermedio la rechaza)"),
+            "blocked": (fail, "bloqueado por este equipo en %d ms (%s)" % (ms, detail)),
+            "timeout": (warn, "sin respuesta en %d s" % CONNECT_TIMEOUT),
+        }[state]
+        label[0]("%s:%d → %s" % (TEST_HOST, port, label[1]))
+    return results
+
+
+def probe_gateway(gateway):
+    """El gateway suele no tener puertos abiertos: basta con que responda o rechace."""
+    for port in (53, 80, 443):
+        state, _, _ = probe(gateway, port)
+        if state in ("open", "refused"):
+            return True
+    # Sin puertos: probar ICMP, con tiempo limite en cada sistema
+    cmd = {
+        "Windows": ["ping", "-n", "1", "-w", "2000", gateway],
+        "Linux": ["ping", "-c", "1", "-W", "2", gateway],
+    }.get(platform.system(), ["ping", "-c", "1", "-t", "2", gateway])
+    return subprocess.run(cmd, capture_output=True).returncode == 0
+
+
+def probe_claude():
+    if not shutil.which("curl"):
+        return None
+    out = subprocess.run(
+        ["curl", "-s", "-o", "/dev/null" if platform.system() != "Windows" else "NUL",
+         "-w", "%{http_code}", "--max-time", "6", CLAUDE_URL],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    return out not in ("", "000")
+
+
+# ----------------------------------------------------------------------
+# Explicaciones
+# ----------------------------------------------------------------------
+
+
+def explain_kill_switch(system, vpn):
+    print(
+        "\n%sLa VPN está bloqueando la red interna, y eso no se arregla con rutas.%s\n"
+        "La ruta está bien (va por tu red física), pero %s intercepta el tráfico por\n"
+        "encima de la tabla de rutas: es su Kill Switch. \"Permitir conexiones LAN\"\n"
+        "solo deja pasar tu subred directa, y el servidor (%s) está en otra subred.\n"
+        % (C_B, C_0, vpn or "la VPN", TEST_HOST)
+    )
+    if system == "Darwin":
+        print(
+            "Qué hacer en ProtonVPN (macOS):\n"
+            "  1. Ajustes → Conexión → desactiva \"Kill switch\".\n"
+            "  2. Reconecta la VPN y vuelve a correr este script.\n"
+            "  Si tu versión ofrece \"Split tunneling\", también sirve excluir %s/%d\n"
+            "  en lugar de apagar el Kill Switch." % (OFFICE_NETWORK, OFFICE_PREFIX)
+        )
+    elif system == "Linux":
+        print(
+            "Qué hacer en ProtonVPN (Linux):\n"
+            "  1. Ajustes → Conexión → Kill switch: \"Apagado\" (o usa split tunneling\n"
+            "     excluyendo %s/%d si tu versión lo ofrece).\n"
+            "  2. Reconecta y vuelve a correr este script." % (OFFICE_NETWORK, OFFICE_PREFIX)
+        )
+    else:
+        print(
+            "Qué hacer en ProtonVPN (Windows):\n"
+            "  1. Ajustes → Conexión → Kill switch: apagado; o en \"Split tunneling\"\n"
+            "     excluye la IP %s/%d.\n"
+            "  2. Reconecta y vuelve a correr este script como Administrador."
+            % (OFFICE_NETWORK, OFFICE_PREFIX)
+        )
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Diagnostica y corrige el acceso a la red interna 10.50.x.x con una VPN conectada.",
+    )
+    parser.add_argument("--gateway", help="Usar este gateway en vez de detectarlo automáticamente.")
+    parser.add_argument("--check", action="store_true", help="Solo diagnosticar, sin cambiar rutas.")
+    args = parser.parse_args()
+
+    system = platform.system()
+    if system not in ("Darwin", "Linux", "Windows"):
+        fail("Sistema operativo no reconocido: %s" % system)
+        sys.exit(1)
+
+    step("Red")
+    print("  Sistema: %s" % {"Darwin": "macOS"}.get(system, system))
+    vpn = detect_vpn(system)
+    if vpn:
+        ok("VPN conectada: %s" % vpn)
+    else:
+        warn("No detecto una VPN conectada")
+
+    if args.gateway:
+        gateway, iface = args.gateway, None
+    else:
+        gateway, iface = {"Darwin": detect_gateway_macos, "Linux": detect_gateway_linux,
+                          "Windows": detect_gateway_windows}[system]()
+    if not gateway:
+        fail("No pude detectar el gateway de tu red física.")
+        print(
+            "  Confírmalo a mano (con la VPN desconectada es más fácil) y usa --gateway <ip>:\n"
+            "    macOS:   route -n get %s\n"
+            "    Linux:   ip route get %s   (o: nmcli device show <interfaz>)\n"
+            "    Windows: ipconfig /all   (el adaptador real, no el de la VPN)" % (TEST_HOST, TEST_HOST)
+        )
+        sys.exit(1)
+    ok("Red física: gateway %s%s" % (gateway, " por %s" % iface if iface else ""))
+    if not probe_gateway(gateway):
+        warn("El gateway %s no responde: ¿estás en la red de la oficina?" % gateway)
+
+    step("Ruta hacia %s/%d" % (OFFICE_NETWORK, OFFICE_PREFIX))
+    route_gw, route_iface = current_route(system)
+    via_vpn = bool(route_iface and VPN_HINTS_RE.search(route_iface))
+    if route_gw == gateway and not via_vpn:
+        ok("Ya sale por la red física (%s%s): no hace falta tocarla"
+           % (gateway, " por %s" % route_iface if route_iface else ""))
+    else:
+        where = "la VPN (%s)" % route_iface if via_vpn else "%s por %s" % (route_gw or "-", route_iface or "-")
+        warn("Hoy sale por %s" % where)
+        replace = office_route_exists(system)
+        if args.check:
+            print("  → haría: %s la ruta %s/%d vía %s"
+                  % ("reemplazar" if replace else "agregar", OFFICE_NETWORK, OFFICE_PREFIX, gateway))
+        elif set_route(system, gateway, replace) == 0:
+            new_gw, new_iface = current_route(system)
+            if new_gw == gateway:
+                ok("Ruta puesta: sale por %s%s" % (gateway, " por %s" % new_iface if new_iface else ""))
+            else:
+                fail("El sistema sigue enviando por %s (%s)" % (new_gw or "-", new_iface or "-"))
+        else:
+            fail("No se pudo cambiar la ruta (¿permisos de administrador?)")
+
+    step("Servicios del servidor de pruebas")
+    results = probe_services()
+    states = set(results.values())
+
+    step("Resultado")
+    code = 0
+    if "open" in states:
+        ok("Hay acceso a la red interna.")
+    elif states == {"refused"}:
+        warn("Algo contesta, pero rechaza todos los servicios esperados (%s)."
+             % ", ".join(str(p) for p in TEST_PORTS))
+        print("  Si estos servicios deberían estar arriba, un firewall o proxy intermedio está\n"
+              "  rechazando las conexiones antes de llegar al servidor.")
+        code = 3
+    elif "blocked" in states:
+        fail("Sin acceso: este equipo bloquea el tráfico hacia la red interna.")
+        if vpn:
+            explain_kill_switch(system, vpn)
+        else:
+            print("  No hay VPN conectada: revisa el firewall del equipo.")
+        code = 2
+    else:
+        fail("Sin acceso: el servidor no responde.")
+        print(
+            "  La ruta sale por tu red física, pero %s no contesta. Puede estar apagado,\n"
+            "  o la red de la oficina no llega a esa subred desde donde estás." % TEST_HOST
+        )
+        code = 3
+
+    claude = probe_claude()
+    via = " (por la VPN)" if vpn else ""
+    if claude is True:
+        ok("Claude/Anthropic responde%s." % via)
+    elif claude is False:
+        warn("Claude/Anthropic no responde%s." % (": revisa la conexión de la VPN" if vpn else ""))
+    sys.exit(code)
+
+
+if __name__ == "__main__":
+    main()
