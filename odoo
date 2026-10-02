@@ -8,8 +8,11 @@ Reads instances.json and generates/manages Docker containers for multiple Odoo i
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
+import time
+from collections import defaultdict
 from pathlib import Path
 
 # Add .resources to path for generators
@@ -21,21 +24,29 @@ from generators.config_loader import (
     resolve_instance_config,
     resolve_db_config,
     get_db_host,
+    get_db_internal_port,
     get_unique_odoo_versions,
     get_managed_databases,
 )
 from generators.dockerfile_generator import generate_dockerfiles
 from generators.compose_generator import generate_compose
 from generators.nginx_generator import generate_nginx_config
+from generators.db_bootstrap import (
+    pg_exec as _pg_exec,
+    bootstrap_needs_breakglass as _bootstrap_needs_breakglass,
+    bootstrap_breakglass_enable as _bootstrap_breakglass_enable_impl,
+)
 
 COMPOSE_FILE = "docker-compose.generated.yml"
 
 
 def _docker_compose(*args):
-    """Run docker compose with the generated file."""
+    """Run docker compose with the generated file; returns its exit code."""
     cmd = f"docker compose -f {COMPOSE_FILE} {' '.join(args)}"
     print(cmd)
-    os.system(cmd)
+    status = os.system(cmd)
+    # os.system returns a wait status: exit code in the high byte
+    return 0 if status == 0 else (status >> 8) or 1
 
 
 def _get_instance_services(config, instance=None):
@@ -67,7 +78,241 @@ def _get_db_services(config, instance=None):
 # ============================================================
 
 
-def build_odoo(config, no_cache):
+def _fetch_database_ownership(db_container, user, password):
+    """Lectura pura: lista cada base real (no template) de este servicio de
+    Postgres con su dueño actual y si PUBLIC todavia puede conectarse. Usa
+    el rol de servicio de siempre (el que ya usan los contenedores Odoo) --
+    no hace falta break-glass ni el rol bootstrap, porque el nombre/dueño de
+    cada base es metadata de catalogo, visible para cualquier rol logueable
+    aunque no tenga CONNECT a esa base puntual."""
+    result = subprocess.run(
+        ["docker", "exec", "-e", f"PGPASSWORD={password}", db_container,
+         "psql", "-U", user, "-d", "postgres", "-tAc",
+         "SELECT d.datname, r.rolname, has_database_privilege('public', d.datname, 'CONNECT') "
+         "FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba WHERE NOT d.datistemplate;"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    rows = []
+    for line in result.stdout.splitlines():
+        if not line.strip():
+            continue
+        datname, owner, public_connect = line.split("|")
+        rows.append({"datname": datname, "owner": owner, "public_connect": public_connect == "t"})
+    return rows
+
+
+def audit_db_filter_drift(config):
+    """Compara, para cada servicio de Postgres compartido por >1 instancia,
+    el 'db_filter' resuelto de cada instancia contra el ownership/CONNECT
+    real en Postgres. Solo lee, nunca modifica nada -- devuelve una lista de
+    hallazgos estructurados (dicts), no strings, para que el caller pueda
+    tanto imprimirlos como decidir cuales son corregibles automaticamente
+    con 'provision-role' (ver build_odoo()/_maybe_fix_drift()).
+
+    Cada hallazgo trae 'category', 'instance' (o None si involucra a mas de
+    una), 'message' (texto ya formateado para imprimir) y 'fixable' (si
+    'provision-role' sobre 'instance' resuelve esto sin ambiguedad).
+
+    Por que hace falta: 'provision-role' aplica el ownership/CONNECT una
+    sola vez, cuando se corre a mano. Editar 'db_filter' en instances.json
+    despues no re-dispara nada solo -- esta auditoria es lo que detecta que
+    quedo desalineado, para poder avisar en cada './odoo build' en vez de
+    descubrirlo por un incidente real (como ya paso una vez)."""
+    by_service = defaultdict(list)
+    for inst_name, inst_conf in config["instances"].items():
+        by_service[inst_conf["database"]].append(inst_name)
+
+    findings = []
+
+    for db_name, inst_names in by_service.items():
+        if len(inst_names) <= 1:
+            continue  # una sola instancia en el servicio, sin riesgo de cruce
+
+        db_conf = config["databases"][db_name]
+        db_container = f"db-{db_name}"
+        rows = _fetch_database_ownership(db_container, db_conf["user"], db_conf["password"])
+        if rows is None:
+            findings.append({
+                "category": "unreachable", "instance": None, "fixable": False,
+                "message": (
+                    f"[{db_name}] no se pudo leer el estado real de Postgres "
+                    f"para auditar (servicio caido o inalcanzable?) -- omitido"
+                ),
+            })
+            continue
+
+        matches_by_db = defaultdict(list)
+
+        for inst_name in inst_names:
+            inst_conf = config["instances"][inst_name]
+            odoo_conf = resolve_instance_config(inst_conf, config)
+            db_filter = odoo_conf.get("db_filter") or ""
+            max_cron_threads = odoo_conf.get("max_cron_threads", 1)
+            expected_user = inst_conf.get("db_user")
+
+            if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
+                continue  # ya lo reporta _validate_cron_dbfilter_isolation, no duplicar
+
+            try:
+                matched = [r for r in rows if re.match(db_filter, r["datname"])]
+            except re.error:
+                continue  # regex invalido -- tampoco duplicar aca
+
+            for r in matched:
+                matches_by_db[r["datname"]].append(inst_name)
+
+                if expected_user and r["owner"] != expected_user:
+                    findings.append({
+                        "category": "owner_mismatch", "instance": inst_name, "fixable": True,
+                        "message": (
+                            f"[{inst_name}] '{r['datname']}' matchea su db_filter "
+                            f"('{db_filter}') pero pertenece al rol '{r['owner']}', no a "
+                            f"'{expected_user}' -- correr: ./odoo provision-role {inst_name}"
+                        ),
+                    })
+                elif (expected_user and max_cron_threads != 0
+                        and r["owner"] == expected_user and r["public_connect"]):
+                    findings.append({
+                        "category": "connect_open", "instance": inst_name, "fixable": True,
+                        "message": (
+                            f"[{inst_name}] '{r['datname']}' ya es del rol correcto pero "
+                            f"PUBLIC todavia puede conectarse (CONNECT no revocado) -- "
+                            f"correr: ./odoo provision-role {inst_name}"
+                        ),
+                    })
+
+            if expected_user:
+                for r in rows:
+                    if r["owner"] == expected_user and not re.match(db_filter, r["datname"]):
+                        findings.append({
+                            "category": "filter_drift", "instance": inst_name, "fixable": False,
+                            "message": (
+                                f"[{inst_name}] '{r['datname']}' pertenece a su rol dedicado "
+                                f"'{expected_user}' pero YA NO matchea su db_filter actual "
+                                f"('{db_filter}') -- el filtro cambio despues de aprovisionar; "
+                                f"revisar si es intencional (¿la base deberia pasar a otra "
+                                f"instancia?) o si el filtro se edito por error -- NO se "
+                                f"ofrece correccion automatica, requiere revision manual"
+                            ),
+                        })
+
+        for datname, matched_insts in matches_by_db.items():
+            if len(matched_insts) > 1:
+                findings.append({
+                    "category": "overlap", "instance": None, "fixable": False,
+                    "message": (
+                        f"[{db_name}] '{datname}' matchea el db_filter de mas de una "
+                        f"instancia a la vez ({', '.join(matched_insts)}) -- los regex se "
+                        f"solapan, revisarlos antes de aprovisionar (aprovisionar de mas "
+                        f"puede robarle la base a la instancia que ya la tenia) -- NO se "
+                        f"ofrece correccion automatica, requiere revision manual"
+                    ),
+                })
+
+    return findings
+
+
+def print_db_filter_audit(findings):
+    """Muestra en consola el resultado de audit_db_filter_drift(). A
+    diferencia de la validacion de config_loader (que corta la ejecucion),
+    esto solo avisa -- nunca bloquea el build."""
+    print("\n\033[1;94m=== 🔍 AUDITORÍA: db_filter vs ownership real en Postgres ===\033[0m\n")
+    if not findings:
+        print("✅ Sin diferencias -- el db_filter de cada instancia coincide con el ownership/CONNECT real.\n")
+        return
+    print(f"⚠️  {len(findings)} diferencia(s) encontrada(s):\n")
+    for f in findings:
+        print(f"  - {f['message']}")
+    print()
+
+
+def _provision_targets_grouped(config, instance_names):
+    """Resuelve targets de aprovisionamiento y los agrupa por servicio de
+    Postgres (db_container) -- mismo patron usado en la migracion batch
+    original, para aplicar un solo break-glass por servicio en vez de uno
+    por instancia."""
+    targets = [_resolve_provision_target(config, name) for name in instance_names]
+    groups = defaultdict(list)
+    for t in targets:
+        groups[t["db_container"]].append(t)
+    return groups
+
+
+def provision_instances_grouped(config, instance_names):
+    """Aprovisiona varias instancias a la vez, agrupando por servicio de
+    Postgres para minimizar ventanas de mantenimiento. Usado por el flujo
+    interactivo de './odoo build' cuando se confirma corregir el drift
+    detectado por la auditoria (ver _maybe_fix_drift())."""
+    groups = _provision_targets_grouped(config, instance_names)
+    for db_container, group in groups.items():
+        bootstrap_user = group[0]["bootstrap_user"]
+        bootstrap_password = group[0]["bootstrap_password"]
+        db_conf = group[0]["db_conf"]
+        db_name = group[0]["db_name"]
+
+        print(f"\n--- Servicio {db_container}: {len(group)} instancia(s) ---")
+        for t in group:
+            print(f"  - {t['instance']} (rol {t['db_user']})")
+
+        needs = _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password)
+        if needs:
+            _bootstrap_breakglass_enable(db_container, bootstrap_user, db_conf, db_name)
+        else:
+            print(f"→ Bootstrap ya logueable, sin break-glass.")
+
+        for t in group:
+            print(f"\n--- {t['instance']} ---")
+            provision_role_sql(t)
+
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f"ALTER ROLE {bootstrap_user} NOLOGIN;")
+        print(f"\n✅ Servicio {db_container} listo, bootstrap de nuevo en NOLOGIN.")
+
+
+def _maybe_fix_drift(config, findings, no_confirm):
+    """Si la auditoria encontro diferencias corregibles sin ambiguedad
+    (dueño incorrecto, CONNECT sin revocar), ofrece corregirlas ahora
+    mismo con 'provision-role', agrupando por servicio. Los hallazgos
+    ambiguos (filtro que cambio, filtros solapados) nunca se auto-corrigen
+    -- requieren revision humana antes de tocar ownership."""
+    fixable_instances = sorted({
+        f["instance"] for f in findings if f["fixable"] and f["instance"]
+    })
+    if not fixable_instances:
+        return
+
+    print(
+        f"{len(fixable_instances)} instancia(s) con diferencias que "
+        f"'provision-role' puede corregir automaticamente: "
+        f"{', '.join(fixable_instances)}"
+    )
+
+    if no_confirm:
+        print(
+            "--no-confirm: se omite la correccion automatica -- correr "
+            "'./odoo provision-role <instancia>' a mano si hace falta.\n"
+        )
+        return
+
+    try:
+        answer = input("¿Correr 'provision-role' para todas ellas ahora? [y/N]: ").strip().lower()
+    except EOFError:
+        print(
+            "\n(sin entrada interactiva -- se omite la correccion automatica; "
+            "correr './odoo provision-role <instancia>' a mano)\n"
+        )
+        return
+
+    if answer != "y":
+        print("Se omite la correccion automatica.\n")
+        return
+
+    provision_instances_grouped(config, fixable_instances)
+
+
+def build_odoo(config, no_cache, no_confirm=False):
     """Generate all config files and build Docker images."""
     print("\n\033[1;94m=== 🛠️  GENERANDO CONFIGURACIONES Y CONSTRUYENDO IMÁGENES ===\033[0m\n")
 
@@ -82,12 +327,26 @@ def build_odoo(config, no_cache):
     # 3. Generate nginx config
     generate_nginx_config(BASE_PATH, config)
 
+    # 3.5 Auditar db_filter vs ownership real -- avisa, y ofrece corregir
+    #     automaticamente lo que no es ambiguo (ver _maybe_fix_drift)
+    findings = audit_db_filter_drift(config)
+    print_db_filter_audit(findings)
+    _maybe_fix_drift(config, findings, no_confirm)
+
     # 4. Build images
     print("\n=== Construyendo imágenes Docker ===\n")
     if no_cache:
-        _docker_compose("build", "--no-cache")
+        returncode = _docker_compose("build", "--no-cache")
     else:
-        _docker_compose("build")
+        returncode = _docker_compose("build")
+
+    # compose builds in parallel and cancels the rest when one image fails:
+    # without this the output ended in "Build completado" anyway, and the
+    # agent (micro_saas) reported the build as successful
+    if returncode != 0:
+        print(f"\n❌ Build fallido: 'docker compose build' terminó con código {returncode}. "
+              f"Revisa el primer 'failed to solve' de arriba.\n")
+        sys.exit(returncode)
 
     print("\n✅ Build completado.\n")
 
@@ -256,11 +515,25 @@ def run_bash(config, instance):
     os.system(f"docker exec -u root -it {container} bash")
 
 
-def bash_update_modules(config, instance, dbname, modules="all"):
-    """Update Odoo modules in an instance."""
+def bash_update_modules(config, instance, dbname, modules="all", force_all=False):
+    """Update Odoo modules in an instance.
+
+    When updating "all" modules, this uses click-odoo-update by default --
+    it only touches addons whose file hash changed since the last update,
+    instead of literally reprocessing every installed module (which is what
+    `odoo -u all` always does, regardless of whether anything changed).
+    Pass force_all=True (the -f/--force CLI flag) to force a complete
+    upgrade via click-odoo-update's own --update-all flag. Updating one
+    specific module by name is unaffected -- that's already a deliberate,
+    targeted operation, so it always goes straight through `odoo -u <modulo>`.
+    """
     print(f"\n\033[1;35m=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     container = f"odoo-{instance}"
-    cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+    if modules == "all":
+        force_flag = " --update-all" if force_all else ""
+        cmd = f"docker exec -u root -it {container} click-odoo-update --if-exists{force_flag} -d {dbname}"
+    else:
+        cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
     print(cmd)
     return os.system(cmd)
 
@@ -652,15 +925,466 @@ def psql_connect(config, instance, dbname):
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
-    db_port = db_conf["port"]
+    db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
+    db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
 
     print(f"\n\033[1;34m=== 🐘 CONECTANDO PSQL A: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     os.system(
         f"docker exec -it -e PGPASSWORD={db_password} {container} "
         f"psql --host {db_host} --port {db_port} -U {db_user} -d {dbname}"
+    )
+
+
+def psql_connect_all(config):
+    """Conectar por psql a CUALQUIER base de un servicio de Postgres, sin
+    filtrar por instancia/db_filter.
+
+    Hace falta porque, una vez que una instancia se aprovisiona con su
+    rol dedicado (./odoo provision-role), se le revoca el CONNECT a
+    cualquier otro rol sobre sus bases (ver provision_role_sql()) -- ya no
+    existe un rol "de menor privilegio" que pueda ver todo el servicio. La
+    unica llave que abre todas las puertas es el rol bootstrap, y se
+    mantiene en NOLOGIN en reposo a proposito (es la misma clase de rol
+    superusuario siempre logueable que quedo comprometido en el incidente
+    de 2026-08). Por eso esto lo habilita solo brevemente (break-glass --
+    si no esta ya logueado, reinicia db_container, una ventana breve que
+    afecta a TODAS las instancias de ese servicio, no solo a una), te deja
+    elegir una base entre TODAS las reales, te deja psql interactivo con
+    ese rol, y siempre lo vuelve a poner en NOLOGIN al salir, incluso si
+    algo falla o cancelas con Ctrl-C.
+    """
+    managed = get_managed_databases(config)
+    if not managed:
+        print("No hay servicios de base de datos administrados en databases.json.")
+        sys.exit(1)
+
+    db_name = prompt_selection(
+        [(name, name) for name in managed], "Selecciona el servicio de Postgres"
+    )
+    if db_name is None:
+        print("No se seleccionó ningún servicio.")
+        return
+
+    db_conf = config["databases"][db_name]
+    db_container = f"db-{db_name}"
+    bootstrap_user = db_conf.get("bootstrap_user", db_conf["user"])
+    bootstrap_password = db_conf.get("bootstrap_password", db_conf["password"])
+
+    print(
+        f"\n⚠️  Vas a entrar con el rol bootstrap ('{bootstrap_user}'), que ve "
+        f"TODAS las bases de '{db_name}' sin filtrar por instancia. Si esta en "
+        f"NOLOGIN (lo normal), esto requiere una ventana breve de mantenimiento "
+        f"de TODO el servicio (se reinicia {db_container}), no solo de una "
+        f"instancia puntual.\n"
+    )
+    if input("¿Continuar? [y/N]: ").strip().lower() != "y":
+        print("Cancelado.")
+        return
+
+    needed_breakglass = _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password)
+    if needed_breakglass:
+        _bootstrap_breakglass_enable(db_container, bootstrap_user, db_conf, db_name)
+    else:
+        print(f"\n→ Rol bootstrap '{bootstrap_user}' ya puede loguear (sesion previa sin cerrar), sigo sin break-glass.")
+
+    try:
+        all_dbs = _list_all_databases(db_container, bootstrap_user, bootstrap_password)
+        if all_dbs is None:
+            return
+        if not all_dbs:
+            print(f"No hay bases en '{db_name}'.")
+            return
+
+        dbname = prompt_selection(
+            [(d, d) for d in all_dbs],
+            f"Selecciona base de datos en '{db_name}' (TODAS, sin filtrar)",
+        )
+        if dbname is None:
+            print("No se seleccionó ninguna base de datos.")
+            return
+
+        print(f"\n\033[1;34m=== 🐘 CONECTANDO PSQL (bootstrap, SIN filtrar) A: {db_name.upper()} (DB: {dbname}) ===\033[0m\n")
+        os.system(
+            f"docker exec -it -e PGPASSWORD={bootstrap_password} {db_container} "
+            f"psql -U {bootstrap_user} -d {dbname}"
+        )
+    finally:
+        print(f"\n→ Volviendo a poner el rol bootstrap '{bootstrap_user}' en NOLOGIN...")
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f"ALTER ROLE {bootstrap_user} NOLOGIN;", check=False)
+
+
+def _list_all_databases(db_container, pg_user, pg_password):
+    """Lista todas las bases reales (no template) de un servicio de Postgres,
+    conectando directo al contenedor de la base con el rol dado. Devuelve
+    None (y ya imprimio el error) si el listado en si falla."""
+    list_result = subprocess.run(
+        ["docker", "exec", "-e", f"PGPASSWORD={pg_password}", db_container,
+         "psql", "-U", pg_user, "-d", "postgres", "-tAc",
+         "SELECT datname FROM pg_database WHERE datistemplate = false ORDER BY datname;"],
+        capture_output=True, text=True,
+    )
+    if list_result.returncode != 0:
+        print(list_result.stdout, end="")
+        print(list_result.stderr, end="", file=sys.stderr)
+        print("❌ No se pudieron listar las bases.\n", file=sys.stderr)
+        return None
+    return [d.strip() for d in list_result.stdout.splitlines() if d.strip()]
+
+
+def _drop_database(container, pg_user, pg_password, dbname, host_args=None):
+    """Ejecuta dropdb contra 'dbname'. Si falla porque hay sesiones activas
+    (el caso normal mientras la instancia de Odoo sigue corriendo -- mantiene
+    un pool de conexiones abierto), ofrece terminarlas (pg_terminate_backend)
+    y reintenta una vez, en vez de obligar a un './odoo stop <instancia>'
+    manual antes de poder borrar una base cuyo borrado ya se confirmo."""
+    host_args = host_args or []
+
+    def run_dropdb():
+        return subprocess.run(
+            ["docker", "exec", "-e", f"PGPASSWORD={pg_password}", container,
+             "dropdb", "-U", pg_user, *host_args, dbname],
+            capture_output=True, text=True,
+        )
+
+    result = run_dropdb()
+    if result.returncode == 0:
+        return True
+
+    if "being accessed by other users" in result.stderr:
+        print(result.stderr.strip(), file=sys.stderr)
+        if input(
+            "\n¿Terminar esas sesiones activas y reintentar el borrado? (s/N): "
+        ).strip().lower() != "s":
+            return False
+
+        subprocess.run(
+            ["docker", "exec", "-e", f"PGPASSWORD={pg_password}", container,
+             "psql", "-U", pg_user, *host_args, "-d", "postgres", "-tAc",
+             f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+             f"WHERE datname = '{dbname}' AND pid <> pg_backend_pid();"],
+            capture_output=True, text=True,
+        )
+        result = run_dropdb()
+        if result.returncode == 0:
+            return True
+
+    print(result.stdout, end="")
+    print(result.stderr, end="", file=sys.stderr)
+    return False
+
+
+def _confirm_drop(dbname, scope_desc):
+    """Confirm gate para DROP DATABASE, mismo estilo (y mismo nivel de
+    friccion) que remove_odoo() usa para eliminar contenedores/volumenes --
+    consistente en toda la CLI, y obligatorio para cualquier operacion que
+    borre datos sin vuelta atras."""
+    print(
+        f"\n⚠️  \033[1mPELIGRO\033[0m: esto eliminará (DROP DATABASE) "
+        f"'\033[91m{dbname}\033[0m' de {scope_desc}. Esto NO se puede deshacer."
+    )
+    do_continue = input("¿Estás seguro de que deseas continuar? (s/N): ")
+    return do_continue.strip().lower() == "s"
+
+
+def _confirm_drop_many(dbnames, scope_desc):
+    """Igual que _confirm_drop(), pero para eliminar varias bases de datos
+    en una sola pasada: lista todas antes de pedir una única confirmación."""
+    listado = "\n".join(f"  - \033[91m{d}\033[0m" for d in dbnames)
+    print(
+        f"\n⚠️  \033[1mPELIGRO\033[0m: esto eliminará (DROP DATABASE) "
+        f"\033[1m{len(dbnames)} base(s) de datos\033[0m de {scope_desc}:\n{listado}\n"
+        f"Esto NO se puede deshacer."
+    )
+    do_continue = input("¿Estás seguro de que deseas continuar? (s/N): ")
+    return do_continue.strip().lower() == "s"
+
+
+def psql_remove_database(config, instance, dbname, use_ps):
+    """Elimina (DROP DATABASE) una base de datos. Siempre pide confirmacion
+    explicita (ver _confirm_drop) porque es una operacion irreversible.
+
+    Sin --ps: usa el rol de la instancia (dueño de sus propias bases via
+    provision-role, o el rol compartido del servicio en instancias sin
+    aprovisionar) -- mismo camino de credenciales que psql_connect(), sin
+    necesitar el rol bootstrap.
+
+    Con --ps: como psql_connect_all(), ignora instancias/db_filter y deja
+    elegir CUALQUIER base de CUALQUIER servicio de Postgres, autenticando
+    con el rol bootstrap (rompe el NOLOGIN temporalmente si hace falta).
+    """
+    if use_ps:
+        managed = get_managed_databases(config)
+        if not managed:
+            print("No hay servicios de base de datos administrados en databases.json.")
+            sys.exit(1)
+
+        db_name = prompt_selection(
+            [(name, name) for name in managed], "Selecciona el servicio de Postgres"
+        )
+        if db_name is None:
+            print("No se seleccionó ningún servicio.")
+            return
+
+        db_conf = config["databases"][db_name]
+        db_container = f"db-{db_name}"
+        bootstrap_user = db_conf.get("bootstrap_user", db_conf["user"])
+        bootstrap_password = db_conf.get("bootstrap_password", db_conf["password"])
+
+        print(
+            f"\n⚠️  Vas a entrar con el rol bootstrap ('{bootstrap_user}'), que ve "
+            f"TODAS las bases de '{db_name}' sin filtrar por instancia. Si esta en "
+            f"NOLOGIN (lo normal), esto requiere una ventana breve de mantenimiento "
+            f"de TODO el servicio (se reinicia {db_container}), no solo de una "
+            f"instancia puntual.\n"
+        )
+        if input("¿Continuar? [y/N]: ").strip().lower() != "y":
+            print("Cancelado.")
+            return
+
+        needed_breakglass = _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password)
+        if needed_breakglass:
+            _bootstrap_breakglass_enable(db_container, bootstrap_user, db_conf, db_name)
+        else:
+            print(f"\n→ Rol bootstrap '{bootstrap_user}' ya puede loguear (sesion previa sin cerrar), sigo sin break-glass.")
+
+        try:
+            all_dbs = _list_all_databases(db_container, bootstrap_user, bootstrap_password)
+            if all_dbs is None:
+                return
+            if not all_dbs:
+                print(f"No hay bases en '{db_name}'.")
+                return
+
+            target_dbs = [dbname] if dbname else prompt_selection(
+                [(d, d) for d in all_dbs],
+                f"Selecciona base(s) de datos en '{db_name}' a ELIMINAR (TODAS, sin filtrar)",
+                multi=True,
+            )
+            if not target_dbs:
+                print("No se seleccionó ninguna base de datos.")
+                return
+            invalidas = [d for d in target_dbs if d not in all_dbs]
+            if invalidas:
+                print(f"Error: {', '.join(invalidas)} no existe(n) en el servicio '{db_name}'.")
+                sys.exit(1)
+
+            if len(target_dbs) == 1:
+                confirmado = _confirm_drop(target_dbs[0], f"servicio de Postgres '{db_name}'")
+            else:
+                confirmado = _confirm_drop_many(target_dbs, f"servicio de Postgres '{db_name}'")
+            if not confirmado:
+                print("Cancelado.")
+                return
+
+            hubo_error = False
+            for target_db in target_dbs:
+                print(f"\n→ Eliminando base de datos '{target_db}' en '{db_name}'...")
+                if not _drop_database(db_container, bootstrap_user, bootstrap_password, target_db):
+                    print(f"❌ No se pudo eliminar la base de datos '{target_db}'.\n", file=sys.stderr)
+                    hubo_error = True
+                else:
+                    print(f"✅ Base de datos '{target_db}' eliminada.\n")
+            if hubo_error:
+                sys.exit(1)
+        finally:
+            print(f"\n→ Volviendo a poner el rol bootstrap '{bootstrap_user}' en NOLOGIN...")
+            _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                     f"ALTER ROLE {bootstrap_user} NOLOGIN;", check=False)
+        return
+
+    if instance is None:
+        instance = prompt_for_instance(config, "psql")
+
+    if dbname:
+        target_dbs = [dbname]
+    else:
+        databases = get_databases(config, instance)
+        if databases:
+            target_dbs = prompt_selection(
+                [(db, db) for db in databases],
+                f"Selecciona base(s) de datos para '{instance}' a ELIMINAR",
+                multi=True,
+            )
+        else:
+            single = prompt_for_database(config, instance)
+            target_dbs = [single] if single else []
+    if not target_dbs:
+        print("No se seleccionó ninguna base de datos.")
+        return
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    db_host = get_db_host(inst_conf["database"], db_conf)
+    db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
+    db_port = get_db_internal_port(db_conf)
+    container = f"odoo-{instance}"
+
+    if len(target_dbs) == 1:
+        confirmado = _confirm_drop(target_dbs[0], f"instancia '{instance}'")
+    else:
+        confirmado = _confirm_drop_many(target_dbs, f"instancia '{instance}'")
+    if not confirmado:
+        print("Cancelado.")
+        return
+
+    host_args = ["--host", db_host, "--port", str(db_port)]
+    hubo_error = False
+    for target_db in target_dbs:
+        print(f"\n→ Eliminando base de datos '{target_db}' de '{instance}'...")
+        if not _drop_database(container, db_user, db_password, target_db, host_args=host_args):
+            print(f"❌ No se pudo eliminar la base de datos '{target_db}'.\n", file=sys.stderr)
+            hubo_error = True
+        else:
+            print(f"✅ Base de datos '{target_db}' eliminada.\n")
+    if hubo_error:
+        sys.exit(1)
+
+
+def _resolve_provision_target(config, instance):
+    """Validate and resolve everything provision_role_sql()/bootstrap
+    helpers need for one instance. Raises SystemExit on bad config."""
+    inst_conf = config["instances"].get(instance)
+    if inst_conf is None:
+        print(f"Error: instancia '{instance}' no existe.")
+        sys.exit(1)
+
+    db_user = inst_conf.get("db_user")
+    db_password = inst_conf.get("db_password")
+    if not db_user or not db_password:
+        print(
+            f"Error: la instancia '{instance}' no tiene 'db_user'/'db_password' "
+            f"en instances.json (a nivel raiz de la instancia, no dentro de "
+            f"overwrite_odoo_config). Agregalos antes de aprovisionar."
+        )
+        sys.exit(1)
+
+    db_name = inst_conf["database"]
+    db_conf = config["databases"][db_name]
+    odoo_conf = resolve_instance_config(inst_conf, config)
+    db_filter = odoo_conf.get("db_filter") or ""
+    if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
+        print(
+            f"Error: '{instance}' no tiene un db_filter especifico y estatico "
+            f"(sin %h/%d) -- no se puede resolver de forma segura que bases le "
+            f"pertenecen. Definilo antes de aprovisionar."
+        )
+        sys.exit(1)
+
+    return {
+        "instance": instance,
+        "db_name": db_name,
+        "db_container": f"db-{db_name}",
+        "db_conf": db_conf,
+        "bootstrap_user": db_conf.get("bootstrap_user", db_conf["user"]),
+        "bootstrap_password": db_conf.get("bootstrap_password", db_conf["password"]),
+        "db_user": db_user,
+        "db_password": db_password,
+        "db_filter": db_filter,
+    }
+
+
+def _bootstrap_breakglass_enable(db_container, bootstrap_user, db_conf, db_name):
+    """Thin wrapper binding the shared break-glass helper to this script's
+    generated compose file (see generators/db_bootstrap.py)."""
+    _bootstrap_breakglass_enable_impl(db_container, bootstrap_user, db_conf, db_name, COMPOSE_FILE)
+
+
+def provision_role_sql(target):
+    """Do the actual role/ownership/ACL work for one instance, assuming the
+    bootstrap role can already log in (caller's responsibility to
+    enable/disable around this -- see provision_instance_role() for the
+    single-instance CLI entry point, or batch multiple targets of the same
+    service under one enable/disable pair to avoid repeated maintenance
+    windows).
+
+    IMPORTANT: never uses REASSIGN OWNED -- run once, connected to one
+    database, it reassigns ALL databases cluster-wide still owned by the
+    source role, not just the one you're connected to (learned the hard way
+    on 2026-08-17). ALTER DATABASE ... OWNER TO is precise and side-effect
+    free, used instead for every ownership change here.
+    """
+    db_container = target["db_container"]
+    bootstrap_user = target["bootstrap_user"]
+    bootstrap_password = target["bootstrap_password"]
+    db_user = target["db_user"]
+    db_password = target["db_password"]
+    db_filter = target["db_filter"]
+
+    print(f"\n→ Creando/actualizando rol '{db_user}'...")
+    _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+             f"CREATE ROLE {db_user} LOGIN CREATEDB NOSUPERUSER NOCREATEROLE NOREPLICATION PASSWORD '{db_password}';",
+             check=False)
+    _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+             f"ALTER ROLE {db_user} WITH PASSWORD '{db_password}';")
+    _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+             f"GRANT {bootstrap_user} TO {db_user};")
+
+    list_result = subprocess.run(
+        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", db_container,
+         "psql", "-U", bootstrap_user, "-d", "postgres", "-tAc",
+         f"SELECT datname FROM pg_database WHERE datistemplate=false AND datname ~ '{db_filter}';"],
+        capture_output=True, text=True, check=True,
+    )
+    matching = [d.strip() for d in list_result.stdout.splitlines() if d.strip()]
+    print(f"→ Bases que matchean '{db_filter}': {', '.join(matching) if matching else '(ninguna)'}")
+
+    for db in matching:
+        print(f"  - {db}")
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f'ALTER DATABASE "{db}" OWNER TO {db_user};')
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f'REVOKE CONNECT ON DATABASE "{db}" FROM PUBLIC;')
+        _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+                 f'GRANT CONNECT ON DATABASE "{db}" TO {db_user};')
+
+    return matching
+
+
+def provision_instance_role(config, instance):
+    """CLI entry point: provision a single instance end to end, including
+    its own dedicated break-glass window. See provision_role_sql() for what
+    "provision" means, and the module docstring context above it for why
+    this exists (Postgres-level fix for cron crossing instances that share
+    a database service, instead of patching Odoo's own code)."""
+    target = _resolve_provision_target(config, instance)
+    db_container = target["db_container"]
+    bootstrap_user = target["bootstrap_user"]
+    bootstrap_password = target["bootstrap_password"]
+
+    print(f"\n\033[1;36m=== 🔐 APROVISIONANDO ROL DEDICADO: {instance.upper()} ===\033[0m\n")
+    print(f"Servicio de Postgres: {target['db_name']}  (contenedor: {db_container})")
+    print(f"Rol: {target['db_user']}")
+    print(f"db_filter usado para resolver bases: {target['db_filter']}")
+    print(
+        f"\n⚠️  Si el rol bootstrap de '{target['db_name']}' esta en NOLOGIN (lo "
+        f"normal), esto va a requerir una ventana breve de mantenimiento de "
+        f"TODO ese servicio (se reinicia {db_container}), no solo de esta "
+        f"instancia.\n"
+    )
+
+    if input("¿Continuar? [y/N]: ").strip().lower() != "y":
+        print("Cancelado.")
+        return
+
+    needed_breakglass = _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password)
+    if needed_breakglass:
+        _bootstrap_breakglass_enable(db_container, bootstrap_user, target["db_conf"], target["db_name"])
+    else:
+        print(f"\n→ Rol bootstrap '{bootstrap_user}' ya puede loguear (sesion previa sin cerrar), sigo sin break-glass.")
+
+    matching = provision_role_sql(target)
+
+    _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
+             f"ALTER ROLE {bootstrap_user} NOLOGIN;")
+
+    print(
+        f"\n✅ '{instance}' aprovisionada: rol '{target['db_user']}', dueño de "
+        f"{len(matching)} base(s), CONNECT restringido a ese rol.\n"
+        f"   Falta: regenerar el compose y recrear el contenedor de esta "
+        f"instancia (./odoo build && docker compose up -d --no-deps odoo-{instance}) "
+        f"para que use las credenciales nuevas.\n"
     )
 
 
@@ -702,9 +1426,8 @@ def reset_password(config, instance, dbname, login, password):
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
-    db_port = db_conf["port"]
+    db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
+    db_port = get_db_internal_port(db_conf)
     container = f"odoo-{instance}"
 
     pw = f"'{password}'"
@@ -789,12 +1512,62 @@ def sync(repo_names, branch, show=False):
 # ============================================================
 
 
+def _instance_db_credentials(inst_conf, db_conf):
+    """Credenciales para consultar Postgres de una instancia.
+
+    Prefiere el rol dedicado de la instancia (`db_user`/`db_password` a nivel
+    raiz, el que usa el hardening de 2026-08-15) y cae al rol compartido del
+    servicio como fallback. Sin esto, get_databases()/get_users() fallan en
+    instancias endurecidas: el rol del servicio quedo en NOLOGIN y no puede
+    autenticarse.
+    """
+    db_user = inst_conf.get("db_user") or db_conf["user"]
+    db_password = inst_conf.get("db_password") or db_conf["password"]
+    return db_user, db_password
+
+
 def get_databases(config, instance):
-    """Fetch database names from the postgres container of an instance."""
-    output = _run_psql_query(config, instance, "postgres", 
-                            "SELECT datname FROM pg_database WHERE datistemplate = false AND datname NOT IN ('postgres', 'template1');")
-    if output:
-        return sorted(output.split("\n"))
+    """Fetch database names from the postgres container of an instance.
+
+    Filtered by the instance's own db_filter when it has one -- otherwise
+    a database service shared by several instances (e.g. pg16_odoo_17) would
+    return every database on the server, not just the ones that belong to
+    this instance (this is exactly what made `./odoo update -d all -i X` slow:
+    it ended up updating modules on unrelated instances' databases too).
+    """
+    try:
+        inst_conf = config["instances"][instance]
+        db_conf = resolve_db_config(inst_conf, config)
+        db_host = get_db_host(inst_conf["database"], db_conf)
+        db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
+        db_port = get_db_internal_port(db_conf)
+        container = f"odoo-{instance}"
+
+        odoo_conf = resolve_instance_config(inst_conf, config)
+        db_filter = odoo_conf.get("db_filter")
+
+        where_clause = "datistemplate = false AND datname NOT IN ('postgres', 'template1')"
+        if db_filter and db_filter != "*":
+            escaped_filter = db_filter.replace("'", "''")
+            where_clause += f" AND datname ~ '{escaped_filter}'"
+        else:
+            print(
+                f"\n⚠️  La instancia '{instance}' no tiene un db_filter especifico (o es '*') -- "
+                f"se listaran TODAS las bases del servicio de Postgres '{inst_conf['database']}', "
+                f"incluyendo las de otras instancias que lo compartan.\n"
+            )
+
+        # Try to get databases from postgres
+        cmd = (
+            f"docker exec -e PGPASSWORD={db_password} {container} "
+            f"psql --host {db_host} --port {db_port} -U {db_user} -d postgres -At -c "
+            f"\"SELECT datname FROM pg_database WHERE {where_clause};\" 2>/dev/null"
+        )
+        output = subprocess.check_output(cmd, shell=True).decode().strip()
+        if output:
+            return sorted(output.split("\n"))
+    except Exception:
+        pass
     return []
 
 
@@ -804,9 +1577,8 @@ def get_users(config, instance, dbname):
         inst_conf = config["instances"][instance]
         db_conf = resolve_db_config(inst_conf, config)
         db_host = get_db_host(inst_conf["database"], db_conf)
-        db_user = db_conf["user"]
-        db_password = db_conf["password"]
-        db_port = db_conf["port"]
+        db_user, db_password = _instance_db_credentials(inst_conf, db_conf)
+        db_port = get_db_internal_port(db_conf)
         container = f"odoo-{instance}"
 
         cmd = (
@@ -1194,6 +1966,41 @@ def _run_odoo_module_op(config, instance, dbname, modules, operation="update"):
     return True
 
 
+def resolve_container_addon_paths(config, instance):
+    """Paths de addons de la instancia, convertidos al path que tienen DENTRO
+    del contenedor (montados via ./src:/home/odoo/src en compose_generator.py).
+    Es el equivalente, para 'scripts/odoo-test --addons', de lo que antes
+    resolvia ese script directamente leyendo instances.json."""
+    inst_conf = config["instances"][instance]
+    odoo_conf = resolve_instance_config(inst_conf, config)
+    addons = odoo_conf.get("addons", [])
+    return [f"/home/odoo/{a}" for a in addons if os.path.isdir(os.path.join(BASE_PATH, a))]
+
+
+def translate_module_path_tokens(raw_value):
+    """Si -m/el posicional de 'test' trae un path (token con '/'), lo
+    traduce de path del HOST (relativo al repo, o absoluto dentro de el --
+    forma natural de escribirlo desde este proyecto) al equivalente DENTRO
+    del contenedor (/home/odoo/<mismo relativo>): scripts/odoo-test valida
+    paths contra --addons, que ya vienen como paths de contenedor (ver
+    resolve_container_addon_paths). Nombres de modulo sueltos y 'all' pasan
+    sin tocar; un path que ya este en forma de contenedor, o que no exista
+    como directorio del host, tambien pasa sin tocar (que scripts/odoo-test
+    lo valide y de su propio error, con su propia lista de --addons)."""
+    tokens = raw_value.split(",")
+    translated = []
+    for token in tokens:
+        stripped = token.strip()
+        if stripped and "/" in stripped and not stripped.startswith("/home/odoo/"):
+            host_path = stripped if os.path.isabs(stripped) else os.path.join(BASE_PATH, stripped)
+            if os.path.isdir(host_path):
+                rel = os.path.relpath(host_path, BASE_PATH)
+                if not rel.startswith(".."):
+                    stripped = f"/home/odoo/{rel}"
+        translated.append(stripped)
+    return ",".join(translated)
+
+
 def prompt_selection(options, title, multi=False):
     """
     Generic interactive selection menu.
@@ -1373,11 +2180,20 @@ def prompt_selection(options, title, multi=False):
             sys.stdout.write(f"\033[{lines_to_clear}F")
             render_menu()
 
-        # Al salir, limpiar el menú de la pantalla para no ensuciar el log
-        sys.stdout.write(f"\033[{lines_to_clear}A") # Subir al inicio del menú
-        for _ in range(lines_to_clear + 1):
+        # Al salir, limpiar el menú de la pantalla para no ensuciar la salida.
+        # Se limpia TODO el bloque (blank + titulo + grid + ayuda): con
+        # `lines_to_clear` solo se borraba la grid/ayuda y quedaban el blanco
+        # y el titulo colgando encima del resultado del comando siguiente.
+        menu_total = num_rows + 3
+        sys.stdout.write(f"\033[{menu_total}A") # Subir al inicio del menú
+        for _ in range(menu_total):
             sys.stdout.write("\033[K\n") # Limpiar línea y bajar
-        sys.stdout.write(f"\033[{lines_to_clear + 1}F") # Regresar arriba de todo
+        sys.stdout.write(f"\033[{menu_total}F") # Regresar arriba de todo
+        # CRITICO: flush ANTES de devolver. Sin esto las secuencias ANSI
+        # quedan bufferizadas en el stdout de Python y se imprimen DESPUÉS de
+        # la salida del subproceso siguiente (subcomandos shell, update, etc.),
+        # moviendo el cursor sobre ella y "cortando" la salida visible.
+        sys.stdout.flush()
 
     except (Exception, KeyboardInterrupt):
         sys.stdout.write("\n\033[?25hOperación cancelada.\n")
@@ -1424,21 +2240,52 @@ def prompt_for_database(config, instance, allow_all=False):
     return prompt_selection(options, f"Selecciona base de datos para '{instance}'")
 
 
-def prompt_for_modules(config, instance, dbname=None):
-    modules = get_custom_modules(config, instance, dbname)
+def prompt_for_test_modules(config, instance):
+    """Como prompt_for_modules, pero para 'test': no hay un 'all' valido,
+    asi que si no se selecciona nada se sale con error."""
+    modules = get_custom_modules(config, instance)
     if not modules:
         print(f"\nNo se encontraron módulos custom en los addons de '{instance}'.")
-        return "all"
-    
+        sys.exit(1)
+
     options = [(mod, mod) for mod in modules]
-    selected = prompt_selection(options, f"Selecciona módulos a actualizar para '{instance}' (Espacio para marcar, Enter para confirmar)", multi=True)
+    selected = prompt_selection(
+        options,
+        f"Selecciona modulo(s) a testear para '{instance}' (Espacio para marcar, Enter para confirmar)",
+        multi=True,
+    )
     if not selected:
-        return "all"
+        print("Debes seleccionar al menos un módulo.")
+        sys.exit(1)
     return ",".join(selected)
 
 
 def main():
     os.chdir(BASE_PATH)
+
+    # Passthrough directo del subcomando apk: scripts/odoo-apk usa click y
+    # acepta flags que argparse de aca no conoce (--scheme, --rebuild, etc.).
+    # Se delega antes de parsear para que no los rechace.
+    if len(sys.argv) >= 2 and sys.argv[1] == "apk":
+        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-apk")] + sys.argv[2:]
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
+    # Passthrough directo del subcomando restore: scripts/odoo_restore tiene
+    # su propio argparse (con su propio subcomando "restore"), asi que se
+    # delega tal cual en vez de duplicar sus flags aca.
+    if len(sys.argv) >= 2 and sys.argv[1] == "restore":
+        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo_restore")] + sys.argv[1:]
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
+    # Passthrough directo del subcomando agent: scripts/odoo-agent gestiona
+    # el agente HTTP de .resources/docker-odoo-agent y le pasa sus flags
+    # tal cual a install.sh, asi que se delega antes de parsear.
+    if len(sys.argv) >= 2 and sys.argv[1] == "agent":
+        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-agent")] + sys.argv[2:]
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
 
     parser = argparse.ArgumentParser(
         description="Multi-instance Odoo Docker management CLI."
@@ -1448,6 +2295,10 @@ def main():
     # build
     build_p = subparsers.add_parser("build", help="Genera configs y construye imágenes Docker")
     build_p.add_argument("--no-cache", action="store_true", help="Construir sin caché")
+    build_p.add_argument(
+        "--no-confirm", action="store_true",
+        help="No preguntar interactivamente si corregir el drift de db_filter detectado (uso en automatizacion/CI)",
+    )
 
     # start
     start_p = subparsers.add_parser("start", help="Inicia instancia(s) de Odoo")
@@ -1465,6 +2316,42 @@ def main():
     bash_p = subparsers.add_parser("bash", help="Abre bash en un contenedor Odoo")
     bash_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
+    # shell
+    shell_p = subparsers.add_parser(
+        "shell",
+        help="Shell operativo de Odoo: search/read/count/create/write/unlink/method "
+             "o REPL interactivo, contra una instancia. Ver ./odoo shell --help",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Subcomandos (delegados a scripts/odoo-shell):\n"
+            "  shell                          REPL interactivo (ipython)\n"
+            "  search   -m MODELO [--domain D] [-f CAMPOS] [--limit N] [--order S]\n"
+            "  read     -m MODELO -i IDS [-f CAMPOS]         (alias: browse)\n"
+            "  count    -m MODELO [--domain D]\n"
+            "  create   -m MODELO --values VALS\n"
+            "  write    -m MODELO -i IDS --values VALS\n"
+            "  unlink   -m MODELO -i IDS --yes\n"
+            "  method   -m MODELO -n METODO [-i IDS] [--domain D] [--limit N]\n"
+            "           [--order S] [-a ARGS] [-k KWARGS]\n"
+            "Ejemplos:\n"
+            "  ./odoo shell\n"
+            "  ./odoo shell search -m res.partner --domain \"[['id','>',5]]\" --fields \"name,id\"\n"
+            "  ./odoo shell method -m res.partner -n _compute_display_name --ids 10,1\n"
+            "  ./odoo shell method -m res.partner -n _compute_display_name --limit 10 --order \"id asc\"\n"
+        ),
+    )
+    shell_p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional, se elige interactivamente). "
+             "Debe ir antes del subcomando.",
+    )
+    shell_p.add_argument("-d", dest="shell_db", default=None, help="Nombre de la base de datos (opcional)")
+    shell_p.add_argument("--user", dest="shell_user", default=None, help="Login de usuario para las operaciones (opcional)")
+    shell_p.add_argument(
+        "args", nargs=argparse.REMAINDER,
+        help="Subcomando y argumentos para scripts/odoo-shell (ver ./odoo shell --help)",
+    )
+
     # logs
     logs_p = subparsers.add_parser("logs", help="Muestra logs en tiempo real")
     logs_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
@@ -1481,14 +2368,48 @@ def main():
     fix_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
 
     # psql
-    psql_p = subparsers.add_parser("psql", help="Conectar a PostgreSQL")
-    psql_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
+    psql_p = subparsers.add_parser(
+        "psql",
+        help="Conectar a PostgreSQL, o eliminar una base de datos (./odoo psql remove ...)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Ejemplos:\n"
+            "  ./odoo psql binaural_actual -d binaural_actual_release   # conectar\n"
+            "  ./odoo psql --ps                                        # conectar, cualquier base del servicio\n"
+            "  ./odoo psql remove binaural_actual -d binaural_actual_release  # eliminar (con confirmación)\n"
+            "  ./odoo psql remove --ps                                 # eliminar, cualquier base del servicio\n"
+        ),
+    )
+    psql_p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional), o 'remove' para eliminar una "
+             "base de datos en vez de conectarse.",
+    )
+    psql_p.add_argument(
+        "remove_instance", nargs="?", default=None,
+        help=argparse.SUPPRESS,  # instancia real cuando 'instance' es 'remove'
+    )
     psql_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
+    psql_p.add_argument(
+        "--ps", "--postgres", dest="ps", action="store_true",
+        help="Ignora instancias/db_filter: elegi un servicio de Postgres y "
+             "cualquiera de sus bases, sin filtrar (para conectar, o con "
+             "'remove' para elegir cual eliminar). Requiere habilitar "
+             "brevemente el rol bootstrap (break-glass, reinicia el "
+             "contenedor del servicio si esta en NOLOGIN)."
+    )
 
     # pw
     pw_p = subparsers.add_parser("pw", help="Restablecer contraseña de un usuario")
     pw_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
     pw_p.add_argument("-d", required=False, help="Nombre de la base de datos (opcional)")
+
+    # provision-role
+    provision_p = subparsers.add_parser(
+        "provision-role",
+        help="Crea/actualiza el rol dedicado de Postgres de una instancia y aisla sus bases (owner + REVOKE CONNECT)",
+    )
+    provision_p.add_argument("instance", help="Nombre de instancia (requiere db_user/db_password en instances.json)")
     pw_p.add_argument("-l", help="Login a restablecer (opcional)")
     pw_p.add_argument("-p", "--password", default="admin", help="Nueva contraseña (por defecto: admin)")
 
@@ -1497,6 +2418,10 @@ def main():
     update_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (opcional)")
     update_p.add_argument("-d", required=False, help="Nombre de la base de datos o 'all' (opcional)")
     update_p.add_argument("-m", default=None, help="Módulos a actualizar (opcional)")
+    update_p.add_argument(
+        "-f", "--force", action="store_true",
+        help="Forzar actualizacion literal de TODOS los modulos (sin esto, se usa click-odoo-update para actualizar solo lo que cambio)",
+    )
 
     # init
     init_p = subparsers.add_parser("init", help="Inicializar addons/repositorios")
@@ -1516,26 +2441,160 @@ def main():
     migration_homo_p.add_argument("--install", action="store_true", default=False, help="Instalar módulos l10n_ve_ equivalentes")
     migration_homo_p.add_argument("--uninstall", action="store_true", default=False, help="Desinstalar módulos binaural_ migrados")
 
+    # test
+    test_p = subparsers.add_parser(
+        "test",
+        help="Ejecuta tests de uno o varios módulos con cobertura",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Ejemplos:\n"
+            "  ./odoo test integra-17 binaural_brand\n"
+            "  ./odoo test integra-17 binaural_brand,binaural_mobile   # varios modulos\n"
+            "  ./odoo test -i integra-17 -m binaural_brand             # con flags\n"
+            "  ./odoo test integra-17 binaural_brand --recursive\n"
+            "  ./odoo test integra-17 binaural_brand --out-coverage-json ./reportes\n"
+            "  ./odoo test integra-17 binaural_brand --out-json ./reportes\n"
+            "  ./odoo test integra-17 binaural_brand --all-verbose     "
+            "# guarda todo en ./logs/\n"
+            "  ./odoo test                                             "
+            "# elige instancia y modulo(s) interactivamente\n"
+            "  ./odoo test integra-17 -m src/custom/algun_grupo        "
+            "# path: todos los modulos ahi dentro\n"
+            "  ./odoo test integra-17 -m all --per-module-db           "
+            "# todos los modulos, 1 DB por modulo\n"
+        ),
+    )
+    test_p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional, se elige interactivamente). Alternativa: -i/--instance."
+    )
+    test_p.add_argument(
+        "module", nargs="?", default=None,
+        help="Modulo(s) a testear, separados por coma (opcional, se elige "
+             "interactivamente). Tambien acepta un path DENTRO del contenedor "
+             "(expande a todos los modulos que haya ahi, siempre que este "
+             "dentro de los addons de la instancia) o 'all' (todos los "
+             "modulos de la instancia). Alternativa: -m/--modules."
+    )
+    test_p.add_argument(
+        "-i", "--instance", dest="instance_flag", default=None, metavar="INSTANCIA",
+        help="Instancia (alternativa al posicional)."
+    )
+    test_p.add_argument(
+        "-m", "--modules", dest="module_flag", default=None, metavar="MODULOS",
+        help="Modulo(s), path o 'all' (alternativa al posicional, ver ayuda del posicional)."
+    )
+    test_p.add_argument("-d", "--db", default=None, help="Nombre de la base de datos (opcional)")
+    test_p.add_argument("--tags", default="all", help="Ver ./scripts/odoo-test -h")
+    test_p.add_argument("--recursive", action="store_true", help="Calcula el arbol completo de dependencias")
+    test_p.add_argument("--exclude", default="", help="Modulos a omitir del arbol (con --recursive)")
+    test_p.add_argument(
+        "--no-confirm", action="store_true",
+        help="Salta las confirmaciones interactivas de --recursive (uso en automatizacion/CI)",
+    )
+    test_p.add_argument("--no-rm-db", action="store_true", help="No borra la base de datos al terminar")
+    test_p.add_argument("--dry-run", action="store_true", help="Solo muestra el comando sin ejecutarlo")
+    test_p.add_argument(
+        "--out-coverage-json", default=None, metavar="RUTA",
+        help="Exporta el reporte de cobertura en JSON. Si RUTA es un directorio "
+             "se guarda como coverage.json dentro; si no, RUTA es el nombre de "
+             "archivo completo (ej: ./mi_reporte.json)."
+    )
+    test_p.add_argument(
+        "--out-json", default=None, metavar="RUTA",
+        help="Exporta el resultado exacto de los tests (por test, separado en "
+             "at_install/post_install) en JSON. Mismo criterio de RUTA que "
+             "--out-coverage-json."
+    )
+    test_p.add_argument(
+        "--out-logs", default=None, metavar="RUTA",
+        help="Guarda en RUTA la salida completa de la corrida (boot, "
+             "instalacion de modulos, tests, coverage). Mismo criterio de "
+             "RUTA que --out-coverage-json."
+    )
+    test_p.add_argument(
+        "--out-verbose", action="store_true",
+        help="Muestra ademas el detalle por test (fase, resultado, tiempo, queries)."
+    )
+    test_p.add_argument(
+        "--per-module-db", action="store_true",
+        help="Corre cada modulo en su propia base de datos independiente, "
+             "secuencialmente (ver ./scripts/odoo-test -h). No compatible con -d/--db."
+    )
+    test_p.add_argument(
+        "--out-summary-json", default=None, metavar="RUTA",
+        help="Solo junto con --per-module-db: JSON ultra-resumido por modulo "
+             "({modulo: {passed, coverage}})."
+    )
+    test_p.add_argument(
+        "--all-verbose", action="store_true",
+        help="Atajo: activa --out-verbose y, para --out-json/--out-coverage-json/"
+             "--out-logs (y --out-summary-json, si tambien se paso "
+             "--per-module-db) que no se hayan indicado explicitamente, los "
+             "apunta a ./logs/ (se crea si no existe) con el nombre por "
+             "defecto de cada uno (test_report.json, coverage.json, "
+             "test_run.log, test_summary.json)."
+    )
+
+    # apk: passthrough directo a scripts/odoo-apk antes de argparse (en main()).
+    # El subparser solo queda para listar el comando en el help.
+    subparsers.add_parser(
+        "apk",
+        help="Genera el APK/AAB de la app (TWA) en un contenedor (toolchain en .resources/apk)",
+    )
+
+    # restore: passthrough directo a scripts/odoo_restore antes de argparse
+    # (en main()). El subparser solo queda para listar el comando en el help.
+    subparsers.add_parser(
+        "restore",
+        help="Restaura una base de datos y filestore desde un ZIP. "
+             "Uso: ./odoo restore <instancia> -z <zip> -d <db_destino> "
+             "(ver ./odoo restore --help para el resto de flags)",
+    )
+
+    # agent: passthrough directo a scripts/odoo-agent antes de argparse
+    # (en main()). El subparser solo queda para listar el comando en el help.
+    subparsers.add_parser(
+        "agent",
+        help="Agente HTTP para micro_saas (.resources/docker-odoo-agent). "
+             "Uso: ./odoo agent install | ./odoo agent (activa/desactiva) | "
+             "./odoo agent status|on|off|token|logs",
+    )
+
     args = parser.parse_args()
 
     if not args.action:
         parser.print_help()
         return
 
+    if args.action == "test":
+        args.instance = args.instance_flag or args.instance
+        args.module = args.module_flag or args.module
+
     # Load config for all commands
     config = load_config(BASE_PATH)
 
     actions_with_instance = {
-        "start", "stop", "restart", "logs", "remove", 
-        "fix-files", "init", "bash", "psql", "pw", "update", "migration-homo"
+        "start", "stop", "restart", "logs", "remove",
+        "fix-files", "init", "bash", "psql", "pw", "update", "migration-homo",
+        "test", "shell"
     }
-    
-    if args.action in actions_with_instance and getattr(args, "instance", None) is None:
+
+    # psql --ps (con o sin 'remove') no usa instancia -- prompt_for_instance()
+    # ni siquiera tiene sentido aca, ya que psql_connect_all()/
+    # psql_remove_database() resuelven servicio/base por su cuenta.
+    skip_instance_prompt = args.action == "psql" and getattr(args, "ps", False)
+
+    if (
+        args.action in actions_with_instance
+        and getattr(args, "instance", None) is None
+        and not skip_instance_prompt
+    ):
         args.instance = prompt_for_instance(config, args.action)
 
     # Dispatch
     if args.action == "build":
-        build_odoo(config, args.no_cache)
+        build_odoo(config, args.no_cache, args.no_confirm)
     elif args.action == "start":
         start_odoo(config, args.instance)
     elif args.action == "stop":
@@ -1544,6 +2603,46 @@ def main():
         restart_odoo(config, args.instance)
     elif args.action == "bash":
         run_bash(config, args.instance)
+    elif args.action == "shell":
+        shell_args = list(args.args)
+        instance = args.instance
+        # El posicional es ambigüo entre "instancia" y el subcomando. Si no es
+        # una instancia conocida, se trata como primer argumento del script.
+        if instance is not None and instance not in config["instances"]:
+            shell_args.insert(0, instance)
+            instance = None
+        if instance is None:
+            instance = prompt_for_instance(config, "shell")
+        # `-d <db>` después de la instancia cae en REMAINDER; se extrae acá
+        # para no volver a preguntar la base (el script también lo acepta).
+        shell_db = args.shell_db
+        filtered_args = []
+        skip_next = False
+        for i, token in enumerate(shell_args):
+            if skip_next:
+                skip_next = False
+                continue
+            if token in ("-d", "--db") and i + 1 < len(shell_args):
+                shell_db = shell_db or shell_args[i + 1]
+                skip_next = True
+                continue
+            if token.startswith("--db=") or token.startswith("-d="):
+                shell_db = shell_db or token.split("=", 1)[1]
+                continue
+            filtered_args.append(token)
+        shell_args = filtered_args
+        if shell_db is None:
+            shell_db = prompt_for_database(config, instance)
+        cmd = [
+            str(Path(BASE_PATH) / "scripts" / "odoo-shell"),
+            "--container", f"odoo-{instance}",
+            "-d", shell_db,
+        ]
+        if args.shell_user:
+            cmd += ["--user", args.shell_user]
+        cmd += shell_args
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
     elif args.action == "logs":
         show_logs(config, args.instance)
     elif args.action == "list":
@@ -1553,22 +2652,36 @@ def main():
     elif args.action == "fix-files":
         fix_filestore(config, args.instance)
     elif args.action == "psql":
-        if args.d is None:
-            args.d = prompt_for_database(config, args.instance)
-        psql_connect(config, args.instance, args.d)
+        if args.instance == "remove":
+            psql_remove_database(config, args.remove_instance, args.d, args.ps)
+        else:
+            if args.remove_instance is not None:
+                print(f"Error: argumento inesperado '{args.remove_instance}'.")
+                sys.exit(1)
+            if args.ps:
+                psql_connect_all(config)
+            else:
+                if args.d is None:
+                    args.d = prompt_for_database(config, args.instance)
+                psql_connect(config, args.instance, args.d)
     elif args.action == "pw":
         if args.d is None:
             args.d = prompt_for_database(config, args.instance)
         if args.l is None:
             args.l = prompt_for_user(config, args.instance, args.d)
         reset_password(config, args.instance, args.d, args.l, args.password)
+    elif args.action == "provision-role":
+        provision_instance_role(config, args.instance)
     elif args.action == "update":
         if args.instance is None:
             args.instance = prompt_for_instance(config, "update")
         if args.d is None:
             args.d = prompt_for_database(config, args.instance, allow_all=True)
         if args.m is None:
-            args.m = prompt_for_modules(config, args.instance)
+            # Sin -m, actualizar todo directo -- no tiene sentido forzar al
+            # usuario a elegir de una lista cuando "todos" ya es la opcion
+            # por defecto sensata (y ahora, con click-odoo-update, la rapida).
+            args.m = "all"
         if args.d.strip().lower() == "all":
             databases = get_databases(config, args.instance)
             if not databases:
@@ -1577,7 +2690,7 @@ def main():
 
             failures = []
             for db_name in databases:
-                result = bash_update_modules(config, args.instance, db_name, args.m)
+                result = bash_update_modules(config, args.instance, db_name, args.m, force_all=args.force)
                 if result != 0:
                     failures.append((db_name, result))
 
@@ -1587,7 +2700,7 @@ def main():
                     print(f"  - {db_name} (exit code: {code})")
                 sys.exit(1)
         else:
-            bash_update_modules(config, args.instance, args.d, args.m)
+            bash_update_modules(config, args.instance, args.d, args.m, force_all=args.force)
     elif args.action == "migration-homo":
         if args.instance == "info" or args.instance is None:
             if args.instance == "info" and args.info_instance:
@@ -1615,6 +2728,70 @@ def main():
         if args.b is None:
             args.b = prompt_for_branch(args.r if isinstance(args.r, str) else None)
         sync(args.r, args.b, show=args.v)
+    elif args.action == "test":
+        if args.module is None:
+            args.module = prompt_for_test_modules(config, args.instance)
+        else:
+            args.module = translate_module_path_tokens(args.module)
+
+        if args.per_module_db and args.db:
+            print("Error: --per-module-db no es compatible con -d/--db.")
+            sys.exit(1)
+
+        container = f"odoo-{args.instance}"
+        container_addons = resolve_container_addon_paths(config, args.instance)
+        if not container_addons:
+            print(f"Error: no se encontraron directorios de addons para la instancia '{args.instance}'.")
+            sys.exit(1)
+
+        if args.all_verbose:
+            logs_dir = os.path.join(BASE_PATH, "logs")
+            os.makedirs(logs_dir, exist_ok=True)
+            args.out_json = args.out_json or logs_dir
+            args.out_coverage_json = args.out_coverage_json or logs_dir
+            args.out_logs = args.out_logs or logs_dir
+            args.out_verbose = True
+            if args.per_module_db:
+                args.out_summary_json = args.out_summary_json or logs_dir
+            print(f"--all-verbose: guardando reportes en {logs_dir}/")
+
+        # scripts/odoo-test es standalone (no lee instances.json): este
+        # comando es el unico punto acoplado a docker-odoo-multi, y le pasa
+        # todo lo que necesita por flag (--container, --addons).
+        cmd = [
+            str(Path(BASE_PATH) / "scripts" / "odoo-test"),
+            args.module,
+            "--container", container,
+            "--addons", ",".join(container_addons),
+        ]
+        if args.db:
+            cmd += ["-d", args.db]
+        if args.tags != "all":
+            cmd += ["--tags", args.tags]
+        if args.recursive:
+            cmd.append("--recursive")
+        if args.exclude:
+            cmd += ["--exclude", args.exclude]
+        if args.no_confirm:
+            cmd.append("--no-confirm")
+        if args.no_rm_db:
+            cmd.append("--no-rm-db")
+        if args.out_coverage_json:
+            cmd += ["--out-coverage-json", args.out_coverage_json]
+        if args.out_json:
+            cmd += ["--out-json", args.out_json]
+        if args.out_logs:
+            cmd += ["--out-logs", args.out_logs]
+        if args.out_verbose:
+            cmd.append("--out-verbose")
+        if args.per_module_db:
+            cmd.append("--per-module-db")
+        if args.out_summary_json:
+            cmd += ["--out-summary-json", args.out_summary_json]
+        if args.dry_run:
+            cmd.append("--dry-run")
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
 
 
 if __name__ == "__main__":

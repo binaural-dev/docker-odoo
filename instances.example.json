@@ -24,8 +24,11 @@
     "pg16": {
       "postgres_version": 16,
       "port": 5432,
+      "expose_host_port": false,
       "user": "odoo",
       "password": "odoo",
+      "bootstrap_user": "odoo_bootstrap",
+      "bootstrap_password": "cambiar-esto",
       "config": "postgresql.conf"
     }
   },
@@ -35,12 +38,43 @@
       "external_port": 8070,
       "database": "pg16",
       "odoo_config": "default",
+      "db_user": "app_client_a",
+      "db_password": "odoo",
       "overwrite_odoo_config": {
         "addons": [
           "src/enterprise-19.0",
           "src/custom/client-a"
         ],
         "db_filter": "^client-a_"
+      }
+    },
+    "client-a-maintenance": {
+      "odoo_version": "19.0",
+      "external_port": 8071,
+      "database": "pg16",
+      "odoo_config": "default",
+      "db_user": "app_client_a_maintenance",
+      "db_password": "odoo",
+      "overwrite_odoo_config": {
+        "addons": [
+          "src/enterprise-19.0",
+          "src/custom/client-a-maintenance"
+        ],
+        "db_filter": "^client-a-maintenance_"
+      }
+    },
+    "demo-odoo20": {
+      "odoo_version": "20.0",
+      "external_port": 8072,
+      "database": "pg16",
+      "odoo_config": "default",
+      "db_user": "app_demo_odoo20",
+      "db_password": "odoo",
+      "overwrite_odoo_config": {
+        "addons": [
+          "src/enterprise-20.0"
+        ],
+        "db_filter": "^demo-odoo20_"
       }
     }
   },

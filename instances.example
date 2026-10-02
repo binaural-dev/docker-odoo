@@ -16,7 +16,7 @@
       "db_maxconn": 200,                       # Conexiones maximas a PostgreSQL por worker
       "unaccent": false,                       # Extension unaccent de PostgreSQL para busquedas sin acentos
       "server_wide_modules": "",               # Modulos cargados en todos los workers (ej: "web,base_import_module")
-      "db_filter": "",                         # Filtro regex para restringir bases de datos visibles
+      "db_filter": "",                         # Filtro regex de bases de datos visibles para Odoo, y usado por "./odoo update -d all" para no tocar bases de otras instancias
       "db_name": "False",                      # Base de datos por defecto ("False" para deshabilitar)
       "server_mode": "test",                   # Modo del servidor: "test", "development", "production"
       "aeroo_docs_host": "aeroo",              # Host del servicio Aeroo Docs para reportes
@@ -56,15 +56,18 @@
   "databases": {
     "local_pg16": {
       "postgres_version": 16,                  # Version de PostgreSQL a usar (16, 15, 14, etc.)
-      "port": 5432,                            # Puerto expuesto en el host para conectarse a PostgreSQL
-      "user": "odoo",                          # Usuario de PostgreSQL (tambien usado por Odoo)
-      "password": "odoo",                      # Password de PostgreSQL (tambien usado por Odoo)
+      "port": 5432,                            # Puerto en el host, solo se publica si expose_host_port=true
+      "expose_host_port": false,               # true: publica "port" en el host (docker-compose ports). Por defecto la DB solo es alcanzable dentro de la red interna de Docker (db-<nombre>:5432)
+      "user": "odoo",                          # Usuario de PostgreSQL que usa Odoo (NO superusuario: solo LOGIN + CREATEDB)
+      "password": "odoo",                      # Password del usuario de arriba
+      "bootstrap_user": "odoo_bootstrap",       # Opcional. Rol que crea Postgres al inicializar el volumen (initdb) -- SIEMPRE superusuario, Postgres no permite quitarle ese atributo. Se usa solo para crear "user" en un volumen nuevo, y luego queda en NOLOGIN (nadie se autentica con el). Si se omite, "user" hace de bootstrap tambien (compatibilidad con configs viejas, no recomendado)
+      "bootstrap_password": "cambiar-esto",     # Opcional, ver bootstrap_user arriba
       "config": "postgresql.conf",             # Archivo de configuracion de PostgreSQL en .resources/dbconfigs/
       "create_container": true                 # true: Docker crea y gestiona el contenedor de PostgreSQL
     },
     "external_pg16": {
       "postgres_version": 16,                  # Version de PostgreSQL (para referencia)
-      "port": 5432,                            # Puerto expuesto en el host
+      "port": 5432,                            # Puerto de la base de datos externa
       "user": "odoo",                          # Usuario de PostgreSQL
       "password": "odoo",                      # Password de PostgreSQL
       "create_container": false,               # false: No crea contenedor, conecta a base de datos externa
@@ -78,6 +81,8 @@
       "external_port": 8070,                     # Puerto en el host donde nginx escucha (debe ser unico)
       "database": "local_pg16",                  # Referencia a la base de datos (debe existir en la seccion databases)
       "odoo_config": "19.0_full",                # Referencia a la configuracion base (debe existir en odoo_configs)
+      "db_user": "app_client_a",                 # Rol de Postgres DEDICADO a esta instancia (raiz, no dentro de overwrite_odoo_config). Obligatorio si otra instancia comparte "database" y esta tiene cron activo -- ver nota abajo
+      "db_password": "cambiar-esto",              # Password del rol de arriba. Tras definirlo, correr "./odoo provision-role client-a" para crearlo y transferirle el ownership de sus bases.
       "overwrite_odoo_config": {
         "enabled": true,                         # Sobrescribe habilitacion de la instancia
         "admin_password": "admin",               # Sobrescribe password del admin
@@ -94,7 +99,7 @@
         "db_maxconn": 200,                         # Sobrescribe conexiones maximas
         "unaccent": false,                         # Sobrescribe sin unaccent
         "server_wide_modules": "",                 # Sobrescribe modulos server-wide
-        "db_filter": "",                           # Sobrescribe filtro de bases de datos
+        "db_filter": "^client-a_",                 # Sobrescribe filtro de bases de datos (ej: matchea client-a_prod, client-a_staging, etc.). Debe ser especifico (no vacio, no "*", sin %h/%d) si comparte "database" con otra instancia y tiene cron activo
         "db_name": "prod",                         # Sobrescribe nombre de base de datos por defecto
         "server_mode": "production",               # Sobrescribe modo del servidor
         "aeroo_docs_host": "aeroo",                # Sobrescribe host de Aeroo
@@ -102,6 +107,37 @@
         "addons": [                                # Sobrescribe lista de addons especificos
           "src/enterprise",
           "src/custom/client-a"
+        ]
+      }
+    },
+    # "client-a-maintenance" comparte el mismo servicio de Postgres que "client-a"
+    # ("local_pg16") -- ejemplo real de por que "db_user"/"db_password" y un
+    # "db_filter" especifico son obligatorios en este caso: el cron interno de
+    # Odoo (ir.cron) NUNCA respeta "db_filter" (solo rige el selector web), asi
+    # que sin un rol de Postgres propio por instancia, el cron de una puede
+    # terminar procesando datos de la base de la OTRA -- ya paso en produccion.
+    # Sin esto, cualquier comando "./odoo" rechaza la configuracion con un error
+    # detallado. Escape hatch legitimo: "max_cron_threads": 0 explicito si una
+    # instancia de verdad no corre cron.
+    "client-a-maintenance": {
+      "enabled": true,
+      "odoo_version": "19.0",
+      "external_port": 8072,
+      "database": "local_pg16",
+      "odoo_config": "19.0_full",
+      "db_user": "app_client_a_maintenance",     # Rol dedicado, distinto al de "client-a"
+      "db_password": "cambiar-esto-tambien",
+      "overwrite_odoo_config": {
+        "workers": 2,
+        "without_demo": true,
+        "list_db": true,
+        "proxy_mode": true,
+        "max_cron_threads": 1,
+        "db_filter": "^client-a-maintenance_",   # Debe no solapar con el de "client-a" -- si dos filtros matchean la misma base, "provision-role" puede robarsela a la instancia que ya la tenia
+        "server_mode": "test",
+        "addons": [
+          "src/enterprise",
+          "src/custom/client-a-maintenance"
         ]
       }
     },
