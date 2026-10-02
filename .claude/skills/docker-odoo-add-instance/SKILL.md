@@ -51,6 +51,13 @@ Si el usuario no lo especificó ya en el pedido, preguntar:
 No preguntar por puerto externo, password, ni memoria -- se resuelven solos
 (ver pasos 1 y 2).
 
+**Importante -- esta skill NO clona repositorios.** Solo decide qué rutas
+van en la lista `addons` del JSON según lo que el usuario diga que necesita
+el proyecto. Que esas carpetas existan de verdad en `src/custom/<nombre>/...`
+(el repo del cliente, `integra-addons`, `third-party-addons`, etc.) es
+responsabilidad manual del usuario -- ni esta skill ni `./odoo init` clonan
+nada, `init` solo informa qué falta (ver paso 3.5).
+
 ## Paso a paso
 
 Ejecutar siempre desde la raíz del repo (`BASE_PATH`, donde vive `./odoo`).
@@ -161,6 +168,18 @@ print('OK: carga sin errores.')
 
 Si esto falla, el mensaje de error ya dice exactamente qué instancia y qué
 requisito falta -- no adivinar, leerlo.
+
+### 4.5. Verificar que los addons existan en disco
+
+```bash
+./odoo init induvar
+```
+
+Esto solo **informa** qué carpetas de `addons` faltan en `src/` -- no clona
+nada. Si falta alguna, avisar al usuario y esperar a que la clone/cree antes
+de seguir con `build` (si el path no existe, Odoo igual puede arrancar pero
+sin esos módulos disponibles, lo cual suele ser peor que un error claro de
+entrada).
 
 ### 5. Build
 
