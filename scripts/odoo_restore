@@ -996,7 +996,7 @@ def run_post_restore(container_name, db_name, environment=None, verbose=False):
         cmd.append("--verbose")
 
     print(
-        "\n=== Post-restore: actualizar módulos, Environment, rama, "
+        "\n=== Post-restore: actualizar módulos, Environment, parámetros, "
         f"Sandbox Mode y assets en '{db_name}' ===\n",
         flush=True,
     )
@@ -1074,7 +1074,7 @@ def parse_args():
         action="store_true",
         help=(
             "Restaurar la base tal cual: no ejecutar post_restore_db "
-            "(-u all, Environment, rama, Sandbox Mode ni assets)"
+            "(-u all, Environment, parámetros, Sandbox Mode ni assets)"
         ),
         default=False,
     )
@@ -1083,8 +1083,8 @@ def parse_args():
         default=None,
         help=(
             "Valor del parámetro de sistema 'Environment' en el post-restore. "
-            "Default: según la instancia (bp-staging -> Staging, bp-qa -> QA); "
-            "cualquier otra -> QA"
+            "Default: post_restore.environment de la instancia en instances.json, "
+            "o QA"
         ),
     )
 

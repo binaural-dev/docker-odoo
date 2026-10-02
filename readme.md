@@ -249,6 +249,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `fix-files [instance]` | Corrige permisos del filestore. |
 | `psql <instance> -d <db>` | Conecta a PostgreSQL. Con `--ps`/`--postgres` en vez de instancia, elegí cualquier base de cualquier servicio de Postgres, sin filtrar (rompe el `NOLOGIN` del rol bootstrap brevemente si hace falta). `psql remove <instance> -d <db>` (o `psql remove --ps`) elimina una base con confirmación explícita. |
 | `restore <instance> -z <zip> -d <db>` | Restaura una base de datos y filestore desde un ZIP (passthrough directo a `scripts/odoo_restore restore`, ver más abajo). |
+| `regenerate-assets <instance> -d <db>` | Regenera los assets (JS/CSS) de una base, igual que el botón "Regenerar activos" del menú de debug, para cuando el botón no está a mano (base importada desde la interfaz web, `/web/login` con 500 por un bundle viejo). Passthrough a `scripts/odoo-regenerate-assets`. |
 | `update <instance> [-d <db\|all>] [-m modules] [-f]` | Actualiza módulos de Odoo (una base o todas). Sin `-m`, actualiza todos los módulos usando `click-odoo-update` (solo los que cambiaron desde la última actualización); con `-f`/`--force` fuerza un upgrade completo de todos, sin importar qué cambió. Un módulo puntual (`-m modulo`) siempre se actualiza directo, sin pasar por ninguno de los dos caminos anteriores. |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
@@ -392,6 +393,9 @@ scripts/odoo_backup backup <instance> -d <dbname> -p <path>
 # Restore
 scripts/odoo_restore restore <instance> -z <zipfile> -d <new_dbname>
 
+# Regenerate assets (botón "Regenerar activos" por comando)
+scripts/odoo-regenerate-assets <instance> -d <dbname>
+
 # Reset password
 scripts/odoo-pw <instance> -d <dbname> [-l login] [-p password]
 
@@ -409,6 +413,36 @@ scripts/precommit <instance> -m <modules>
     --package com.binaural.<cliente>.ventas \
     --version 1.2.0 --version-code 12000
 ```
+
+### Post-restore (`scripts/post_restore_db`)
+
+`./odoo restore` (y `scripts/odoo_restore_scp`) termina cada restore con
+`scripts/post_restore_db`, salvo con `--skip-post-restore`. Sobre la base
+restaurada: `-u all` (con reintentos), parámetro de sistema `Environment`,
+parámetros extra de la instancia, Sandbox Mode (si está
+`database_neutralize_toggle`) y regeneración de assets
+(`scripts/odoo-regenerate-assets`). Mientras corre el `-u all` los crons de
+la base quedan pausados, para que el cron de la instancia no la cargue a
+medio actualizar.
+
+Lo propio de cada instancia va en `instances.json` (todo opcional):
+
+```json
+"bp-staging": {
+  "post_restore": {
+    "environment": "Staging",
+    "system_params": {"bp_deploy_manager.default_branch": "staging"}
+  }
+}
+```
+
+- `environment`: valor de `Environment` (default `QA`).
+- `system_params`: se aplican solo los que ya existen en la base; un
+  parámetro de un módulo que no está instalado no se crea.
+
+`--environment` y `--param CLAVE=VALOR` (repetible) tienen prioridad.
+También se puede correr solo sobre una base que ya existe:
+`scripts/post_restore_db --container odoo-<instancia> --db-name <db> [--skip-module-update]`.
 
 ### `./odoo apk` — Generar el APK/AAB de la app (Trusted Web Activity)
 

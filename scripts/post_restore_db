@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Configuración post-restore para bases de datos de testing (Staging/QA).
+Configuración post-restore para bases de datos de pruebas.
 
 Lo ejecuta `odoo_restore` al final de cada restore (y por lo tanto también
 `odoo_restore_scp`, que restaura a través de `odoo_restore`), salvo que se
@@ -11,83 +11,103 @@ Antes de los pasos de configuración se ejecuta `-u all` sobre la base
 (se omite con `--skip-module-update`). Es best-effort: si sigue fallando
 tras los reintentos, se avisa y la configuración se aplica igual.
 
-Pasos de configuración. Los pasos 1, 2 y 3 van en este orden exacto
-(obligatorio: `database_neutralize_toggle` bloquea la activación de Sandbox
-Mode si el parámetro de sistema 'Environment' todavía indica producción);
-el paso 4 es independiente de los demás:
+Pasos, en este orden (obligatorio: `database_neutralize_toggle` bloquea la
+activación de Sandbox Mode si el parámetro 'Environment' todavía indica
+producción):
 
-  1. Ajusta el parámetro de sistema 'Environment' (prod -> Staging/QA). Si
-     no se pasa `--environment`, se deduce de la instancia (bp-staging ->
-     Staging, bp-qa -> QA) y para cualquier otra instancia se usa QA.
-  2. Ajusta el parámetro de sistema 'bp_deploy_manager.default_branch' a la
-     rama del entorno restaurado (staging -> 'staging', qa -> 'qa'; cualquier
-     otro entorno -> 'qa'), si ese parámetro ya existe en la base. El dump de producción trae ese
-     parámetro apuntando a 'release'; sin este paso, un deploy programado
-     recién creado en la base restaurada arrancaría precargado con la rama
-     de producción en vez de la rama que corresponde a Staging/QA.
-  3. Activa Sandbox Mode a través del wizard de Ajustes Generales
-     (res.config.settings), igual que si un usuario marcara el check y
-     diera clic en "Guardar". Esto es lo que efectivamente desactiva los
-     servidores de correo, fetchmail y crons (vía database_neutralize_toggle,
-     que ya viene instalado en el dump de producción).
-  4. Regenera los bundles de assets del frontend. El restore corre después
-     de un `-u all` que puede dejar el bundle compilado (`ir.attachment` en
-     `/web/assets/...`) desactualizado o corrupto respecto al código nuevo,
-     lo que rompe con un 500 el JS/CSS de páginas como `/web/login`. Es el
-     mismo efecto que el botón "Regenerar Activos" del menú de debug.
+  1. Reactiva los crons que `odoo_restore` pausó durante el `-u all`, para
+     que Sandbox Mode vea el estado real de producción.
+  2. Ajusta el parámetro de sistema 'Environment' (producción -> el entorno
+     de pruebas).
+  3. Ajusta los parámetros de sistema extra de la instancia, solo los que ya
+     existen en la base (un parámetro de un módulo que no está instalado no
+     se crea). Sirve para lo que el dump trae apuntando a producción, p. ej.
+     la rama por defecto de un módulo de deploys.
+  4. Activa Sandbox Mode a través del wizard de Ajustes Generales
+     (res.config.settings), igual que si un usuario marcara el check y diera
+     clic en "Guardar": desactiva servidores de correo, fetchmail y crons
+     (vía `database_neutralize_toggle`). Se omite si el módulo no está.
+  5. Regenera los assets con `scripts/odoo-regenerate-assets`: el `-u all`
+     puede dejar el bundle compilado desactualizado y romper con un 500 el
+     JS/CSS de páginas como `/web/login`.
 
-Todos los pasos corren en una sola sesión de `odoo shell` contra la base
-recién restaurada, en el mismo contenedor que la va a servir.
+Valores por instancia, en `instances.json` (todos opcionales):
 
-La activación de Sandbox Mode puede chocar con una condición de carrera:
-apenas la base queda visible tras el `-u all` previo, el scheduler de
-crons del propio contenedor puede tomar y estar ejecutando alguno de los
-`ir.cron` heredados de producción justo cuando `settings.execute()` intenta
-desactivarlos todos, y Odoo bloquea la escritura sobre un cron en ejecución
-(UserError "esta tarea de cron se está ejecutando..."). Por eso ese paso
-reintenta con backoff antes de darse por vencido.
+    "post_restore": {
+        "environment": "Staging",
+        "system_params": {"bp_deploy_manager.default_branch": "staging"}
+    }
+
+`--environment` y `--param CLAVE=VALOR` tienen prioridad sobre esos
+valores. Sin nada configurado, 'Environment' queda en "QA".
+
+La activación de Sandbox Mode puede chocar con una condición de carrera: el
+scheduler de crons del propio contenedor puede estar ejecutando alguno de
+los `ir.cron` heredados de producción justo cuando `settings.execute()`
+intenta desactivarlos, y Odoo bloquea la escritura sobre un cron en
+ejecución. Por eso ese paso reintenta con backoff.
 """
 
 import argparse
+import json
+import os
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
 
 ENVIRONMENT_PARAM = "Environment"
-DEFAULT_BRANCH_PARAM = "bp_deploy_manager.default_branch"
-# Valor de 'Environment' por instancia; cualquier otra instancia usa el default.
-ENVIRONMENT_BY_INSTANCE = {
-    "bp-staging": "Staging",
-    "bp-qa": "QA",
-}
 DEFAULT_ENVIRONMENT = "QA"
-ENVIRONMENT_BRANCH_MAP = {
-    "staging": "staging",
-    "qa": "qa",
-}
-DEFAULT_BRANCH = "qa"
 SANDBOX_RETRY_ATTEMPTS = 5
 SANDBOX_RETRY_DELAY_SECONDS = 10
+REGENERATE_ASSETS_SCRIPT = os.path.join(BASE_PATH, "scripts", "odoo-regenerate-assets")
 
-# El contenedor destino es un servidor multi-tenant siempre corriendo
-# (workers + hilo de cron) que sirve, vía `dbfilter`, cualquier base que
-# calce con el prefijo de la instancia. Apenas la base recién restaurada
-# queda visible, ese servidor puede engancharse a ella (cron, workers)
-# justo cuando este `-u all` también la está tocando, y Postgres aborta
-# una de las dos transacciones con "deadlock detected" sobre
+# El contenedor destino está siempre corriendo (workers + hilo de cron).
+# Apenas la base recién restaurada queda visible, ese servidor puede
+# engancharse a ella justo cuando este `-u all` también la está tocando, y
+# Postgres aborta una de las dos transacciones con "deadlock detected" sobre
 # `ir_module_module`. Es una condición de carrera real contra el propio
 # servidor, no un fallo aislado, así que se reintenta con backoff.
 MODULE_UPDATE_RETRY_ATTEMPTS = 4
+MODULE_UPDATE_RETRY_DELAY_SECONDS = 20
 # Created by odoo_restore (pause_crons) with the crons it turned off
 PAUSED_CRONS_TABLE = "_restore_paused_crons"
-MODULE_UPDATE_RETRY_DELAY_SECONDS = 20
 
 
-def resolve_environment(container, environment=None):
-    if environment:
-        return environment
+def load_instance_settings(container):
+    """'post_restore' de la instancia del contenedor en instances.json ({} si
+    no hay instances.json, la instancia no existe o no tiene la clave).
+
+    Lee el JSON directo, sin load_config(): solo hace falta esta clave, y una
+    validación que falle por otra instancia no debe dejar a esta con los
+    valores por defecto."""
     instance = container.removeprefix("odoo-")
-    return ENVIRONMENT_BY_INSTANCE.get(instance, DEFAULT_ENVIRONMENT)
+    path = os.path.join(BASE_PATH, "instances.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path) as f:
+            config = json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"AVISO: no se pudo leer {path} ({exc}); se usan los valores por defecto", file=sys.stderr)
+        return {}
+    settings = config.get("instances", {}).get(instance, {}).get("post_restore") or {}
+    if not isinstance(settings, dict):
+        print(f"AVISO: post_restore de '{instance}' no es un objeto; se ignora", file=sys.stderr)
+        return {}
+    return settings
+
+
+def parse_params(pairs):
+    params = {}
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            raise argparse.ArgumentTypeError(f"--param espera CLAVE=VALOR, no '{pair}'")
+        params[key.strip()] = value
+    return params
 
 
 def run_module_update(container, db_name, odoo_bin="odoo"):
@@ -131,26 +151,7 @@ def run_module_update(container, db_name, odoo_bin="odoo"):
     return False
 
 
-def _build_branch_step(environment):
-    target_branch = ENVIRONMENT_BRANCH_MAP.get(
-        environment.strip().lower(), DEFAULT_BRANCH
-    )
-
-    return f'''
-    if icp.get_param({DEFAULT_BRANCH_PARAM!r}) is not None:
-        icp.set_param({DEFAULT_BRANCH_PARAM!r}, {target_branch!r})
-        env.cr.commit()
-        print("POST_RESTORE_STEP: {DEFAULT_BRANCH_PARAM} -> {target_branch}")
-    else:
-        print(
-            "POST_RESTORE_SKIP_BRANCH: {DEFAULT_BRANCH_PARAM} no esta "
-            "definido en esta base (bp_deploy_manager no instalado)"
-        )
-'''
-
-
-def _build_shell_script(environment):
-    branch_step = _build_branch_step(environment)
+def _build_shell_script(environment, system_params):
     return f'''
 import sys
 import time
@@ -173,7 +174,16 @@ try:
     icp.set_param({ENVIRONMENT_PARAM!r}, {environment!r})
     env.cr.commit()
     print("POST_RESTORE_STEP: {ENVIRONMENT_PARAM} -> {environment}")
-{branch_step}
+
+    for key, value in {system_params!r}.items():
+        # get_param() returns False for a missing key: look for the record
+        if not icp.search_count([("key", "=", key)]):
+            print("POST_RESTORE_SKIP_PARAM: %s no esta definido en esta base" % key)
+            continue
+        icp.set_param(key, value)
+        env.cr.commit()
+        print("POST_RESTORE_STEP: %s -> %s" % (key, value))
+
     if "sandbox_mode" not in env["res.config.settings"]._fields:
         print(
             "POST_RESTORE_SKIP_SANDBOX: database_neutralize_toggle no esta "
@@ -212,11 +222,6 @@ try:
         print("POST_RESTORE_STEP: sandbox_mode -> True")
         print("POST_RESTORE_SANDBOX_APPLIED")
 
-    env["ir.attachment"].sudo().regenerate_assets_bundles()
-    env.cr.commit()
-    print("POST_RESTORE_STEP: assets bundles regenerated")
-    print("POST_RESTORE_ASSETS_REGENERATED")
-
     print("POST_RESTORE_OK")
 except Exception as exc:
     env.cr.rollback()
@@ -225,8 +230,8 @@ except Exception as exc:
 '''
 
 
-def run_post_restore(container, db_name, environment, odoo_bin="odoo", verbose=False):
-    script = _build_shell_script(environment)
+def run_post_restore(container, db_name, environment, system_params, odoo_bin="odoo", verbose=False):
+    script = _build_shell_script(environment, system_params)
 
     cmd = [
         "docker", "exec", "-i", container,
@@ -239,6 +244,7 @@ def run_post_restore(container, db_name, environment, odoo_bin="odoo", verbose=F
         print(
             f"\nEjecutando post-restore en '{db_name}' (contenedor {container})...\n"
             f"Environment objetivo: {environment}\n"
+            f"Parámetros extra: {system_params or '-'}\n"
         )
 
     result = subprocess.run(cmd, input=script, text=True, capture_output=True)
@@ -257,27 +263,36 @@ def run_post_restore(container, db_name, environment, odoo_bin="odoo", verbose=F
         )
         sys.exit(1)
 
-    sandbox_note = (
-        "Sandbox Mode activado"
-        if "POST_RESTORE_SANDBOX_APPLIED" in result.stdout
-        else "Sandbox Mode omitido (database_neutralize_toggle no instalado)"
-    )
-    print(
-        f"post_restore_db: '{db_name}' -> {ENVIRONMENT_PARAM}={environment}, "
-        f"{sandbox_note}, assets regenerados"
-    )
+    sys.stdout.flush()
+    return "POST_RESTORE_SANDBOX_APPLIED" in result.stdout
+
+
+def run_regenerate_assets(container, db_name, odoo_bin="odoo", verbose=False):
+    cmd = [
+        sys.executable, REGENERATE_ASSETS_SCRIPT,
+        container.removeprefix("odoo-"), "-d", db_name, "--odoo-bin", odoo_bin,
+    ]
+    if verbose:
+        cmd.append("--verbose")
+    if subprocess.run(cmd).returncode != 0:
+        print(
+            f"ERROR: no se pudieron regenerar los assets de '{db_name}'; "
+            f"reintentar con scripts/odoo-regenerate-assets",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def main():
     parser = argparse.ArgumentParser(
         description=(
             "Prepara una base de datos recién restaurada: actualiza módulos, "
-            "ajusta 'Environment' y la rama por defecto, activa Sandbox Mode "
-            "y regenera los assets."
+            "ajusta 'Environment' y los parámetros de la instancia, activa "
+            "Sandbox Mode y regenera los assets."
         )
     )
     parser.add_argument(
-        "--container", required=True, help="Contenedor Odoo, ej. odoo-bp-staging"
+        "--container", required=True, help="Contenedor Odoo, ej. odoo-<instancia>"
     )
     parser.add_argument(
         "--db-name", required=True, help="Base de datos recién restaurada"
@@ -286,9 +301,18 @@ def main():
         "--environment",
         default=None,
         help=(
-            "Valor a guardar en el parámetro de sistema 'Environment' (ej. Staging, QA). "
-            "Default: según la instancia (bp-staging -> Staging, bp-qa -> QA); "
-            f"cualquier otra -> {DEFAULT_ENVIRONMENT}"
+            "Valor del parámetro de sistema 'Environment' (ej. Staging, QA). "
+            "Default: post_restore.environment de la instancia en instances.json, "
+            f"o {DEFAULT_ENVIRONMENT}"
+        ),
+    )
+    parser.add_argument(
+        "--param",
+        action="append",
+        metavar="CLAVE=VALOR",
+        help=(
+            "Parámetro de sistema extra (repetible); se suma a "
+            "post_restore.system_params de la instancia y tiene prioridad"
         ),
     )
     parser.add_argument(
@@ -302,15 +326,36 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
+    try:
+        cli_params = parse_params(args.param)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
+
+    settings = load_instance_settings(args.container)
+    environment = args.environment or settings.get("environment") or DEFAULT_ENVIRONMENT
+    system_params = {**(settings.get("system_params") or {}), **cli_params}
+
     if not args.skip_module_update:
         run_module_update(args.container, args.db_name, odoo_bin=args.odoo_bin)
 
-    run_post_restore(
+    sandbox_applied = run_post_restore(
         container=args.container,
         db_name=args.db_name,
-        environment=resolve_environment(args.container, args.environment),
+        environment=environment,
+        system_params=system_params,
         odoo_bin=args.odoo_bin,
         verbose=args.verbose,
+    )
+    run_regenerate_assets(args.container, args.db_name, odoo_bin=args.odoo_bin, verbose=args.verbose)
+
+    sandbox_note = (
+        "Sandbox Mode activado"
+        if sandbox_applied
+        else "Sandbox Mode omitido (database_neutralize_toggle no instalado)"
+    )
+    print(
+        f"post_restore_db: '{args.db_name}' -> {ENVIRONMENT_PARAM}={environment}, "
+        f"{sandbox_note}, assets regenerados"
     )
 
 

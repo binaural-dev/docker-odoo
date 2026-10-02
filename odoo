@@ -1567,6 +1567,13 @@ def main():
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
+    # Passthrough directo del subcomando regenerate-assets: lo mismo que el
+    # boton "Regenerar activos" del menu de debug (scripts/odoo-regenerate-assets)
+    if len(sys.argv) >= 2 and sys.argv[1] == "regenerate-assets":
+        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-regenerate-assets")] + sys.argv[2:]
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
     # Passthrough directo del subcomando agent: scripts/odoo-agent gestiona
     # el agente HTTP de .resources/docker-odoo-agent y le pasa sus flags
     # tal cual a install.sh, asi que se delega antes de parsear.
@@ -1830,6 +1837,14 @@ def main():
         help="Restaura una base de datos y filestore desde un ZIP. "
              "Uso: ./odoo restore <instancia> -z <zip> -d <db_destino> "
              "(ver ./odoo restore --help para el resto de flags)",
+    )
+
+    # regenerate-assets: passthrough directo a scripts/odoo-regenerate-assets
+    # antes de argparse (en main()). El subparser solo queda para el help.
+    subparsers.add_parser(
+        "regenerate-assets",
+        help="Regenera los assets (JS/CSS) de una base, como el botón \"Regenerar activos\" "
+             "del menú de debug. Uso: ./odoo regenerate-assets <instancia> -d <db>",
     )
 
     # agent: passthrough directo a scripts/odoo-agent antes de argparse

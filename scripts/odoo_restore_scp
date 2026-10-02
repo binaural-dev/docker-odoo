@@ -473,7 +473,7 @@ class OdooRestoreScriptRunner:
 		print("\nEjecutando restore con script existente odoo_restore...\n")
 		subprocess.run(cmd, check=True)
 
-		# El post-restore (-u all, Environment, rama, Sandbox Mode y assets) lo
+		# El post-restore (-u all, Environment, parámetros, Sandbox Mode y assets) lo
 		# ejecuta odoo_restore al final de cada restore vía post_restore_db.
 
 

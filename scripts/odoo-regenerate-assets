@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""
+Regenera los bundles de assets (JS/CSS) de una base de Odoo.
+
+Es lo mismo que el botón "Regenerar activos" del menú de debug, para cuando
+ese botón no está a mano: una base importada desde el gestor de bases de la
+interfaz web, un `-u all` que dejó el bundle compilado desactualizado
+respecto al código, o una página que no carga (500 en `/web/assets/...`) y
+por lo tanto tampoco deja abrir el menú de debug.
+
+    scripts/odoo-regenerate-assets <instance> -d <dbname>
+    ./odoo regenerate-assets <instance> -d <dbname>
+
+Corre un `odoo shell` contra la base en el contenedor de la instancia.
+`post_restore_db` lo invoca al final de cada restore.
+"""
+
+import argparse
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import load_config  # noqa: E402
+
+OK_MARKER = "REGENERATE_ASSETS_OK"
+
+# regenerate_assets_bundles() existe en todas las versiones que soporta
+# docker-odoo; el fallback hace lo mismo a mano (borra los adjuntos de los
+# bundles compilados para que se recompilen en la próxima petición) por si
+# alguna versión no lo trae
+SHELL_SCRIPT = f'''
+import sys
+try:
+    attachments = env["ir.attachment"].sudo()
+    if hasattr(attachments, "regenerate_assets_bundles"):
+        attachments.regenerate_assets_bundles()
+    else:
+        attachments.search([
+            ("res_model", "=", "ir.ui.view"),
+            ("type", "=", "binary"),
+            ("url", "=like", "/web/assets/%"),
+        ]).unlink()
+        registry = env.registry
+        clear = getattr(registry, "clear_all_caches", None) or getattr(registry, "clear_caches")
+        clear()
+    env.cr.commit()
+    print("{OK_MARKER}")
+except Exception as exc:
+    env.cr.rollback()
+    print("REGENERATE_ASSETS_FAILED: %r" % (exc,), file=sys.stderr)
+    sys.exit(1)
+'''
+
+
+def regenerate_assets(container, db_name, odoo_bin="odoo", verbose=False):
+    """Regenera los assets de 'db_name' en 'container'. Devuelve True si salió bien."""
+    result = subprocess.run(
+        ["docker", "exec", "-i", container, odoo_bin, "shell", "-d", db_name, "--no-http"],
+        input=SHELL_SCRIPT, text=True, capture_output=True,
+    )
+    ok = result.returncode == 0 and OK_MARKER in result.stdout
+    if verbose or not ok:
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+    return ok
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Regenera los bundles de assets (JS/CSS) de una base de Odoo."
+    )
+    parser.add_argument("instance", help="Nombre de la instancia (contenedor odoo-<instance>)")
+    parser.add_argument("-d", "--db-name", required=True, help="Base de datos")
+    parser.add_argument(
+        "--odoo-bin", default="odoo", help="Comando/binario odoo dentro del contenedor"
+    )
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+
+    config = load_config(BASE_PATH)
+    if args.instance not in config["instances"]:
+        print(f"Error: instancia '{args.instance}' no existe", file=sys.stderr)
+        sys.exit(1)
+
+    container = f"odoo-{args.instance}"
+    print(f"Regenerando assets de '{args.db_name}' (contenedor {container})...", flush=True)
+    if not regenerate_assets(container, args.db_name, args.odoo_bin, args.verbose):
+        print(f"ERROR: no se pudieron regenerar los assets de '{args.db_name}'", file=sys.stderr)
+        sys.exit(1)
+    print(f"Assets de '{args.db_name}' regenerados.")
+
+
+if __name__ == "__main__":
+    main()
