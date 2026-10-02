@@ -169,17 +169,23 @@ print('OK: carga sin errores.')
 Si esto falla, el mensaje de error ya dice exactamente qué instancia y qué
 requisito falta -- no adivinar, leerlo.
 
-### 4.5. Verificar que los addons existan en disco
+### 4.5. Verificar que los addons existan en disco (no bloquea el build)
 
 ```bash
 ./odoo init induvar
 ```
 
 Esto solo **informa** qué carpetas de `addons` faltan en `src/` -- no clona
-nada. Si falta alguna, avisar al usuario y esperar a que la clone/cree antes
-de seguir con `build` (si el path no existe, Odoo igual puede arrancar pero
-sin esos módulos disponibles, lo cual suele ser peor que un error claro de
-entrada).
+nada. **No es un bloqueante para seguir** -- `build` genera la imagen base
+(SO + Odoo + Enterprise) sin tocar `src/custom/` para nada (se monta como
+volumen en runtime, no se copia en la imagen), y el entrypoint
+(`.resources/entrypoint.d/400-auto-detect-addons`) si no encuentra una ruta
+de `addons` solo tira un warning y sigue -- el contenedor arranca igual, nada
+más sin ese módulo disponible para instalar. Avisar al usuario qué falta,
+pero se puede seguir con `build`/`provision-role`/`start` sin esperar a que
+clone nada; el custom hace falta recién cuando quiera instalar/usar ese
+módulo (y ahí sí, después de clonarlo, hace falta `./odoo restart <instancia>`
+para que el entrypoint vuelva a detectar el path).
 
 ### 5. Build
 
