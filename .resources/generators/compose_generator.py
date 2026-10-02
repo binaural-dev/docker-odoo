@@ -81,6 +81,16 @@ def _db_service(db_name, db_conf):
     user = db_conf["user"]
     password = db_conf["password"]
     pg_config = db_conf.get("config")
+    # Docker limita /dev/shm a 64MB por defecto -- Postgres lo usa para
+    # coordinar workers de query paralela (parallel seq scan/hash join/etc.).
+    # En bases con tablas grandes (millones de filas) cualquier query un poco
+    # pesada dispara un plan paralelo y se queda sin espacio ahi, tirando
+    # "could not resize shared memory segment... No space left on device"
+    # (no es falta de disco real, es este limite chico) y puede tumbar el
+    # contenedor. Default generoso, configurable por DB via `shm_size` en
+    # `instances.json` si algun caso puntual necesita mas.
+    shm_size = db_conf.get("shm_size", "1gb")
+    mem_limit = db_conf.get("mem_limit")
     container_name = f"db-{db_name}"
 
     lines = [
@@ -101,6 +111,11 @@ def _db_service(db_name, db_conf):
         "      args:",
         f"        POSTGRES_IMG_VERSION: {pg_version}",
         f"    image: local_odoo_db_{db_name}:{pg_version}",
+        f"    shm_size: '{shm_size}'",
+    ]
+    if mem_limit:
+        lines.append(f"    mem_limit: '{mem_limit}'")
+    lines += [
         "    ports:",
         f'      - "{port}:5432"',
         f"    networks:",
@@ -136,6 +151,8 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     if db_conf.get("create_container", True):
         depends.append(f"db-{db_name}")
 
+    mem_limit = odoo_conf.get("mem_limit")
+
     lines = [
         f"  {container_name}:",
         "    command: odoo --dev=all",
@@ -145,6 +162,10 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
         "      context: .",
         f"      dockerfile: ./{dockerfile}",
         f"    image: local_odoo_{inst_name}:{odoo_minor}",
+    ]
+    if mem_limit:
+        lines.append(f"    mem_limit: '{mem_limit}'")
+    lines += [
         "    extra_hosts:",
         '      - "host.docker.internal:host-gateway"',
         "    dns:",
