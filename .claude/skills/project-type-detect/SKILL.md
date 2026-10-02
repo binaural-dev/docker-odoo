@@ -12,6 +12,8 @@ Determina, para un proyecto cliente — ya sea el directorio de trabajo actual (
 
 No escribe nada ni requiere confirmacion — es una consulta pura. Su logica se reutiliza (embebida, sin volver a preguntar nada) como primer paso de la skill `submodule-update`.
 
+La distincion Homologado/Operativo es la version mecanica y local (por presencia de submodulo) de lo que las skills `odoo-repo-routing` y `odoo-localization-flow` (plugin `core`) explican a nivel conceptual: un proyecto Homologado es el que ya integra `odoo-venezuela` (localizacion) ademas de `integra-addons` (core reusable). Ver esas skills si hace falta el razonamiento de fondo, no solo la deteccion.
+
 ## Criterio de tipo de proyecto
 
 - **Homologado**: el proyecto tiene el submodulo `odoo-venezuela` inicializado (existe la carpeta `odoo-venezuela/` con contenido, o al menos declarado en `.gitmodules`).

@@ -72,10 +72,34 @@ def _build_sql(dry_run):
                     AND kcu.column_name = c.column_name
               )
         LOOP
-            parent_tbl := substring(
-                r.column_name
-                FROM 1 FOR length(r.column_name) - 3
-            );
+            -- Resolver la tabla padre real via la metadata de Odoo
+            -- (ir_model_fields.model/relation), en vez de adivinar por el
+            -- nombre de columna: un m2m de wizard suele nombrar su propia
+            -- columna "wizard_id" sin importar el modelo real (ej.
+            -- account.payment.register), lo que rompe el heuristico de
+            -- "quitar el sufijo _id" (wizard_id -> tabla "wizard", que no
+            -- existe). ir_model_fields.column1 siempre corresponde a
+            -- ir_model_fields.model, y column2 a ir_model_fields.relation.
+            SELECT replace(COALESCE(
+                (SELECT imf.model FROM ir_model_fields imf
+                 WHERE imf.relation_table = r.table_name
+                   AND imf.column1 = r.column_name
+                 LIMIT 1),
+                (SELECT imf.relation FROM ir_model_fields imf
+                 WHERE imf.relation_table = r.table_name
+                   AND imf.column2 = r.column_name
+                 LIMIT 1)
+            ), '.', '_') INTO parent_tbl;
+
+            IF parent_tbl IS NULL THEN
+                -- Respaldo: heuristica anterior por sufijo de columna, para
+                -- tablas _rel que por lo que sea no tengan (o ya no tengan)
+                -- su ir_model_fields correspondiente.
+                parent_tbl := substring(
+                    r.column_name
+                    FROM 1 FOR length(r.column_name) - 3
+                );
+            END IF;
 
             CONTINUE WHEN NOT EXISTS (
                 SELECT 1 FROM information_schema.tables

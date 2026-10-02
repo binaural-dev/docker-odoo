@@ -37,7 +37,9 @@ Construye mensajes de commit para cualquier repositorio de este proyecto (repo p
 - `LINT` — linter
 
 ### Extension propia (no esta en el PDF, pero se usa en la practica — confirmada con el usuario)
-- `MIG` — migracion/homologacion de un modulo custom del cliente hacia odoo-venezuela/integra-addons (uso muy frecuente en el historial real, ej. `[MIG] l10n_ve_base: Correccion de traduccion`)
+- `MIG` — cualquier trabajo de migracion sobre un modulo custom del cliente. Cubre dos casos, ambos confirmados con el usuario:
+  1. Migracion/homologacion hacia odoo-venezuela/integra-addons (el uso original, muy frecuente en el historial real, ej. `[MIG] l10n_ve_base: Correccion de traduccion`).
+  2. Migracion de version de Odoo (16→17→18→19) de un modulo custom del cliente — incluye tanto los ajustes mecanicos de preparacion (bump de version, sintaxis deprecada) como la reescritura real de codigo incompatible con la version destino. No entra en `CHORE`: aunque el cambio pueda ser mecanico y sin impacto funcional inmediato en la version actual, es trabajo de migracion, no mantenimiento general.
 
 **Nota**: `IMP` NUNCA es un tipo de rama, solo de commit. Las mejoras incrementales viven dentro de ramas `feat/`, `chore/` o `perf/` segun el caso.
 

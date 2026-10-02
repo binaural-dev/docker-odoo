@@ -18,6 +18,8 @@ Cargar esta skill cuando el usuario pida:
 - "cómo validar los módulos"
 - "informe de customizaciones"
 
+**No confundir con `documentar-funcionalidad`** (plugin `binaural-fn-documentador`): esa skill documenta los módulos **reusables de Producto** (verticales, niveles vendidos) como artículo de Knowledge, para que Comercialización venda desde ahí y las demás áreas verifiquen alcance. Esta skill documenta los **módulos custom de un cliente puntual** (`src/custom/<cliente>`) como guía de validación puntual — no se publica en Knowledge ni reemplaza el catálogo de niveles.
+
 **Si el usuario NO especifica el proyecto**, auto-detectarlo usando la Fase 1 (buscar prefijo desde el working directory). Solo preguntar si no se puede detectar automáticamente.
 
 ## Fase 1 — Descubrir el proyecto

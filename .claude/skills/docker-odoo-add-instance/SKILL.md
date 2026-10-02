@@ -5,6 +5,12 @@ description: Agrega una instancia nueva de Odoo a instances.json en este repo (d
 
 # Skill: docker-odoo-add-instance
 
+Para la referencia completa de la estructura de `instances.json`
+(`odoo_configs`/`databases`/`instances`) y del CLI `./odoo`, ver la skill
+`docker-odoo` (plugin `binaural-fn-programador`) -- esta skill solo
+automatiza el paso puntual de agregar una instancia nueva, no reemplaza esa
+referencia.
+
 ## Contexto -- por qué esto no es solo "agregar un bloque JSON"
 
 Este repo exige que, si una instancia comparte servicio de Postgres (`database`)

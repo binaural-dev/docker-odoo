@@ -1,0 +1,76 @@
+{
+  "_comentario": "Modelos/campos por dominio para mig-exportar-configuracion. 'fields' en null = se toman todos los campos almacenados no-binarios via fields_get. 'skip_fields' excluye puntuales (ruidosos o especificos de una instalacion). Editar este archivo para ajustar el alcance de una corrida sin tocar export_config.py.",
+  "domains": {
+    "general": {
+      "models": [
+        { "model": "res.company", "fields": null, "skip_fields": ["report_header", "report_footer"] },
+        { "model": "res.currency", "fields": ["name", "symbol", "rounding", "decimal_places", "active", "position"], "domain": [["active", "in", [true, false]]] },
+        {
+          "model": "ir.config_parameter",
+          "fields": ["key", "value"],
+          "domain": [["key", "in", [
+            "web.base.url",
+            "database.company_name",
+            "base_setup.default_user_rights"
+          ]]],
+          "notes": "Whitelist explicita de parametros seguros -- NO exportar ir.config_parameter completo (puede incluir claves de integraciones)."
+        }
+      ]
+    },
+    "contabilidad": {
+      "models": [
+        { "model": "account.group", "fields": ["name", "code_prefix_start", "code_prefix_end", "parent_id"] },
+        { "model": "account.account", "fields": null, "skip_fields": ["opening_debit", "opening_credit", "current_balance", "root_id"], "notes": "root_id (account.root) es taxonomia estandar de Odoo (Activos/Pasivos/...), identica en cualquier instalacion nueva via el chart template -- no es configuracion del cliente, se excluye." },
+        { "model": "account.tax.group", "fields": ["name", "sequence", "country_id"] },
+        { "model": "account.tax", "fields": null, "skip_fields": ["invoice_repartition_line_ids", "refund_repartition_line_ids"], "notes": "Las lineas de reparticion de impuestos quedan fuera de v1 -- requieren modelo aparte (account.tax.repartition.line), revisar a mano." },
+        { "model": "account.fiscal.position", "fields": null },
+        { "model": "account.fiscal.position.tax", "fields": ["position_id", "tax_src_id", "tax_dest_id"] },
+        { "model": "account.fiscal.position.account", "fields": ["position_id", "account_src_id", "account_dest_id"] },
+        { "model": "account.journal", "fields": null, "skip_fields": ["inbound_payment_method_line_ids", "outbound_payment_method_line_ids"] },
+        { "model": "account.payment.term", "fields": null }
+      ]
+    },
+    "inventario": {
+      "models": [
+        { "model": "product.category", "fields": null },
+        { "model": "stock.warehouse", "fields": null },
+        { "model": "stock.location", "fields": null, "domain": [["usage", "!=", "view"]] },
+        { "model": "stock.picking.type", "fields": null }
+      ]
+    },
+    "ventas_compras": {
+      "models": [
+        { "model": "crm.team", "fields": null },
+        { "model": "product.pricelist", "fields": null },
+        { "model": "product.pricelist.item", "fields": null }
+      ]
+    },
+    "pos": {
+      "requiere_modulos_instalados": ["point_of_sale"],
+      "nota": "Verificar con 'search_read ir.module.module' que point_of_sale y los modulos POS custom del destino ya esten 'installed' antes de generar/importar este dominio.",
+      "models": [
+        { "model": "pos.category", "fields": null },
+        { "model": "pos.payment.method", "fields": null },
+        { "model": "pos.config", "fields": null, "skip_fields": ["session_ids", "current_session_id"] }
+      ]
+    },
+    "seguridad": {
+      "models": [
+        { "model": "res.groups", "fields": ["name", "category_id", "comment"], "domain": [["share", "=", false]] },
+        {
+          "model": "res.users",
+          "fields": ["name", "login", "email", "groups_id", "active", "company_id", "company_ids"],
+          "domain": [["share", "=", false]],
+          "notes": "NUNCA exportar password/API keys (no son legibles via API de todas formas). Revisar login/email a mano antes de importar -- no duplicar usuarios ya existentes en destino."
+        }
+      ]
+    },
+    "automatizaciones": {
+      "models": [
+        { "model": "ir.cron", "fields": null, "skip_fields": ["numbercall"], "notes": "numbercall fue eliminado del core en v19 (confirmado en STATE.md de la migracion de codigo) -- se excluye siempre, no solo por config." },
+        { "model": "mail.template", "fields": null, "skip_fields": ["report_template_ids"] },
+        { "model": "base.automation", "fields": null }
+      ]
+    }
+  }
+}

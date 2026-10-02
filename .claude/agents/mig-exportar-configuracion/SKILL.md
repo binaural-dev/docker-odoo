@@ -9,14 +9,13 @@ Extrae configuracion (no datos transaccionales: nada de facturas, pedidos,
 movimientos de stock) de una instancia Odoo de origen, via el conector de
 solo lectura `core:odoo-cloud`, y la deja en archivos `.xlsx` listos para el
 importador nativo de Odoo (*Ajustes > Tecnico > Importar*) en el ambiente
-destino. Nace del caso real de `bodegonactual` (v16, produccion) ->
-`monfarmacia` (v19, mismo cliente despues de un rename, migracion de
-**codigo** ya resuelta por separado) -- la migracion de codigo de ese caso
-dejo la de datos explicitamente fuera de alcance.
+destino. Nace de un caso real de migracion de version (v16 produccion ->
+v19), donde la migracion de **codigo** se resolvio por separado y dejo la de
+datos explicitamente fuera de alcance.
 
 **Version 1 -- piloto.** Igual que `mig-version-upgrade`, nace para un caso
 real concreto. Si una corrida real encuentra un dominio/modelo que falta o un
-campo mal resuelto, la correccion va a `scripts/domains.json` (declarativo)
+campo mal resuelto, la correccion va a `tools/domains.json` (declarativo)
 antes que al script.
 
 Reutiliza, sin duplicar su logica: el cliente JSON-RPC de solo lectura de
@@ -34,11 +33,11 @@ misma whitelist de metodos, **nunca escribe**), y la misma idea de
    Paso 0.2) y para el README final.
 3. **Dominios en alcance de esta corrida** -- *preguntar siempre* con
    `AskUserQuestion`, nunca asumir "todos". Ver tabla de dominios en
-   `scripts/domains.json`.
+   `tools/domains.json`.
 
 ## Paso 0 -- Alcance y estado del destino
 
-1. Confirmar que la instancia origen responde: `python3 scripts/export_config.py`
+1. Confirmar que la instancia origen responde: `python3 ~/.claude/agents/mig-exportar-configuracion/tools/export_config.py`
    usa el mismo config que `odoo_client.py whoami -i <origen>` -- si falla,
    resolverlo ahi primero (no es responsabilidad de esta skill).
 2. **Antes de ofrecer el dominio `pos`** (o cualquier dominio marcado con
@@ -52,14 +51,14 @@ misma whitelist de metodos, **nunca escribe**), y la misma idea de
    Si figuran `uninstalled`, avisar explicitamente que ese dominio se puede
    generar igual (el export no depende del destino) pero **no importar
    todavia** -- dejarlo anotado en el README en vez de omitirlo en silencio.
-3. Preguntar con `AskUserQuestion` que dominios de `scripts/domains.json`
+3. Preguntar con `AskUserQuestion` que dominios de `tools/domains.json`
    entran en esta corrida (default sugerido: todos los que no dependan de
    modulos no instalados en destino, pero confirmar).
 
 ## Paso 1 -- Extraccion
 
 ```bash
-python3 scripts/export_config.py --source <origen> --domain <dom1,dom2|all>
+python3 ~/.claude/agents/mig-exportar-configuracion/tools/export_config.py --source <origen> --domain <dom1,dom2|all> [--custom-path src/custom/<cliente>]
 ```
 
 Por cada modelo del dominio: `fields_get` (campos reales del origen,
@@ -75,17 +74,19 @@ re-correr incluyendo el dominio que trae ese modelo.
 ## Paso 2 -- Compatibilidad de version (advierte, no bloquea)
 
 El script ya genera `notas-version.md` por dominio comparando cada campo
-exportado contra el core de Odoo 19 clonado localmente (`~/binaural/Core
-Odoo/odoo-19.0` y `docker-odoo/src/enterprise-19.0`). Es una heuristica
+exportado contra el core de Odoo 19 clonado localmente (por defecto
+`~/binaural/Core Odoo/odoo-19.0` y `src/enterprise-19.0` de docker-odoo;
+sobreescribible con `ODOO_CORE_PATHS`, y el custom del cliente con
+`--custom-path`). Es una heuristica
 (busca `<campo> = fields.` en el checkout) -- cero coincidencias es señal
-real de campo eliminado/renombrado (ya paso con `ir.cron.numbercall` en la
-migracion de codigo de este mismo cliente), pero no reemplaza una revision
+real de campo eliminado/renombrado (ya paso con `ir.cron.numbercall` en una
+migracion de codigo previa), pero no reemplaza una revision
 humana antes de importar. Leer ese archivo con el usuario antes de dar el
 export por bueno.
 
 ## Paso 3 -- Entrega
 
-El `README.md` generado en la raiz del export (ver `scripts/export_config.py`,
+El `README.md` generado en la raiz del export (ver `tools/export_config.py`,
 `write_readme`) ya trae el orden de importacion recomendado y las
 advertencias de referencias fuera de alcance. **No importar nada
 automaticamente**: mismo principio que el conector `odoo-cloud` (solo
@@ -94,10 +95,10 @@ hace una persona desde el ambiente destino.
 
 ## Donde queda todo
 
-- Salida (datos reales del cliente, **confidencial, nunca se commitea**):
-  `docker-odoo/upgrade/config-export/<origen>/<fecha>/<dominio>/*.xlsx` +
-  `notas-version.md` + `README.md` en la raiz del export. `docker-odoo/upgrade/config-export/.gitignore`
-  excluye todo salvo un `README.md` de plantilla -- revisar que siga ahi si
-  se reorganiza el directorio.
-- Config declarativo de dominios: `scripts/domains.json` (editar aqui para
+- Salida (datos reales del cliente, **confidencial, fuera de cualquier repo**):
+  `~/binaural/config-export/<origen>/<fecha>/<dominio>/*.xlsx` +
+  `notas-version.md` + `README.md` en la raiz del export. Esta carpeta vive
+  fuera de `docker-odoo` a proposito -- nunca cerca de un `.git`, para que no
+  haya riesgo de commitear datos reales de produccion de un cliente.
+- Config declarativo de dominios: `tools/domains.json` (editar aqui para
   agregar/quitar modelos o campos, no en `export_config.py`).

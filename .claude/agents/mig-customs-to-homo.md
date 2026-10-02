@@ -7,6 +7,10 @@ description: Detecta referencias a modulos integra-addons (binaural_*) en modulo
 
 Migra modulos custom del cliente que referencian vistas, templates, records o modelos de modulos `integra-addons/` (prefijo `binaural_*`) hacia sus equivalentes en `odoo-venezuela/` (prefijo `l10n_ve_*`).
 
+Reutiliza, sin duplicar su logica: `verificar-referencia-modulo` (Paso 2, clasificacion funcional/huerfana). Esa misma skill la consume tambien `mig-version-upgrade` (migracion de version de Odoo) en un modo distinto — no confundir ambas skills: esta resuelve legacy→homologado dentro de la misma version, la otra resuelve el salto de version de Odoo.
+
+La tabla de mapeo `binaural_*`→`l10n_ve_*` de este documento es el mecanismo concreto de algo que la skill `odoo-repo-routing` (plugin `core`) ya explica a nivel conceptual: `binaural_*` es core reusable (`integra-addons`) y `l10n_ve_*` es localizacion (`odoo-venezuela`). Si aparece una duda de fondo (¿esto realmente debe migrar, o el modulo custom deberia dejar de depender de integra-addons?), resolverla ahi antes de aplicar el cambio mecanico.
+
 ## Deteccion automatica de estructura
 
 Detectar automaticamente la estructura del proyecto donde se ejecuta usando la tool Bash.
@@ -47,47 +51,37 @@ Buscar en TODOS los modulos custom detectados (excluyendo submodulos y `third-pa
 
 ### Paso 2: Para cada referencia encontrada, clasificar
 
-Para cada referencia a `binaural_X.some_id`, seguir este flujo de decisión:
+La clasificación funcional/huérfana se delega en la skill compartida **`verificar-referencia-modulo`** (aplicarla embebida, sin volver a preguntar nada — igual que `project-type-detect` se embebe en `submodule-update`). Este paso solo describe cómo se compone en modo **cross-módulo**:
 
 ```
-1. ¿Existe integra-addons/binaural_X/ como módulo FUNCIONAL?
-   ├─ Verificar: tiene __manifest__.py? El ID some_id existe dentro del módulo?
+1. Aplicar verificar-referencia-modulo sobre la ubicación local integra-addons/binaural_X (con el ID some_id si aplica).
+   ├─ FUNCIONAL → CASO A: CONSERVAR
    │
-   ├─ SÍ (funcional + ID presente) → CASO A: CONSERVAR
-   │
-   └─ NO (remanente sin manifest, o el ID no existe en el módulo) →
+   └─ HUÉRFANO (o NO_FUNCIONAL, ej. remanente sin manifest) →
          │
-         2. ¿Existe equivalente l10n_ve_* en odoo-venezuela/?
+         2. Aplicar verificar-referencia-modulo sobre la ubicación local odoo-venezuela/<equivalente>
+            (el <equivalente> se deriva con la tabla de mapeo de este documento, más abajo).
             │
-            ├─ SÍ → CASO B: MIGRAR
+            ├─ FUNCIONAL o RENOMBRADO (candidato razonable) → CASO B: MIGRAR
             │
-            └─ NO → CASO C: HUÉRFANA (reportar revisión manual)
+            └─ HUÉRFANO → CASO C: HUÉRFANA (reportar revisión manual)
 ```
 
-**Validación de "funcional" en integra-addons:**
-```bash
-# Verificar que el módulo tiene __manifest__.py
-test -f "integra-addons/binaural_X/__manifest__.py" || echo "REMANENTE"
-
-# Verificar que el ID externo específico existe dentro del módulo
-grep -r "some_id" "integra-addons/binaural_X/" --include="*.xml" --include="*.csv" --include="*.py" | head -1 || echo "ID_NO_ENCONTRADO"
-```
-
-Si el módulo no tiene `__manifest__.py`, es un **remanente** (dead code). Tratarlo como si no existiera en integra-addons y continuar al paso 2.
+Ver `verificar-referencia-modulo` (`docker-odoo/.claude/skills/verificar-referencia-modulo/SKILL.md`) para el detalle de los comandos de verificación (manifest válido, búsqueda del ID, búsqueda de candidatos renombrados) y el chequeo aparte de código muerto.
 
 #### CASO A: No migrar (existe en integra)
 
-El módulo existe **funcionalmente** en integra-addons Y el ID específico está presente. Dejar la referencia como está. Reportar como **"No migrada — existe en integra"**.
+El módulo existe **funcionalmente** en integra-addons Y el ID específico está presente (veredicto FUNCIONAL). Dejar la referencia como está. Reportar como **"No migrada — existe en integra"**.
 
 #### CASO B: Migrar
 
-El módulo fue migrado a odoo-venezuela. Buscar el ID equivalente usando la tabla de mapeo y reemplazar. Reportar como **"Migrada"**.
+El módulo fue migrado a odoo-venezuela (veredicto FUNCIONAL o RENOMBRADO ahí). Si fue RENOMBRADO, usar el candidato reportado por `verificar-referencia-modulo`; si no, usar la tabla de mapeo y buscar el ID equivalente. Reemplazar. Reportar como **"Migrada"**.
 
 #### CASO C: Huérfana
 
-El ID no existe ni en integra-addons (funcional) ni tiene equivalente en odoo-venezuela. Reportar como **"No migrada — huérfana"** para revisión manual.
+Veredicto HUÉRFANO tanto en integra-addons como en odoo-venezuela. Reportar como **"No migrada — huérfana"** para revisión manual.
 
-Si el archivo que contiene la referencia es código muerto (no está referenciado en los assets del `__manifest__.py` del módulo), se puede eliminar directamente.
+Si `verificar-referencia-modulo` marca la referencia como **CÓDIGO_MUERTO** (el archivo que la contiene no está en los assets del `__manifest__.py` del módulo que lo contiene), se puede eliminar directamente en vez de migrarla.
 
 ### Tabla de mapeo binaural_* → l10n_ve_*
 
@@ -126,13 +120,13 @@ Luego, buscar el external ID equivalente. Estrategias en orden:
 
 El modulo `binaural_X` existe en integra-addons **funcional** (con `__manifest__.py`) pero no tiene equivalente en odoo-venezuela (son modulos que nunca se migraron, ej: `binaural_brand`, `binaural_hr_payroll`, `binaural_shopify`, etc.).
 
-- Verificar si el ID específico existe en `integra-addons/binaural_X/`:
-  - **SI existe** → CASO A (no migrar, existe en integra funcional)
-  - **NO existe** → CASO C (huérfana — el ID especifico no existe en ninguna parte)
+- Aplicar `verificar-referencia-modulo` sobre `integra-addons/binaural_X`:
+  - **FUNCIONAL** → CASO A (no migrar, existe en integra funcional)
+  - **HUÉRFANO** → CASO C (huérfana — el ID especifico no existe en ninguna parte)
 
 #### Modulos en mapping table sin ID equivalente confirmado
 
-Si el modulo origen esta en la tabla de mapeo pero el ID especifico no se encuentra ni en integra-addons (funcional) ni en odoo-venezuela → **CASO C (huérfana)**.
+Si el modulo origen esta en la tabla de mapeo pero `verificar-referencia-modulo` devuelve HUÉRFANO tanto en integra-addons como en odoo-venezuela → **CASO C (huérfana)**.
 
 ### Paso 3: Tipos de cambios a aplicar
 

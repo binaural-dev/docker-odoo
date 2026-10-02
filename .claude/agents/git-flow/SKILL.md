@@ -41,12 +41,13 @@ No es necesario tener el punto 7 completo para ejecutar el paso 1 (crear rama); 
 3. Si el usuario aprueba, hacer `git add` de los archivos relevantes (nunca `git add -A`) y `git commit`.
 
 ### Paso 3 — Push + PR (`pr-create`)
-1. Verificar precondiciones de `gh` (instalado + autenticado) — si falta algo, seguir las instrucciones de `pr-create` (nunca ejecutar `sudo` ni `gh auth login` por el usuario).
-2. Inferir la rama base del PR (normalmente la misma rama base usada en el paso 1).
-3. Construir titulo (= primera linea del commit) y cuerpo del PR con encabezados Markdown (Resumen/Problema/Causa/Solucion + References), **sin seccion de plan de pruebas**.
-4. Mostrar el borrador completo para aprobacion explicita.
-5. Si el usuario aprueba: `git push -u origin <rama>` seguido de `gh pr create`.
-6. Devolver la URL del PR.
+1. Evaluar si corresponde correr `/code-review` sobre el diff antes de armar el borrador del PR — el criterio es si la funcionalidad se puede ver comprometida (logica de montos, flujos, herencias con codigo nuevo, modulos muy heredados como `l10n_ve_accountant`) o no (vistas puras, textos, traducciones). Ver `pr-create`, seccion "Revision antes de abrir el PR", con el criterio completo y un ejemplo real de cada caso.
+2. Verificar precondiciones de `gh` (instalado + autenticado) — si falta algo, seguir las instrucciones de `pr-create` (nunca ejecutar `sudo` ni `gh auth login` por el usuario).
+3. Inferir la rama base del PR (normalmente la misma rama base usada en el paso 1).
+4. Construir titulo (= primera linea del commit) y cuerpo del PR con encabezados Markdown (Resumen/Problema/Causa/Solucion + References), **sin seccion de plan de pruebas**.
+5. Mostrar el borrador completo para aprobacion explicita.
+6. Si el usuario aprueba: `git push -u origin <rama>` seguido de `gh pr create`.
+7. Devolver la URL del PR.
 
 **Caso multi-repo (fix que toca un submodulo + su repo de cliente) — flujo detallado:**
 
@@ -71,3 +72,5 @@ Preguntar siempre, por separado: (1) si se abre PR para el submodulo o se difier
 - Crear el PR (`gh pr create`)
 
 Estos 4 puntos son independientes entre si — aprobar uno no aprueba los siguientes.
+
+**Nota sobre `ciclo-y-gates` (plugin `core`)**: el default organizacional solo exige gate humano para el merge a rama de cliente (y los compromisos con cliente / escrituras contables, que no aplican a este flujo) — push y `gh pr create` entran en "todo lo demas se cierra solo". Los 4 puntos de arriba son una capa de confirmacion **extra**, añadida a proposito como preferencia personal del usuario para trabajar en `docker-odoo`, no una discrepancia sin resolver con el plugin.

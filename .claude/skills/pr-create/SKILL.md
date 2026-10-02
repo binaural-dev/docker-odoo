@@ -11,6 +11,8 @@ Es el tercer y ultimo paso del flujo completo **Rama -> Commit -> PR**. Ver la s
 
 **Importante**: `push` y `crear PR` son acciones que afectan estado compartido/publico (visibles para el equipo) — requieren confirmacion explicita del usuario antes de ejecutarse, incluso dentro de este flujo. Nunca asumir aprobacion de un paso anterior como aprobacion para este.
 
+**Nota sobre `ciclo-y-gates` (plugin `core`)**: esa skill define el default organizacional — solo el merge a rama de cliente, los compromisos con el cliente y las escrituras en contabilidad/CRM son gates humanos; abrir el PR entra en "todo lo demas se cierra solo", sin pedir permiso. Esta skill **añade a proposito una capa de confirmacion extra sobre push y PR**, encima de ese default — es una preferencia personal del usuario para su forma de trabajar en `docker-odoo` (repos de clientes reales, no el flujo agentico de punta a punta que describe el stack), confirmada explicitamente, no un desconocimiento de la regla del plugin. No aplicar esta capa extra a otras skills/roles que sigan `ciclo-y-gates` tal cual.
+
 ## Precondiciones: `gh` CLI
 
 Antes de intentar crear el PR, verificar:
@@ -68,6 +70,29 @@ En cualquiera de los dos casos, el push nunca se omite — lo unico condicional 
 
 5. **Confirmacion final** — *preguntar siempre*. Mostrar titulo + cuerpo propuestos antes de ejecutar `gh pr create`.
 
+## Revision antes de abrir el PR (skill `flujo-programador`, plugin `binaural-fn-programador`)
+
+**No decidir en automatico si se corre el `code-reviewer`. Preguntar siempre al usuario primero**, mostrando el criterio de riesgo de abajo como contexto para que decida, no como una decision que este agente toma por su cuenta. Esto es una preferencia explicita del usuario para evitar ejecuciones innecesarias del subagente (cada corrida tiene costo, y el usuario puede ya saber que el cambio es de bajo riesgo o estar iterando rapido sobre algo puntual/temporal).
+
+El criterio no es tamaño del diff — es si la **funcionalidad se puede ver comprometida**. Un PR con muchos archivos de vista puede ser mas chico en riesgo real que un PR de una linea que cambia una formula de monto. Usar esto solo para **recomendar** al preguntar, nunca para saltarse la pregunta:
+
+**Normalmente bajo riesgo** (igual se pregunta, pero se puede sugerir omitir), ej.:
+- Cambios puramente de vistas/XML (ajustar un xpath, reordenar campos, mostrar/ocultar algo, arreglar una duplicacion) sin tocar la logica detras.
+- Correccion de texto, traduccion, o un bump/ajuste de manifest sin cambio de comportamiento.
+- Cualquier cambio donde, leyendo el diff, no hay forma de que rompa un calculo, un flujo o un permiso.
+
+Ejemplo real de este caso: PR 202 de `countryclub` (`[FIX] country_date_rate: Corrige duplicidad de fecha de factura`) — 2 archivos (el manifest + una vista XML), 1 linea agregada y 7 eliminadas, un xpath duplicado. Puramente vista, sin logica de por medio.
+
+**Normalmente alto riesgo** (se pregunta igual, pero se recomienda correrlo), ej.:
+- Un custom nuevo con funciones o herencias de metodos nuevas (`_inherit` con logica agregada, no solo `_inherit` de vista).
+- Ajustes a la logica de montos (base o alterno/foreign), tasas, o cualquier calculo contable.
+- Cambios a la logica de un flujo (ej. condiciones de un wizard, un `compute`, una validacion que decide si algo pasa o no).
+- Cualquier cambio en un modulo del que muchos otros heredan (ej. `l10n_ve_accountant`) — el radio de impacto es mayor aunque el diff en si sea chico.
+- Seguridad: `models/*.py` con reglas de acceso, `security/*` (ACLs, record rules, `sudo()`), `controllers/*`.
+- Es parte de una migracion (`mig-customs-to-homo`, `mig-version-upgrade`).
+
+Al preguntar: nombrar en una linea por que el cambio cae en "normalmente alto riesgo" o "normalmente bajo riesgo" segun corresponda, y esperar la respuesta del usuario antes de correr nada. Si el usuario dice que si, correr el subagente `code-reviewer` del plugin (no `/code-review`, ver instrucciones globales del usuario), que aplica las reglas de Binaural. **Indicarle siempre explicitamente que no publique nada (ni PR ni chatter) y que solo reporte hallazgos** — publicar es decision del usuario, no del subagente. Si el usuario dice que no, continuar directo con el borrador del PR sin correrlo. Resolver los hallazgos bloqueantes (si se corrio) antes de continuar con el flujo de abajo, salvo que el usuario decida explicitamente avanzar igual.
+
 ## Flujo de trabajo
 
 1. Verificar precondiciones de `gh` (seccion anterior).
@@ -77,6 +102,7 @@ En cualquiera de los dos casos, el push nunca se omite — lo unico condicional 
    git log @{u}.. 2>/dev/null || git log -1
    ```
 3. Determinar rama base (inferir + confirmar con el usuario).
+3.5. Preguntar al usuario si corre el subagente `code-reviewer` antes de armar el PR (seccion "Revision antes de abrir el PR"), sugiriendo segun el riesgo del diff pero sin decidir por cuenta propia. Si dice que si, correrlo (indicandole que no publique nada) y resolver bloqueantes antes de seguir.
 4. Construir titulo y cuerpo del PR (seccion "Informacion necesaria").
 5. Mostrar el borrador completo (titulo + cuerpo + rama base) al usuario y esperar aprobacion explicita.
 6. Si el usuario aprueba:

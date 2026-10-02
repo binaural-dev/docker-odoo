@@ -99,11 +99,12 @@ Es el primer paso del flujo completo **Rama -> Commit -> PR**. Ver la skill `git
    ```
    Esto evita crear la rama nueva sobre una base con submodulos desactualizados o sin inicializar.
 5. Construir el nombre final: `<origen>_<tipo>-<tipo_asignacion>_<id>_<nombre_ingles>`.
-6. Mostrar el nombre propuesto al usuario para su aprobacion antes de crear la rama.
-7. Si el usuario aprueba, crear la rama:
+6. **Verificacion obligatoria antes de mostrar el nombre**: buscar la palabra completa "maintenance" en el nombre final construido. Si aparece (porque el `origen` se tomo tal cual del nombre real de la rama base, ej. `maintenance-17.0`), abreviarla a `maint-<version>` (ver "Componentes" -> "origen" -> "Nomenclatura de ramas de mantenimiento") **antes** de continuar — no mostrar ni crear un nombre que contenga "maintenance" completo. Este paso existe porque ya paso una vez (2026-08-12): la regla estaba documentada en la seccion "Componentes" pero igual se construyo un nombre con "maintenance-17.0" completo por no releer esa seccion al momento de nombrar la rama — de ahi que ahora sea un paso explicito del flujo, no solo prosa descriptiva.
+7. Mostrar el nombre propuesto (ya verificado) al usuario para su aprobacion antes de crear la rama.
+8. Si el usuario aprueba, crear la rama:
    ```bash
    git checkout -b <nombre_final> <rama_base>
    ```
-8. **No hacer push todavia** — el push se hace en el paso de PR (ver skill `pr-create`), una vez exista al menos un commit.
+9. **No hacer push todavia** — el push se hace en el paso de PR (ver skill `pr-create`), una vez exista al menos un commit.
    **Excepcion (submodulos, siempre):** si la rama es de un submodulo (`integra-addons`/`odoo-venezuela`/`third-party-addons`), hacer push a origin **inmediatamente despues del commit**, sin excepcion — sea cual sea el `origen` (hash de cliente, `l10nve_17.0`, `maint-*`, etc.) y sin importar si se va a crear PR o no. El puntero de submodulo en el repo del cliente referencia ese commit por SHA; si el commit no existe en el remoto del submodulo, nadie mas puede resolverlo (`git submodule update` falla al no encontrarlo). El PR del submodulo si es condicional: solo se crea cuando el cambio va a mantenimiento (ver skill `pr-create`, seccion "Submodulos: push siempre, PR solo si va a mantenimiento").
-9. Confirmar con `git status` que la rama quedo creada y activa.
+10. Confirmar con `git status` que la rama quedo creada y activa.

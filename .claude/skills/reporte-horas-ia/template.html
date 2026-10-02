@@ -4,12 +4,13 @@
 <meta charset="UTF-8">
 <title>Reporte de horas — Resolución de tickets</title>
 <style>
-  @page { size: A4 landscape; margin: 1.5cm; }
-  body { font-family: Arial, Helvetica, sans-serif; color: #222; max-width: 1280px; margin: 0 auto; padding: 24px; font-size: 11px; line-height: 1.45; }
+  @page { size: letter landscape; margin: 0.7cm; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #222; width: 100%; margin: 0; padding: 8px; font-size: 11px; line-height: 1.45; box-sizing: border-box; }
   h1 { font-size: 15px; font-weight: 700; margin: 0 0 2px 0; }
   .sub { font-size: 12px; color: #444; margin-bottom: 18px; }
   .sub b { color: #111; }
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  th, td { box-sizing: border-box; }
   th { background: #f0f0f0; text-align: left; padding: 6px 8px; font-size: 10px; font-weight: 700; border-bottom: 1.5px solid #333; white-space: nowrap; }
   td { padding: 6px 8px; border-bottom: 1px solid #ddd; vertical-align: top; font-size: 10px; }
   .c1 { width: 8%; }
@@ -28,7 +29,7 @@
 </head>
 <body>
 
-<h1>Reporte de horas — Resolución de tickets Post-Migración</h1>
+<h1>Reporte de horas</h1>
 <p class="sub">Período: <b>{{PERIODO}}</b> | Empleado: <b>{{EMPLEADO}}</b></p>
 
 <table>
