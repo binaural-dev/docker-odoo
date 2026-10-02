@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 
 from generators.config_loader import (  # noqa: E402
     _validate_config, get_unique_odoo_versions, resolve_instance_config,
+    resolve_instance_db_scope,
 )
 from generators.dockerfile_generator import generate_dockerfiles  # noqa: E402
 from generators.compose_generator import generate_compose  # noqa: E402
@@ -397,9 +398,13 @@ def provision_role(slug, recreate=True):
     _check(DB_ROLE_RE, db_user, "db_user")
     if not DB_PASSWORD_RE.match(db_password):
         raise AgentError("db_password de la instancia no es apto para aprovisionar (letras, dígitos, '_', '.', '-')")
-    db_filter = resolve_instance_config(inst_conf, config).get("db_filter") or ""
-    if not db_filter or db_filter == "*" or "%" in db_filter or "'" in db_filter or "\n" in db_filter:
-        raise AgentError(f"'{slug}' necesita un db_filter específico (sin %h/%d ni comillas) para aprovisionar")
+    # Its databases: a specific db_filter or, without one, the single
+    # database of db_name (same rule as './odoo provision-role')
+    kind, db_scope = resolve_instance_db_scope(resolve_instance_config(inst_conf, config))
+    if kind is None or "'" in db_scope or "\n" in db_scope or (kind == "filter" and "%" in db_scope):
+        raise AgentError(
+            f"'{slug}' necesita un db_filter específico (sin %h/%d ni comillas) o un "
+            "db_name de una sola base para aprovisionar")
 
     if not _provision_lock.acquire(blocking=False):
         raise AgentError("Ya hay un aprovisionamiento en curso, intenta más tarde", 409)

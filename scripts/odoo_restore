@@ -690,6 +690,39 @@ class DatabaseRestoreManager:
             check=True,
         )
 
+    # Table (inside the restored database) with the crons pause_crons() turned
+    # off; post_restore_db turns exactly those back on after '-u all'
+    PAUSED_CRONS_TABLE = "_restore_paused_crons"
+
+    def pause_crons(self):
+        """Turn off the restored database's crons until post_restore_db ran
+        '-u all' on it. The dump brings production's crons active and overdue:
+        as soon as the database exists, the instance's cron worker (and, without
+        per-instance Postgres roles, every other instance's on the same
+        service) tries to load it half-upgraded, fails, and resets
+        ir_module_module under the update ("deadlock detected"). A cron worker
+        with no active job never loads the database."""
+        table = self.PAUSED_CRONS_TABLE
+        sql = (
+            f"CREATE TABLE IF NOT EXISTS {table} AS SELECT id FROM ir_cron WHERE active; "
+            f"UPDATE ir_cron SET active = false WHERE id IN (SELECT id FROM {table}); "
+            f"SELECT count(*) FROM {table};"
+        )
+        result = subprocess.run(
+            self._psql_command("-d", self.db_name, "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql),
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            # Not fatal: without it the update still runs (with retries)
+            print(
+                f"AVISO: no se pudieron pausar los crons de '{self.db_name}': "
+                f"{(result.stderr or result.stdout).strip()}",
+                file=sys.stderr,
+            )
+            return
+        paused = (result.stdout.strip().splitlines() or ["?"])[-1]
+        print(f"Crons pausados hasta el post-restore: {paused}")
+
     def restore_dump(self):
         print(f"Iniciando restore de dump.sql en la base '{self.db_name}'")
 
@@ -836,8 +869,10 @@ class RestoreOrchestrator:
         verbose=False,
         cleanup_enabled=True,
         db_prefix=None,
+        pause_crons=False,
     ):
         self.zip_path = zip_path
+        self.pause_crons = pause_crons
         self.container = container_name
         self.new_db_name = new_db_name
         self.db_prefix = db_prefix
@@ -909,6 +944,9 @@ class RestoreOrchestrator:
         db_manager.validate_dump_compatibility()
         db_manager.create_database()
         db_manager.restore_dump()
+        if self.pause_crons:
+            # Right away: from here on the database is visible to cron workers
+            db_manager.pause_crons()
         self.cleanup_manager.cleanup_local_path(local_dump_path)
         self.cleanup_manager.cleanup_container_path(self.workspace.container_restore_dir)
 
@@ -1099,6 +1137,8 @@ def main():
         verbose=args.verbose,
         cleanup_enabled=not args.no_cleanup,
         db_prefix=args.db_prefix,
+        # post_restore_db turns them back on; without it they'd stay off
+        pause_crons=not args.skip_post_restore,
     )
     try:
         restorer.run()

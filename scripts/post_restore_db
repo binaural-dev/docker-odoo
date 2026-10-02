@@ -78,6 +78,8 @@ SANDBOX_RETRY_DELAY_SECONDS = 10
 # `ir_module_module`. Es una condición de carrera real contra el propio
 # servidor, no un fallo aislado, así que se reintenta con backoff.
 MODULE_UPDATE_RETRY_ATTEMPTS = 4
+# Created by odoo_restore (pause_crons) with the crons it turned off
+PAUSED_CRONS_TABLE = "_restore_paused_crons"
 MODULE_UPDATE_RETRY_DELAY_SECONDS = 20
 
 
@@ -154,6 +156,19 @@ import sys
 import time
 
 try:
+    # odoo_restore paused the crons during '-u all' (to keep cron workers
+    # off the half-upgraded database): turn exactly those back on first, so
+    # Sandbox Mode below finds production's real cron state
+    env.cr.execute("SELECT to_regclass({PAUSED_CRONS_TABLE!r})")
+    if env.cr.fetchone()[0]:
+        env.cr.execute(
+            "UPDATE ir_cron SET active = true WHERE id IN (SELECT id FROM {PAUSED_CRONS_TABLE})"
+        )
+        resumed = env.cr.rowcount
+        env.cr.execute("DROP TABLE {PAUSED_CRONS_TABLE}")
+        env.cr.commit()
+        print("POST_RESTORE_STEP: crons reanudados -> %d" % resumed)
+
     icp = env["ir.config_parameter"].sudo()
     icp.set_param({ENVIRONMENT_PARAM!r}, {environment!r})
     env.cr.commit()
