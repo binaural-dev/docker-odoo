@@ -203,7 +203,7 @@ Si un archivo referenciado NO está declarado en los `assets` del `__manifest__.
 
 1. **`binaural_pos_receipt`**: Este modulo SI existe en integra-addons y NO tiene equivalente completo en odoo-venezuela. `l10n_ve_pos` tiene su propio `ReceiptScreen` con `owl="1"` que es diferente. **No migrar referencias a `binaural_pos_receipt` si el external ID existe en integra-addons. Si el ID especifico no existe, reportar FLAG manual.**
 
-2. **`binaural_purchase` / `binaural_base` / `binaural_stock_accountant`**: Existen en `integra-addons/` pero algunas son **remanentes** (sin `__manifest__.py`). Verificar funcionalidad: si tiene `__manifest__.py` Y el ID externo existe → CASO A (conservar). Si es remanente o el ID no existe → tratar como si no estuviera en integra y continuar a CASO B/C.
+2. **`binaural_purchase` / `binaural_base` / `binaural_stock_accountant`**: Existen en `integra-addons/` pero algunas son **remanentes** (sin `__manifest__.py`). Verificar funcionalidad: si tiene `__manifest__.py` Y el ID externo existe → CASO A (conservar). Si es remanente o el ID no existe → tratar como si no estuviera en integra y continuar a CASO B/C. Estos tres módulos **ya tienen equivalente en `odoo-venezuela/`** (`l10n_ve_purchase`, `l10n_ve_base`, `l10n_ve_stock_account`) y algunas referencias internas ya apuntan a `l10n_ve_*` — verificar ID por ID en vez de asumir que todo el módulo migró o que nada migró.
 
 3. **`binaural_subsidiary` y submodulos relacionados**: Existen en `integra-addons/` pero ya dependen de `l10n_ve_*`. No tienen equivalentes en odoo-venezuela. Verificar ID por ID dentro de integra-addons.
 

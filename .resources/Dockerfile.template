@@ -11,7 +11,8 @@ RUN python3 -m pip install --no-cache-dir \
     html2text \
     bcrypt \
     cairosvg \
-    openpyxl
+    openpyxl \
+    click-odoo-contrib
 
 ENV SOURCES /home/odoo/src
 ENV RESOURCES /home/odoo/.resources
