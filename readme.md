@@ -182,9 +182,20 @@ docker compose -f docker-compose.generated.yml up -d --no-deps odoo-bananera
 
 ⚠️ Cambiar `db_filter` en `instances.json` **no** re-dispara nada de esto automáticamente — ver la auditoría a continuación.
 
+### Bases creadas después de aprovisionar: `restrict-connect`
+
+`provision-role` revoca el `CONNECT` de `PUBLIC` solo en las bases que existen en ese momento. Las que la instancia crea después (gestor de bases de Odoo, restore desde la UI) ya nacen siendo de su rol, pero con el ACL por defecto de Postgres: cualquier rol del servicio puede conectarse a ellas. Para cerrarlas:
+
+```bash
+./odoo restrict-connect            # todas las instancias aprovisionadas
+./odoo restrict-connect bananera   # solo una
+```
+
+Lo hace con el propio rol de la instancia, que puede revocarle privilegios a `PUBLIC` porque es el dueño de esas bases: **no** hace break-glass ni reinicia Postgres. Solo toca bases del rol que cumplen su `db_filter`, y omite instancias sin rol propio, sin cron (`max_cron_threads: 0`) o en un Postgres externo. Se puede repetir sin efectos secundarios. micro_saas lo corre periódicamente a través del agente (`POST /restrict-connect`).
+
 ### Auditoría automática: `db_filter` vs. ownership real
 
-Cada `./odoo build` corre, además de generar la configuración, una auditoría de solo lectura que compara el `db_filter` de cada instancia contra el estado real en Postgres (nunca modifica nada) y avisa si encuentra:
+Cada `./odoo build` corre, además de generar la configuración, una auditoría de solo lectura que compara el `db_filter` de cada instancia contra el estado real en Postgres y avisa si encuentra:
 
 - Una base que matchea el `db_filter` de una instancia pero pertenece a otro rol (falta correr `provision-role`).
 - Una base ya del rol correcto, pero con `CONNECT` de `PUBLIC` todavía sin revocar.
@@ -193,7 +204,7 @@ Cada `./odoo build` corre, además de generar la configuración, una auditoría 
 
 No bloquea el build — solo informa, con el comando exacto a correr para resolver cada aviso.
 
-**Corrección automática (solo para los avisos sin ambigüedad):** cuando la auditoría detecta bases con dueño incorrecto o con `CONNECT` sin revocar (los primeros dos casos de la lista), `./odoo build` pregunta al final si querés correr `provision-role` para esas instancias ahora mismo (agrupando por servicio de Postgres, igual que una migración manual). Los otros dos casos (filtro que cambió, filtros solapados) **nunca** se ofrecen para autocorrección — son ambiguos y requieren revisión humana antes de tocar ownership.
+**Corrección automática (solo para los avisos sin ambigüedad):** las bases con `CONNECT` sin revocar se cierran siempre, sin preguntar, con `restrict-connect` (no reinicia nada). Si después quedan bases con dueño incorrecto, `./odoo build` pregunta al final si querés correr `provision-role` para esas instancias ahora mismo (agrupando por servicio de Postgres, igual que una migración manual). Los otros dos casos (filtro que cambió, filtros solapados) **nunca** se ofrecen para autocorrección — son ambiguos y requieren revisión humana antes de tocar ownership.
 
 ```
 2 instancia(s) con diferencias que 'provision-role' puede corregir automaticamente: inst_a, inst_b
@@ -255,6 +266,7 @@ Todos los comandos que aceptan `[instance]` operan sobre todas las instancias si
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
 | `provision-role <instance>` | Aprovisiona el rol de Postgres dedicado de una instancia: crea el rol si no existe, transfiere el ownership de toda base que matchee su `db_filter`, y revoca `CONNECT` de `PUBLIC` sobre ellas. Requiere `db_user`/`db_password` y un `db_filter` específico ya definidos en `instances.json`. Puede pedir una ventana breve de mantenimiento de todo el servicio de Postgres (pide confirmación antes). Ver "Instancias que comparten un mismo servicio de Postgres" arriba. |
+| `restrict-connect [instance]` | Cierra el `CONNECT` de `PUBLIC` en las bases que el rol dedicado de una instancia (o de todas) ya posee y cumplen su `db_filter`: las que Odoo creó después de `provision-role`. Usa el propio rol, sin reiniciar Postgres. Ver "Bases creadas después de aprovisionar" arriba. |
 | `agent [install\|on\|off\|status\|token\|logs]` | Agente HTTP para `micro_saas` (vive en `.resources/docker-odoo-agent`, desactivado hasta instalarlo). Sin subcomando lo activa o lo desactiva según su estado. Ver "`./odoo agent`" más abajo. |
 
 ### Ejemplos

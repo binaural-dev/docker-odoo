@@ -16,6 +16,7 @@ import secrets
 import subprocess
 import sys
 import threading
+import time
 
 from . import settings
 
@@ -74,6 +75,13 @@ _config_lock = threading.Lock()
 _build_lock = threading.Lock()
 # provision-role restarts the whole Postgres service: one at a time
 _provision_lock = threading.Lock()
+
+# Background jobs (see _start_job), by id. Kept in memory only: if the agent
+# restarts they are lost and GET /jobs/<id> answers 404
+_jobs = {}
+_jobs_lock = threading.Lock()
+MAX_FINISHED_JOBS = 50
+JOB_ID_RE = re.compile(r"^[0-9a-f]{16}$")
 
 
 class AgentError(Exception):
@@ -377,17 +385,8 @@ def _is_running(container):
     return result["ok"] and result["output"].strip() == "true"
 
 
-def provision_role(slug, recreate=True):
-    """'./odoo provision-role <slug>': creates the instance's dedicated
-    Postgres role if missing, gives it ownership of the databases matching
-    its db_filter and closes CONNECT to PUBLIC.
-
-    No Postgres role is a superuser, so the CLI briefly lets the bootstrap
-    role log in, which RESTARTS the db-<service> container: every instance
-    on that service loses its connection for a moment. Afterwards (with
-    recreate) the configs are regenerated and the instance container, if
-    running, is recreated so it connects with its own role.
-    """
+def _provision_target(slug):
+    """Validate an instance for provision-role; returns its config."""
     config = _read_config()
     inst_conf = _get_instance(slug, config)
     db_user, db_password = inst_conf.get("db_user"), str(inst_conf.get("db_password") or "")
@@ -405,13 +404,48 @@ def provision_role(slug, recreate=True):
         raise AgentError(
             f"'{slug}' necesita un db_filter específico (sin %h/%d ni comillas) o un "
             "db_name de una sola base para aprovisionar")
+    return inst_conf
 
+
+def provision_role(slug, recreate=True, background=False, delay=0):
+    """'./odoo provision-role <slug>': creates the instance's dedicated
+    Postgres role if missing, gives it ownership of the databases matching
+    its db_filter (or its single db_name) and closes CONNECT to PUBLIC.
+
+    No Postgres role is a superuser, so the CLI briefly lets the bootstrap
+    role log in, which RESTARTS the db-<service> container: every instance
+    on that service loses its connection for a moment. Afterwards (with
+    recreate) the configs are regenerated and the instance container, if
+    running, is recreated so it connects with its own role.
+
+    With background the validation still happens here, but the work runs
+    in a job and this returns {'job_id', 'status'} right away (see
+    get_job): a caller whose own database lives on that Postgres service
+    (micro_saas in general-18) would otherwise lose its connection while
+    waiting for the answer. delay (seconds, background only) leaves it time
+    to commit the job id before Postgres restarts.
+    """
+    inst_conf = _provision_target(slug)
+    if not 0 <= delay <= 60:
+        raise AgentError("delay debe estar entre 0 y 60 segundos")
     if not _provision_lock.acquire(blocking=False):
         raise AgentError("Ya hay un aprovisionamiento en curso, intenta más tarde", 409)
+    if not background:
+        return _provision_locked(slug, inst_conf, recreate)
+    try:
+        return _start_job("provision-role", slug, _provision_locked, slug, inst_conf, recreate,
+                          delay=delay)
+    except BaseException:
+        _provision_lock.release()
+        raise
+
+
+def _provision_locked(slug, inst_conf, recreate):
+    """Body of provision_role; releases _provision_lock (already held)."""
     try:
         # the CLI asks for confirmation before the maintenance window
         result = _run([sys.executable, CLI_PATH, "provision-role", slug],
-                      input="y\n", timeout=900, redact=(db_password,))
+                      input="y\n", timeout=900, redact=(str(inst_conf["db_password"]),))
     finally:
         _provision_lock.release()
     result["db_service_restarted"] = f"db-{inst_conf['database']}"
@@ -426,6 +460,66 @@ def provision_role(slug, recreate=True):
                 "db_service_restarted": result["db_service_restarted"]}
     return result
 
+
+def restrict_connect(slug=None):
+    """'./odoo restrict-connect [slug]': closes PUBLIC's CONNECT on the
+    databases a provisioned instance created after provision-role. Done
+    with the instance's own role (owner of those databases): no restart."""
+    cmd = [sys.executable, CLI_PATH, "restrict-connect"]
+    if slug:
+        _get_instance(slug)
+        cmd.append(slug)
+    return _run(cmd, timeout=300)
+
+
+# ----------------------------------------------------------------------
+# Background jobs
+# ----------------------------------------------------------------------
+
+
+def _public_job(job):
+    return {key: job[key] for key in ("job_id", "kind", "slug", "status", "started_at", "finished_at", "result")}
+
+
+def _start_job(kind, slug, func, *args, delay=0):
+    """Run func(*args) in a thread, after delay seconds; it must return an
+    agent result dict. The job ends 'done' or 'failed' (result['ok']), with
+    that result."""
+    job = {
+        "job_id": secrets.token_hex(8), "kind": kind, "slug": slug,
+        "status": "running", "started_at": time.time(), "finished_at": None, "result": None,
+    }
+
+    def target():
+        time.sleep(delay)
+        try:
+            result = func(*args)
+        except AgentError as e:
+            result = {"ok": False, "returncode": -1, "command": kind, "output": f"[ERROR] {e}"}
+        except Exception as e:  # noqa: BLE001 - the job must always finish
+            result = {"ok": False, "returncode": -1, "command": kind,
+                      "output": f"[ERROR] Fallo inesperado: {e!r}"}
+        with _jobs_lock:
+            job.update(status="done" if result.get("ok") else "failed",
+                       result=result, finished_at=time.time())
+
+    with _jobs_lock:
+        finished = sorted((j for j in _jobs.values() if j["status"] != "running"),
+                          key=lambda j: j["finished_at"])
+        for old in finished[:max(0, len(finished) - MAX_FINISHED_JOBS)]:
+            _jobs.pop(old["job_id"], None)
+        _jobs[job["job_id"]] = job
+    threading.Thread(target=target, name=f"job-{kind}-{slug}", daemon=True).start()
+    return {"job_id": job["job_id"], "status": "running"}
+
+
+def get_job(job_id):
+    _check(JOB_ID_RE, job_id, "job_id")
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        if not job:
+            raise AgentError(f"No existe el trabajo '{job_id}' (¿se reinició el agente?)", 404)
+        return _public_job(job)
 
 
 def build(no_cache=False):
