@@ -167,9 +167,16 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     if db_conf.get("create_container", True):
         depends.append(f"db-{db_name}")
 
+    # dev_mode: value of --dev ("all" by default). false/"" runs without
+    # --dev: dev mode forces workers=0 (a single process) and the reload
+    # watcher restarts it on every file change, unusable for shared test
+    # environments
+    dev_mode = odoo_conf.get("dev_mode", "all")
+    command = f"odoo --dev={dev_mode}" if dev_mode else "odoo"
+
     lines = [
         f"  {container_name}:",
-        "    command: odoo --dev=all",
+        f"    command: {command}",
         "    restart: always",
         f"    container_name: {container_name}",
         "    build:",

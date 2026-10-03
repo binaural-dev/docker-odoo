@@ -1,0 +1,497 @@
+#!/usr/bin/env python3
+"""
+Configuración post-restore para bases de datos de pruebas.
+
+Lo ejecuta `odoo_restore` al final de cada restore (y por lo tanto también
+`odoo_restore_scp`, que restaura a través de `odoo_restore`), salvo que se
+pase `--skip-post-restore`. También puede ejecutarse solo sobre una base
+que ya exista.
+
+Antes de los pasos de configuración se ejecuta `-u all` sobre la base
+(se omite con `--skip-module-update`). Es best-effort: si sigue fallando
+tras los reintentos, se avisa y la configuración se aplica igual.
+
+Pasos, en este orden (obligatorio: `database_neutralize_toggle` bloquea la
+activación de Sandbox Mode si el parámetro 'Environment' todavía indica
+producción):
+
+  1. Repone los crons que `odoo_restore` pausó durante el `-u all` (su
+     `active` y `nextcall`, y los triggers pendientes), en la misma
+     transacción que Sandbox Mode (paso 4): este necesita el estado real de
+     producción, y si falla el rollback deja todo pausado.
+  2. Ajusta el parámetro de sistema 'Environment' (producción -> el entorno
+     de pruebas).
+  3. Ajusta los parámetros de sistema extra de la instancia, solo los que ya
+     existen en la base (un parámetro de un módulo que no está instalado no
+     se crea). Sirve para lo que el dump trae apuntando a producción, p. ej.
+     la rama por defecto de un módulo de deploys.
+  4. Activa Sandbox Mode a través del wizard de Ajustes Generales
+     (res.config.settings), igual que si un usuario marcara el check y diera
+     clic en "Guardar": desactiva servidores de correo, fetchmail y crons
+     (vía `database_neutralize_toggle`). Se omite si el módulo no está.
+  5. Regenera los assets con `scripts/odoo-regenerate-assets`: el `-u all`
+     puede dejar el bundle compilado desactualizado y romper con un 500 el
+     JS/CSS de páginas como `/web/login`.
+
+Valores por instancia, en `instances.json` (todos opcionales):
+
+    "post_restore": {
+        "environment": "Staging",
+        "system_params": {"bp_deploy_manager.default_branch": "staging"}
+    }
+
+`--environment` y `--param CLAVE=VALOR` tienen prioridad sobre esos
+valores. Sin nada configurado, 'Environment' queda en "QA".
+
+La activación de Sandbox Mode puede chocar con una condición de carrera: el
+scheduler de crons del propio contenedor puede estar ejecutando alguno de
+los `ir.cron` heredados de producción justo cuando `settings.execute()`
+intenta desactivarlos, y Odoo bloquea la escritura sobre un cron en
+ejecución. Por eso ese paso reintenta con backoff.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+
+ENVIRONMENT_PARAM = "Environment"
+DEFAULT_ENVIRONMENT = "QA"
+SANDBOX_RETRY_ATTEMPTS = 5
+SANDBOX_RETRY_DELAY_SECONDS = 10
+REGENERATE_ASSETS_SCRIPT = os.path.join(BASE_PATH, "scripts", "odoo-regenerate-assets")
+
+# El contenedor destino está siempre corriendo (workers + hilo de cron).
+# Apenas la base recién restaurada queda visible, ese servidor puede
+# engancharse a ella justo cuando este `-u all` también la está tocando, y
+# Postgres aborta una de las dos transacciones con "deadlock detected" sobre
+# `ir_module_module`. Es una condición de carrera real contra el propio
+# servidor, no un fallo aislado, así que se reintenta con backoff.
+# Same path odoo_restore and odoo_restore_scp use inside the container
+FILESTORE_BASE_PATH = "/home/odoo/data/filestore"
+MODULE_UPDATE_RETRY_ATTEMPTS = 4
+MODULE_UPDATE_RETRY_DELAY_SECONDS = 20
+# Created by odoo_restore (pause_crons_sql) with each cron's active and
+# nextcall, and the pending triggers it put aside
+PAUSED_CRONS_TABLE = "_restore_paused_crons"
+PAUSED_TRIGGERS_TABLE = "_restore_paused_cron_triggers"
+# Created by neutralize_fallback() when the post-restore can't finish
+PAUSED_MAIL_TABLE = "_restore_paused_mail_servers"
+PAUSED_FETCHMAIL_TABLE = "_restore_paused_fetchmail"
+
+
+def load_instance_settings(container):
+    """'post_restore' de la instancia del contenedor en instances.json ({} si
+    no hay instances.json, la instancia no existe o no tiene la clave).
+
+    Lee el JSON directo, sin load_config(): solo hace falta esta clave, y una
+    validación que falle por otra instancia no debe dejar a esta con los
+    valores por defecto."""
+    instance = container.removeprefix("odoo-")
+    path = os.path.join(BASE_PATH, "instances.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path) as f:
+            config = json.load(f)
+    except (OSError, ValueError) as exc:
+        print(f"AVISO: no se pudo leer {path} ({exc}); se usan los valores por defecto", file=sys.stderr)
+        return {}
+    settings = config.get("instances", {}).get(instance, {}).get("post_restore") or {}
+    if not isinstance(settings, dict):
+        print(f"AVISO: post_restore de '{instance}' no es un objeto; se ignora", file=sys.stderr)
+        return {}
+    return settings
+
+
+def parse_params(pairs):
+    params = {}
+    for pair in pairs or []:
+        key, sep, value = pair.partition("=")
+        if not sep or not key.strip():
+            raise argparse.ArgumentTypeError(f"--param espera CLAVE=VALOR, no '{pair}'")
+        params[key.strip()] = value
+    return params
+
+
+def run_module_update(container, db_name, odoo_bin="odoo"):
+    cmd = [
+        "docker", "exec", "-u", "root", container,
+        odoo_bin, "--stop-after-init", "--no-http", "--workers=0",
+        "-u", "all", "-d", db_name,
+    ]
+
+    result = None
+    for attempt in range(1, MODULE_UPDATE_RETRY_ATTEMPTS + 1):
+        print(
+            f"\nActualizando modulos en '{db_name}' antes de la config "
+            f"post-restore (intento {attempt}/{MODULE_UPDATE_RETRY_ATTEMPTS})...\n",
+            flush=True,
+        )
+        result = subprocess.run(cmd)
+        if result.returncode == 0:
+            return True
+
+        print(
+            f"AVISO: la actualización de módulos en '{db_name}' terminó con "
+            f"código {result.returncode} en el intento {attempt}/"
+            f"{MODULE_UPDATE_RETRY_ATTEMPTS}.",
+            flush=True,
+        )
+        if attempt < MODULE_UPDATE_RETRY_ATTEMPTS:
+            time.sleep(MODULE_UPDATE_RETRY_DELAY_SECONDS)
+
+    # Best-effort: si tras todos los reintentos sigue fallando, NO debe
+    # abortar el resto. La config post-restore (Environment + Sandbox Mode)
+    # tiene que ejecutarse siempre sobre la base recién restaurada.
+    print(
+        f"AVISO: la actualización de módulos en '{db_name}' siguió fallando "
+        f"tras {MODULE_UPDATE_RETRY_ATTEMPTS} intentos (código "
+        f"{result.returncode}). Se continúa con la configuración post-restore "
+        "de todas formas; revisa el esquema de esta base si algo falla más "
+        "adelante.",
+        flush=True,
+    )
+    return False
+
+
+def fix_filestore_owner(container, db_name):
+    """'-u all' runs as root and leaves root-owned folders in the filestore
+    (checklist/, new attachments). The Odoo server and shell run as odoo:
+    Odoo silences the makedirs error and then fails writing the file
+    (FileNotFoundError deleting attachments, e.g. regenerating assets)."""
+    path = f"{FILESTORE_BASE_PATH}/{db_name}"
+    result = subprocess.run(
+        ["docker", "exec", "-u", "root", container, "sh", "-c",
+         '[ ! -d "$1" ] || chown -R odoo:odoo "$1"', "_", path],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"AVISO: no se pudo devolver {path} a odoo:odoo: "
+            f"{(result.stderr or result.stdout).strip()}",
+            file=sys.stderr,
+        )
+
+
+def _build_shell_script(environment, system_params):
+    return f'''
+import sys
+import time
+
+
+def resume_paused():
+    """Put back what odoo_restore (and a failed post-restore) set aside:
+    each cron's active and nextcall, the pending triggers, the outgoing mail
+    and fetchmail servers. Runs inside the same transaction as Sandbox Mode,
+    so the database is never left with production's crons or mail live."""
+    resumed = None
+    env.cr.execute("SELECT to_regclass({PAUSED_CRONS_TABLE!r})")
+    if env.cr.fetchone()[0]:
+        env.cr.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = {PAUSED_CRONS_TABLE!r} AND column_name = 'nextcall'"
+        )
+        if env.cr.fetchone():
+            env.cr.execute(
+                "UPDATE ir_cron c SET active = p.active, nextcall = p.nextcall "
+                "FROM {PAUSED_CRONS_TABLE} p WHERE c.id = p.id"
+            )
+            env.cr.execute(
+                "SELECT count(*) FROM {PAUSED_CRONS_TABLE} p JOIN ir_cron c ON c.id = p.id WHERE p.active"
+            )
+            resumed = env.cr.fetchone()[0]
+        else:
+            # Paused by an older odoo_restore: only the active crons, by id
+            env.cr.execute(
+                "UPDATE ir_cron SET active = true WHERE id IN (SELECT id FROM {PAUSED_CRONS_TABLE})"
+            )
+            resumed = env.cr.rowcount
+        env.cr.execute("DROP TABLE {PAUSED_CRONS_TABLE}")
+    env.cr.execute("SELECT to_regclass({PAUSED_TRIGGERS_TABLE!r})")
+    if env.cr.fetchone()[0]:
+        env.cr.execute(
+            "INSERT INTO ir_cron_trigger (cron_id, call_at) "
+            "SELECT t.cron_id, t.call_at FROM {PAUSED_TRIGGERS_TABLE} t "
+            "WHERE t.cron_id IN (SELECT id FROM ir_cron)"
+        )
+        env.cr.execute("DROP TABLE {PAUSED_TRIGGERS_TABLE}")
+    for table, model_table in (({PAUSED_MAIL_TABLE!r}, "ir_mail_server"), ({PAUSED_FETCHMAIL_TABLE!r}, "fetchmail_server")):
+        env.cr.execute("SELECT to_regclass(%s)", [table])
+        if env.cr.fetchone()[0]:
+            env.cr.execute(
+                "UPDATE %s SET active = true WHERE id IN (SELECT id FROM %s)" % (model_table, table)
+            )
+            env.cr.execute("DROP TABLE %s" % table)
+    return resumed
+
+
+try:
+    icp = env["ir.config_parameter"].sudo()
+    icp.set_param({ENVIRONMENT_PARAM!r}, {environment!r})
+    env.cr.commit()
+    print("POST_RESTORE_STEP: {ENVIRONMENT_PARAM} -> {environment}")
+
+    for key, value in {system_params!r}.items():
+        # get_param() returns False for a missing key: look for the record
+        if not icp.search_count([("key", "=", key)]):
+            print("POST_RESTORE_SKIP_PARAM: %s no esta definido en esta base" % key)
+            continue
+        icp.set_param(key, value)
+        env.cr.commit()
+        print("POST_RESTORE_STEP: %s -> %s" % (key, value))
+
+    if "sandbox_mode" not in env["res.config.settings"]._fields:
+        resumed = resume_paused()
+        env.cr.commit()
+        print("POST_RESTORE_STEP: crons reanudados -> %s" % resumed)
+        print(
+            "POST_RESTORE_SKIP_SANDBOX: database_neutralize_toggle no esta "
+            "instalado en esta base"
+        )
+    else:
+        max_attempts = {SANDBOX_RETRY_ATTEMPTS}
+        retry_delay = {SANDBOX_RETRY_DELAY_SECONDS}
+        last_exc = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # Resume and Sandbox Mode in one transaction: Sandbox Mode
+                # needs production's real cron and mail state to save and
+                # turn it off, and if it fails the rollback leaves everything
+                # paused. The wizard is created again on every attempt (a
+                # rollback also undoes the previous create()).
+                resumed = resume_paused()
+                settings = env["res.config.settings"].create({{}})
+                settings.sandbox_mode = True
+                settings.execute()
+                env.cr.commit()
+                last_exc = None
+                break
+            except Exception as exc:
+                env.cr.rollback()
+                last_exc = exc
+                print(
+                    "POST_RESTORE_SANDBOX_RETRY: intento %d/%d fallo: %r"
+                    % (attempt, max_attempts, exc)
+                )
+                if attempt < max_attempts:
+                    time.sleep(retry_delay)
+
+        if last_exc is not None:
+            raise last_exc
+
+        print("POST_RESTORE_STEP: crons reanudados -> %s" % resumed)
+        print("POST_RESTORE_STEP: sandbox_mode -> True")
+        print("POST_RESTORE_SANDBOX_APPLIED")
+
+    print("POST_RESTORE_OK")
+except Exception as exc:
+    env.cr.rollback()
+    print("POST_RESTORE_FAILED: %r" % (exc,), file=sys.stderr)
+    sys.exit(1)
+'''
+
+
+# Pure SQL, run with psql inside the Odoo container (PGUSER/PGPASSWORD of the
+# instance's role): it must work when the registry can't even load, e.g.
+# after a '-u all' that didn't finish. Sets aside the outgoing mail and
+# fetchmail servers, and pauses the crons if odoo_restore didn't. Everything
+# goes to tables the next post_restore_db run puts back before Sandbox Mode.
+NEUTRALIZE_FALLBACK_SQL = f"""
+DO $$ BEGIN
+IF to_regclass('public.{PAUSED_MAIL_TABLE}') IS NULL THEN
+    CREATE TABLE public.{PAUSED_MAIL_TABLE} AS SELECT id FROM public.ir_mail_server WHERE active;
+    UPDATE public.ir_mail_server SET active = false WHERE active;
+END IF;
+IF to_regclass('public.fetchmail_server') IS NOT NULL
+        AND to_regclass('public.{PAUSED_FETCHMAIL_TABLE}') IS NULL THEN
+    CREATE TABLE public.{PAUSED_FETCHMAIL_TABLE} AS SELECT id FROM public.fetchmail_server WHERE active;
+    UPDATE public.fetchmail_server SET active = false WHERE active;
+END IF;
+IF to_regclass('public.{PAUSED_CRONS_TABLE}') IS NULL THEN
+    CREATE TABLE public.{PAUSED_CRONS_TABLE} AS SELECT id, active, nextcall FROM public.ir_cron;
+    UPDATE public.ir_cron SET active = false, nextcall = '9999-12-31';
+END IF;
+END $$;
+SELECT (SELECT count(*) FROM public.ir_mail_server WHERE active),
+       (SELECT count(*) FROM public.ir_cron WHERE active);
+"""
+
+
+def neutralize_fallback(container, db_name):
+    result = subprocess.run(
+        ["docker", "exec", container, "psql", "-d", db_name, "-v", "ON_ERROR_STOP=1",
+         "-tA", "-c", NEUTRALIZE_FALLBACK_SQL],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"ERROR: tampoco se pudo neutralizar '{db_name}' por SQL: "
+            f"{(result.stderr or result.stdout).strip()}. Desactivar a mano "
+            "ir_mail_server, fetchmail_server e ir_cron antes de usarla.",
+            file=sys.stderr,
+        )
+        return False
+    print(
+        f"AVISO: '{db_name}' quedó neutralizada por SQL (correo saliente, "
+        "fetchmail y crons apartados) porque el post-restore no terminó. "
+        "Corregir el problema y volver a ejecutar scripts/post_restore_db: "
+        "repone todo y activa Sandbox Mode.",
+        file=sys.stderr,
+    )
+    return True
+
+
+def run_post_restore(container, db_name, environment, system_params, odoo_bin="odoo", verbose=False):
+    script = _build_shell_script(environment, system_params)
+
+    cmd = [
+        "docker", "exec", "-i", container,
+        odoo_bin, "shell",
+        "-d", db_name,
+        "--no-http",
+    ]
+
+    if verbose:
+        print(
+            f"\nEjecutando post-restore en '{db_name}' (contenedor {container})...\n"
+            f"Environment objetivo: {environment}\n"
+            f"Parámetros extra: {system_params or '-'}\n"
+        )
+
+    result = subprocess.run(cmd, input=script, text=True, capture_output=True)
+
+    if verbose or result.returncode != 0 or "POST_RESTORE_OK" not in result.stdout:
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(result.stderr, file=sys.stderr)
+
+    if result.returncode != 0 or "POST_RESTORE_OK" not in result.stdout:
+        print(
+            f"ERROR: post-restore falló para la base '{db_name}' "
+            f"(contenedor {container}, environment={environment})",
+            file=sys.stderr,
+        )
+        return None
+
+    sys.stdout.flush()
+    return "POST_RESTORE_SANDBOX_APPLIED" in result.stdout
+
+
+def run_regenerate_assets(container, db_name, odoo_bin="odoo", verbose=False):
+    cmd = [
+        sys.executable, REGENERATE_ASSETS_SCRIPT,
+        container.removeprefix("odoo-"), "-d", db_name, "--odoo-bin", odoo_bin,
+    ]
+    if verbose:
+        cmd.append("--verbose")
+    if subprocess.run(cmd).returncode != 0:
+        print(
+            f"ERROR: no se pudieron regenerar los assets de '{db_name}'; "
+            f"reintentar con scripts/odoo-regenerate-assets",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Prepara una base de datos recién restaurada: actualiza módulos, "
+            "ajusta 'Environment' y los parámetros de la instancia, activa "
+            "Sandbox Mode y regenera los assets."
+        )
+    )
+    parser.add_argument(
+        "--container", required=True, help="Contenedor Odoo, ej. odoo-<instancia>"
+    )
+    parser.add_argument(
+        "--db-name", required=True, help="Base de datos recién restaurada"
+    )
+    parser.add_argument(
+        "--environment",
+        default=None,
+        help=(
+            "Valor del parámetro de sistema 'Environment' (ej. Staging, QA). "
+            "Default: post_restore.environment de la instancia en instances.json, "
+            f"o {DEFAULT_ENVIRONMENT}"
+        ),
+    )
+    parser.add_argument(
+        "--param",
+        action="append",
+        metavar="CLAVE=VALOR",
+        help=(
+            "Parámetro de sistema extra (repetible); se suma a "
+            "post_restore.system_params de la instancia y tiene prioridad"
+        ),
+    )
+    parser.add_argument(
+        "--skip-module-update",
+        action="store_true",
+        help="No ejecutar `-u all` antes de la configuración",
+    )
+    parser.add_argument(
+        "--odoo-bin", default="odoo", help="Comando/binario odoo dentro del contenedor"
+    )
+    parser.add_argument("--verbose", action="store_true")
+    args = parser.parse_args()
+
+    try:
+        cli_params = parse_params(args.param)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
+
+    settings = load_instance_settings(args.container)
+    environment = args.environment or settings.get("environment") or DEFAULT_ENVIRONMENT
+    system_params = {**(settings.get("system_params") or {}), **cli_params}
+
+    update_ok = True
+    if not args.skip_module_update:
+        update_ok = run_module_update(args.container, args.db_name, odoo_bin=args.odoo_bin)
+        fix_filestore_owner(args.container, args.db_name)
+
+    if not update_ok:
+        # The schema is half upgraded: Sandbox Mode's wizard would fail
+        # anyway, and resuming the crons would leave production's crons and
+        # mail live on a database nobody neutralized
+        print(
+            f"ERROR: '{args.db_name}' no terminó el -u all: no se reanudan los "
+            "crons ni se activa Sandbox Mode.",
+            file=sys.stderr,
+        )
+        neutralize_fallback(args.container, args.db_name)
+        sys.exit(1)
+
+    sandbox_applied = run_post_restore(
+        container=args.container,
+        db_name=args.db_name,
+        environment=environment,
+        system_params=system_params,
+        odoo_bin=args.odoo_bin,
+        verbose=args.verbose,
+    )
+    if sandbox_applied is None:
+        neutralize_fallback(args.container, args.db_name)
+        sys.exit(1)
+    run_regenerate_assets(args.container, args.db_name, odoo_bin=args.odoo_bin, verbose=args.verbose)
+
+    sandbox_note = (
+        "Sandbox Mode activado"
+        if sandbox_applied
+        else "Sandbox Mode omitido (database_neutralize_toggle no instalado)"
+    )
+    print(
+        f"post_restore_db: '{args.db_name}' -> {ENVIRONMENT_PARAM}={environment}, "
+        f"{sandbox_note}, assets regenerados"
+    )
+
+
+if __name__ == "__main__":
+    main()

@@ -117,6 +117,16 @@ class ProvisionPayload(BaseModel):
     # regenerate configs and recreate the instance container (if running)
     # so it connects with its role
     recreate: bool = True
+    # run as a background job and answer {'job_id'} at once (GET /jobs/<id>)
+    background: bool = False
+    # seconds the background job waits before starting (0-60): time for the
+    # caller to commit before Postgres restarts
+    delay: int = 0
+
+
+class RestrictConnectPayload(BaseModel):
+    # None = every instance
+    instance: Optional[str] = None
 
 
 class BuildPayload(BaseModel):
@@ -207,7 +217,17 @@ def purge_instance(slug: str, payload: PurgePayload, token=Depends(authenticate)
 @app.post("/instances/{slug}/provision-role")
 def provision_role(slug: str, payload: ProvisionPayload = ProvisionPayload(), token=Depends(authenticate)):
     # restarts the db-<service> container: every instance on it reconnects
-    return ops.provision_role(slug, payload.recreate)
+    return ops.provision_role(slug, payload.recreate, payload.background, payload.delay)
+
+
+@app.post("/restrict-connect")
+def restrict_connect(payload: RestrictConnectPayload = RestrictConnectPayload(), token=Depends(authenticate)):
+    return ops.restrict_connect(payload.instance)
+
+
+@app.get("/jobs/{job_id}")
+def get_job(job_id: str, token=Depends(authenticate)):
+    return ops.get_job(job_id)
 
 
 @app.post("/build")

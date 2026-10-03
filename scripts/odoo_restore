@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 import re
@@ -690,7 +692,52 @@ class DatabaseRestoreManager:
             check=True,
         )
 
-    def restore_dump(self):
+    # Tables (inside the restored database) with what the cron pause changed;
+    # post_restore_db puts it back after '-u all'
+    PAUSED_CRONS_TABLE = "_restore_paused_crons"
+    PAUSED_TRIGGERS_TABLE = "_restore_paused_cron_triggers"
+
+    @classmethod
+    def pause_crons_sql(cls):
+        """SQL that keeps the cron workers off the restored database until
+        post_restore_db ran '-u all' on it. The dump brings production's
+        crons overdue by days: a cron worker that finds a ready job on a
+        database with modules 'to upgrade' and the job late by more than
+        5 hours takes the states for leftovers of a failed upgrade and
+        resets ir_module_module under the running update ("deadlock
+        detected", "Transient module states were reset").
+
+        Every cron (also the inactive ones: '-u all' reactivates crons from
+        their XML) gets its nextcall moved far away, and the pending
+        triggers are put aside, so no job is ever ready. Deactivating alone
+        is not enough for that reason.
+
+        It runs in the same transaction as the dump (restore_dump), so the
+        database is never visible with its crons live. The dump empties
+        search_path: everything is schema-qualified."""
+        crons, triggers = cls.PAUSED_CRONS_TABLE, cls.PAUSED_TRIGGERS_TABLE
+        return (
+            f"CREATE TABLE public.{crons} AS SELECT id, active, nextcall FROM public.ir_cron; "
+            f"UPDATE public.ir_cron SET active = false, nextcall = '9999-12-31'; "
+            # ir_cron_trigger exists from Odoo 15 on
+            "DO $$ BEGIN "
+            "IF to_regclass('public.ir_cron_trigger') IS NOT NULL THEN "
+            f"CREATE TABLE public.{triggers} AS SELECT * FROM public.ir_cron_trigger; "
+            "DELETE FROM public.ir_cron_trigger; "
+            "END IF; END $$;"
+        )
+
+    def paused_crons_count(self):
+        result = subprocess.run(
+            self._psql_command(
+                "-d", self.db_name, "-tA", "-c",
+                f"SELECT count(*) FILTER (WHERE active) FROM {self.PAUSED_CRONS_TABLE}",
+            ),
+            capture_output=True, text=True,
+        )
+        return result.stdout.strip() if result.returncode == 0 else "?"
+
+    def restore_dump(self, pause_crons=False):
         print(f"Iniciando restore de dump.sql en la base '{self.db_name}'")
 
         self._copy_dump_to_container()
@@ -722,6 +769,11 @@ class DatabaseRestoreManager:
 
             if not self.verbose:
                 cmd.insert(-2, "-q")
+            if pause_crons:
+                # Dump and pause in one transaction: cron workers never see
+                # the database half loaded nor with its crons live
+                cmd[-2:-2] = ["-1"]
+                cmd += ["-c", self.pause_crons_sql()]
 
             try:
                 if self.verbose:
@@ -815,6 +867,103 @@ class FilestoreRestoreManager:
         )
 
 
+# With post-restore, the database is restored and prepared ('-u all',
+# Sandbox Mode, assets) under a work name and renamed to the requested one
+# only at the end. Anything that already knows the final name (a browser tab
+# left open on the previous copy, whose websocket reconnects every few
+# seconds) would otherwise load the registry while modules are 'to upgrade':
+# that worker runs the upgrade itself, fails, resets ir_module_module and
+# deadlocks the real update. The prefix also keeps it out of the usual
+# db_filter (^<prefix>_), so it isn't offered in the database selector.
+RESTORE_WORK_PREFIX = "restoring_"
+POSTGRES_MAX_NAME_BYTES = 63
+
+
+def restore_work_name(db_name):
+    name = f"{RESTORE_WORK_PREFIX}{db_name}"
+    if len(name.encode()) > POSTGRES_MAX_NAME_BYTES:
+        name = f"{RESTORE_WORK_PREFIX}{hashlib.sha1(db_name.encode()).hexdigest()[:16]}"
+    return name
+
+
+class DatabasePromoter:
+    """Renames the work database (and its filestore folder) to the final
+    name once the post-restore is done."""
+
+    RENAME_ATTEMPTS = 5
+    RENAME_RETRY_SECONDS = 3
+
+    def __init__(self, container, db_user, db_host, db_port, psql_bin, filestore_base_path):
+        self.container = container
+        self.db_user = db_user
+        self.db_host = db_host
+        self.db_port = db_port
+        self.psql_bin = psql_bin
+        self.filestore_base_path = filestore_base_path
+
+    def _psql(self, sql):
+        return subprocess.run(
+            [
+                "docker", "exec", self.container, self.psql_bin,
+                "-U", self.db_user, "-h", self.db_host, "-p", str(self.db_port),
+                "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc", sql,
+            ],
+            capture_output=True, text=True,
+        )
+
+    def exists(self, db_name):
+        result = self._psql(f"SELECT 1 FROM pg_database WHERE datname = '{db_name}'")
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"No se pudo consultar si existe la base '{db_name}': "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
+        return result.stdout.strip() == "1"
+
+    def promote(self, work_name, final_name):
+        if self.exists(final_name):
+            raise RuntimeError(
+                f"La base '{final_name}' apareció durante el restore; la copia "
+                f"preparada quedó como '{work_name}'"
+            )
+        # The instance's cron worker keeps a pooled connection to every
+        # database of its role: close them right before renaming, and retry
+        # if one comes back in between. Only the role's own sessions (no
+        # superuser needed): after loading a large dump autovacuum works on
+        # the database, and terminating it is not allowed, but RENAME stops
+        # autovacuum workers by itself
+        sql = (
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname = '{work_name}' AND usename = current_user "
+            "AND pid <> pg_backend_pid(); "
+            f'ALTER DATABASE "{work_name}" RENAME TO "{final_name}";'
+        )
+        for attempt in range(1, self.RENAME_ATTEMPTS + 1):
+            result = self._psql(sql)
+            if result.returncode == 0:
+                break
+            error = (result.stderr or result.stdout).strip()
+            if attempt == self.RENAME_ATTEMPTS:
+                raise RuntimeError(
+                    f"No se pudo renombrar '{work_name}' a '{final_name}': {error}"
+                )
+            time.sleep(self.RENAME_RETRY_SECONDS)
+
+        work_fs = f"{self.filestore_base_path}/{work_name}"
+        final_fs = f"{self.filestore_base_path}/{final_name}"
+        subprocess.run(
+            [
+                "docker", "exec", "-u", "root", self.container, "sh", "-c",
+                'if [ -d "$1" ]; then '
+                '[ -e "$2" ] && { echo "ya existe $2" >&2; exit 1; }; '
+                'mv "$1" "$2"; fi',
+                "_", work_fs, final_fs,
+            ],
+            check=True,
+        )
+        print(f"Base '{work_name}' renombrada a '{final_name}' (con su filestore).")
+
+
 class RestoreOrchestrator:
     def __init__(
         self,
@@ -836,8 +985,12 @@ class RestoreOrchestrator:
         verbose=False,
         cleanup_enabled=True,
         db_prefix=None,
+        pause_crons=False,
+        use_work_name=False,
     ):
         self.zip_path = zip_path
+        self.pause_crons = pause_crons
+        self.use_work_name = use_work_name
         self.container = container_name
         self.new_db_name = new_db_name
         self.db_prefix = db_prefix
@@ -862,10 +1015,21 @@ class RestoreOrchestrator:
             linux_dump_user=self.linux_dump_user,
         )
 
-    def run(self):
-        effective_db_name = self.new_db_name
+    @property
+    def effective_db_name(self):
         if self.db_prefix:
-            effective_db_name = f"{self.db_prefix}{self.new_db_name}"
+            return f"{self.db_prefix}{self.new_db_name}"
+        return self.new_db_name
+
+    @property
+    def restore_db_name(self):
+        """Name the database has while it is restored and prepared."""
+        if self.use_work_name:
+            return restore_work_name(self.effective_db_name)
+        return self.effective_db_name
+
+    def run(self):
+        effective_db_name = self.restore_db_name
 
         print("\n=== Iniciando proceso de restore ===\n")
         print(
@@ -875,7 +1039,12 @@ class RestoreOrchestrator:
         )
         if self.db_prefix:
             print(f"- Prefijo de base de datos: {self.db_prefix}")
-            print(f"- Nombre efectivo de base de datos: {effective_db_name}\n")
+            print(f"- Nombre efectivo de base de datos: {self.effective_db_name}\n")
+        if self.use_work_name:
+            print(
+                f"- Se restaura y prepara como '{effective_db_name}'; al terminar "
+                f"el post-restore se renombra a '{self.effective_db_name}'\n"
+            )
 
         extractor = ZipExtractor(
             zip_path=self.zip_path,
@@ -904,7 +1073,9 @@ class RestoreOrchestrator:
 
         db_manager.validate_dump_compatibility()
         db_manager.create_database()
-        db_manager.restore_dump()
+        db_manager.restore_dump(pause_crons=self.pause_crons)
+        if self.pause_crons:
+            print(f"Crons pausados hasta el post-restore: {db_manager.paused_crons_count()} activos")
         self.cleanup_manager.cleanup_local_path(local_dump_path)
         self.cleanup_manager.cleanup_container_path(self.workspace.container_restore_dir)
 
@@ -925,12 +1096,51 @@ class RestoreOrchestrator:
             self.cleanup_manager.cleanup_local_path(local_filestore_path)
 
         print(f"\n✔ Restore completado correctamente para la base '{effective_db_name}'.\n")
+        return True
 
     def cleanup(self):
         print("\n=== Cleanup de temporales ===")
         print("Limpiando archivos temporales...")
         self.cleanup_manager.cleanup()
         print("Limpieza completada.\n")
+
+
+def run_post_restore(container_name, db_name, environment=None, verbose=False):
+    script_path = os.path.join(BASE_PATH, "scripts", "post_restore_db")
+    if not os.path.isfile(script_path):
+        raise FileNotFoundError(
+            f"No se encontró el script de configuración post-restore: {script_path}"
+        )
+
+    cmd = [
+        sys.executable,
+        script_path,
+        "--container",
+        container_name,
+        "--db-name",
+        db_name,
+    ]
+    if environment:
+        cmd.extend(["--environment", environment])
+    if verbose:
+        cmd.append("--verbose")
+
+    print(
+        "\n=== Post-restore: actualizar módulos, Environment, parámetros, "
+        f"Sandbox Mode y assets en '{db_name}' ===\n",
+        flush=True,
+    )
+    # Best-effort: la base ya quedó restaurada; si la configuración falla se
+    # avisa, pero no se da el restore por fallido (odoo_restore_scp restaura
+    # 2 bases por corrida y la segunda no debe depender de la primera).
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        print(
+            f"AVISO: la configuración post-restore de '{db_name}' terminó "
+            f"con código {result.returncode}. Revisa esta base manualmente o "
+            "vuelve a ejecutar scripts/post_restore_db.",
+            file=sys.stderr,
+        )
 
 
 def parse_args():
@@ -989,6 +1199,24 @@ def parse_args():
         default="",
         help="Prefijo opcional para el nombre de la base de datos restaurada",
     )
+    restore_parser.add_argument(
+        "--skip-post-restore",
+        action="store_true",
+        help=(
+            "Restaurar la base tal cual: no ejecutar post_restore_db "
+            "(-u all, Environment, parámetros, Sandbox Mode ni assets)"
+        ),
+        default=False,
+    )
+    restore_parser.add_argument(
+        "--environment",
+        default=None,
+        help=(
+            "Valor del parámetro de sistema 'Environment' en el post-restore. "
+            "Default: post_restore.environment de la instancia en instances.json, "
+            "o QA"
+        ),
+    )
 
     return parser.parse_args(), parser
 
@@ -1020,6 +1248,13 @@ def main():
     db_service_name = inst_conf["database"]
     db_container = f"db-{db_service_name}"
 
+    filestore_base_path = "/home/odoo/data/filestore"
+    promoter = DatabasePromoter(
+        container=container_name, db_user=db_user, db_host=db_host,
+        db_port=db_port, psql_bin=psql_bin, filestore_base_path=filestore_base_path,
+    )
+    use_work_name = not args.skip_post_restore
+
     restorer = RestoreOrchestrator(
         zip_path=args.z,
         container_name=container_name,
@@ -1027,7 +1262,7 @@ def main():
         db_user=db_user,
         db_host=db_host,
         db_port=db_port,
-        container_filestore_base_path="/home/odoo/data/filestore",
+        container_filestore_base_path=filestore_base_path,
         linux_dump_user="dump_user",
         workdir_base=args.workdir,
         psql_bin=psql_bin,
@@ -1039,11 +1274,34 @@ def main():
         verbose=args.verbose,
         cleanup_enabled=not args.no_cleanup,
         db_prefix=args.db_prefix,
+        # post_restore_db turns them back on; without it they'd stay off
+        pause_crons=not args.skip_post_restore,
+        use_work_name=use_work_name,
     )
+    if use_work_name:
+        for name in (restorer.effective_db_name, restorer.restore_db_name):
+            if promoter.exists(name):
+                raise RuntimeError(
+                    f"La base de datos '{name}' ya existe. No se puede sobrescribir."
+                )
     try:
         restorer.run()
     finally:
         restorer.cleanup()
+
+    if args.skip_post_restore:
+        print("--skip-post-restore activo: se omite la configuración post-restore.\n")
+        return
+
+    run_post_restore(
+        container_name=container_name,
+        db_name=restorer.restore_db_name,
+        environment=args.environment,
+        verbose=args.verbose,
+    )
+    # Even if the post-restore failed: post_restore_db leaves the database
+    # neutralized in that case, and the requested name is where people look
+    promoter.promote(restorer.restore_db_name, restorer.effective_db_name)
 
 
 if __name__ == "__main__":

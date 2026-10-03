@@ -45,6 +45,12 @@ def bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password)
     return check.returncode != 0
 
 
+def _container_running(container):
+    out = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", container],
+                         capture_output=True, text=True).stdout.strip()
+    return out == "true"
+
+
 def bootstrap_breakglass_enable(db_container, bootstrap_user, db_conf, db_name, compose_file):
     """Stop the db service, flip the bootstrap role to LOGIN via
     `postgres --single` (bypasses normal auth -- the only way in once
@@ -65,14 +71,35 @@ def bootstrap_breakglass_enable(db_container, bootstrap_user, db_conf, db_name, 
         print(f"Error: no se pudo determinar el volumen de datos de {db_container}.")
         sys.exit(1)
 
-    os.system(f"docker compose -f {compose_file} stop {db_container}")
-    subprocess.run(
+    # docker stop/start on the container itself: 'docker compose -f <file>'
+    # silently does nothing if the file or the project name don't match the
+    # running container (e.g. run from another checkout), and a second
+    # postgres on a data directory the live server is still using can
+    # corrupt it. So the single-user backend only runs once the container is
+    # confirmed stopped.
+    subprocess.run(["docker", "stop", db_container], stdout=subprocess.DEVNULL)
+    if _container_running(db_container):
+        print(f"Error: {db_container} sigue corriendo: se cancela el break-glass "
+              f"(nunca se abre el volumen de datos con el servidor activo).")
+        sys.exit(1)
+    single = subprocess.run(
         ["docker", "run", "--rm", "-i", "--user", "postgres",
          "-v", f"{volume}:/var/lib/postgresql/data",
          "--entrypoint", "", image,
          "postgres", "--single", "-D", "/var/lib/postgresql/data/pgdata", "postgres"],
         input=f"ALTER ROLE {bootstrap_user} LOGIN;", text=True,
     )
-    os.system(f"docker compose -f {compose_file} up -d {db_container}")
+    subprocess.run(["docker", "start", db_container], stdout=subprocess.DEVNULL)
+    if single.returncode != 0:
+        print(f"Error: postgres --single terminó con código {single.returncode}; "
+              f"{db_container} se volvió a iniciar sin cambios.")
+        sys.exit(1)
     print("→ Esperando a que el servicio vuelva a estar disponible...")
-    time.sleep(6)
+    for _ in range(60):
+        ready = subprocess.run(["docker", "exec", db_container, "pg_isready", "-q"])
+        if ready.returncode == 0:
+            break
+        time.sleep(1)
+    else:
+        print(f"Error: {db_container} no volvió a aceptar conexiones tras el break-glass.")
+        sys.exit(1)

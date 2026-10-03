@@ -27,6 +27,8 @@ from generators.config_loader import (
     get_db_internal_port,
     get_unique_odoo_versions,
     get_managed_databases,
+    resolve_instance_db_scope,
+    db_scope_matches,
 )
 from generators.dockerfile_generator import generate_dockerfiles
 from generators.compose_generator import generate_compose
@@ -148,17 +150,22 @@ def audit_db_filter_drift(config):
         for inst_name in inst_names:
             inst_conf = config["instances"][inst_name]
             odoo_conf = resolve_instance_config(inst_conf, config)
-            db_filter = odoo_conf.get("db_filter") or ""
             max_cron_threads = odoo_conf.get("max_cron_threads", 1)
             expected_user = inst_conf.get("db_user")
 
-            if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
+            # db_filter especifico, o db_name de una sola base (ver
+            # resolve_instance_db_scope)
+            scope = resolve_instance_db_scope(odoo_conf)
+            kind, db_filter = scope
+            if kind is None or (kind == "filter" and ("%h" in db_filter or "%d" in db_filter)):
                 continue  # ya lo reporta _validate_cron_dbfilter_isolation, no duplicar
+            if kind == "filter":
+                try:
+                    re.compile(db_filter)
+                except re.error:
+                    continue  # regex invalido -- tampoco duplicar aca
 
-            try:
-                matched = [r for r in rows if re.match(db_filter, r["datname"])]
-            except re.error:
-                continue  # regex invalido -- tampoco duplicar aca
+            matched = [r for r in rows if db_scope_matches(scope, r["datname"])]
 
             for r in matched:
                 matches_by_db[r["datname"]].append(inst_name)
@@ -185,7 +192,7 @@ def audit_db_filter_drift(config):
 
             if expected_user:
                 for r in rows:
-                    if r["owner"] == expected_user and not re.match(db_filter, r["datname"]):
+                    if r["owner"] == expected_user and not db_scope_matches(scope, r["datname"]):
                         findings.append({
                             "category": "filter_drift", "instance": inst_name, "fixable": False,
                             "message": (
@@ -273,10 +280,20 @@ def provision_instances_grouped(config, instance_names):
 
 def _maybe_fix_drift(config, findings, no_confirm):
     """Si la auditoria encontro diferencias corregibles sin ambiguedad
-    (dueño incorrecto, CONNECT sin revocar), ofrece corregirlas ahora
-    mismo con 'provision-role', agrupando por servicio. Los hallazgos
+    cierra el CONNECT abierto con restrict_public_connect() y, para lo que
+    quede (dueño incorrecto), ofrece corregirlo ahora mismo con
+    'provision-role', agrupando por servicio. Los hallazgos
     ambiguos (filtro que cambio, filtros solapados) nunca se auto-corrigen
     -- requieren revision humana antes de tocar ownership."""
+    # CONNECT abierto en bases que ya son del rol correcto (las crea Odoo
+    # despues de aprovisionar): se cierra con el propio rol, sin break-glass
+    # ni reinicio, asi que se corrige siempre, sin preguntar
+    connect_open = {f["instance"] for f in findings if f["category"] == "connect_open"}
+    for name in sorted(connect_open):
+        restrict_public_connect(config, name)
+    if connect_open:
+        findings = audit_db_filter_drift(config)
+
     fixable_instances = sorted({
         f["instance"] for f in findings if f["fixable"] and f["instance"]
     })
@@ -478,11 +495,14 @@ def bash_update_modules(config, instance, dbname, modules="all", force_all=False
     """
     print(f"\n\033[1;35m=== 🆙 ACTUALIZANDO MÓDULOS EN: {instance.upper()} (DB: {dbname}) ===\033[0m\n")
     container = f"odoo-{instance}"
+    # -it only with a terminal: from cron (no TTY) docker refuses it
+    # ("the input device is not a TTY") and the update never runs
+    tty_flag = " -it" if sys.stdin.isatty() else ""
     if modules == "all":
         force_flag = " --update-all" if force_all else ""
-        cmd = f"docker exec -u root -it {container} click-odoo-update --if-exists{force_flag} -d {dbname}"
+        cmd = f"docker exec -u root{tty_flag} {container} click-odoo-update --if-exists{force_flag} -d {dbname}"
     else:
-        cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+        cmd = f"docker exec -u root{tty_flag} {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
     print(cmd)
     return os.system(cmd)
 
@@ -865,13 +885,20 @@ def _resolve_provision_target(config, instance):
     db_name = inst_conf["database"]
     db_conf = config["databases"][db_name]
     odoo_conf = resolve_instance_config(inst_conf, config)
-    db_filter = odoo_conf.get("db_filter") or ""
-    if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
+    # Sus bases: las que cumplen un db_filter especifico o, sin filtro, la
+    # unica base de db_name (ver resolve_instance_db_scope)
+    db_scope = resolve_instance_db_scope(odoo_conf)
+    kind, db_filter = db_scope
+    if kind is None or (kind == "filter" and ("%h" in db_filter or "%d" in db_filter)):
         print(
             f"Error: '{instance}' no tiene un db_filter especifico y estatico "
-            f"(sin %h/%d) -- no se puede resolver de forma segura que bases le "
-            f"pertenecen. Definilo antes de aprovisionar."
+            f"(sin %h/%d) ni un 'db_name' de una sola base -- no se puede resolver "
+            f"de forma segura que bases le pertenecen. Definilo antes de aprovisionar."
         )
+        sys.exit(1)
+    if "'" in db_filter:
+        # Se interpola en SQL (provision_role_sql)
+        print(f"Error: el db_filter/db_name de '{instance}' no puede contener comillas simples.")
         sys.exit(1)
 
     return {
@@ -884,6 +911,7 @@ def _resolve_provision_target(config, instance):
         "db_user": db_user,
         "db_password": db_password,
         "db_filter": db_filter,
+        "db_scope": db_scope,
     }
 
 
@@ -923,14 +951,18 @@ def provision_role_sql(target):
     _pg_exec(db_container, bootstrap_user, bootstrap_password, "postgres",
              f"GRANT {bootstrap_user} TO {db_user};")
 
+    # db_name de una sola base: exactamente esa; db_filter: por regex
+    kind = target.get("db_scope", ("filter", db_filter))[0]
+    condition = f"datname = '{db_filter}'" if kind == "name" else f"datname ~ '{db_filter}'"
     list_result = subprocess.run(
         ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}", db_container,
          "psql", "-U", bootstrap_user, "-d", "postgres", "-tAc",
-         f"SELECT datname FROM pg_database WHERE datistemplate=false AND datname ~ '{db_filter}';"],
+         f"SELECT datname FROM pg_database WHERE datistemplate=false AND {condition};"],
         capture_output=True, text=True, check=True,
     )
     matching = [d.strip() for d in list_result.stdout.splitlines() if d.strip()]
-    print(f"→ Bases que matchean '{db_filter}': {', '.join(matching) if matching else '(ninguna)'}")
+    label = "Base de db_name" if kind == "name" else "Bases que matchean"
+    print(f"→ {label} '{db_filter}': {', '.join(matching) if matching else '(ninguna)'}")
 
     for db in matching:
         print(f"  - {db}")
@@ -958,7 +990,8 @@ def provision_instance_role(config, instance):
     print(f"\n\033[1;36m=== 🔐 APROVISIONANDO ROL DEDICADO: {instance.upper()} ===\033[0m\n")
     print(f"Servicio de Postgres: {target['db_name']}  (contenedor: {db_container})")
     print(f"Rol: {target['db_user']}")
-    print(f"db_filter usado para resolver bases: {target['db_filter']}")
+    kind = "db_name" if target["db_scope"][0] == "name" else "db_filter"
+    print(f"{kind} usado para resolver bases: {target['db_filter']}")
     print(
         f"\n⚠️  Si el rol bootstrap de '{target['db_name']}' esta en NOLOGIN (lo "
         f"normal), esto va a requerir una ventana breve de mantenimiento de "
@@ -988,6 +1021,72 @@ def provision_instance_role(config, instance):
         f"instancia (./odoo build && docker compose up -d --no-deps odoo-{instance}) "
         f"para que use las credenciales nuevas.\n"
     )
+
+
+def restrict_public_connect(config, instance=None):
+    """Cierra el CONNECT de PUBLIC en las bases que el rol dedicado de cada
+    instancia ya posee pero que siguen abiertas: las que Odoo crea (gestor
+    de bases, restore desde la UI) DESPUES de 'provision-role' nacen con el
+    ACL por defecto, que deja conectarse a cualquier rol del servicio.
+
+    A diferencia de provision-role no necesita break-glass ni reinicia
+    nada: el dueño de una base puede revocarle privilegios a PUBLIC, asi
+    que cada REVOKE se hace con el propio rol de la instancia. Solo toca
+    bases de ese rol que matchean su db_filter (mismo re.match que usa
+    Odoo) o que son su db_name de una sola base (ver
+    resolve_instance_db_scope); las demas son 'filter_drift' de la
+    auditoria y requieren revision manual. Instancias sin rol dedicado,
+    sin cron (max_cron_threads=0), sin db_filter estatico ni db_name de
+    una sola base, o en un Postgres externo, se omiten.
+
+    Devuelve False si alguna instancia no se pudo revisar."""
+    names = [instance] if instance else list(config["instances"])
+    ok = True
+    for name in names:
+        inst_conf = config["instances"].get(name)
+        if inst_conf is None:
+            print(f"Error: instancia '{name}' no existe.")
+            return False
+        db_user, db_password = inst_conf.get("db_user"), inst_conf.get("db_password")
+        db_conf = config["databases"][inst_conf["database"]]
+        odoo_conf = resolve_instance_config(inst_conf, config)
+        scope = resolve_instance_db_scope(odoo_conf)
+        kind, db_filter = scope
+        if (not db_user or not db_password or odoo_conf.get("max_cron_threads", 1) == 0
+                or not db_conf.get("create_container", True)
+                or kind is None or (kind == "filter" and ("%h" in db_filter or "%d" in db_filter))):
+            continue
+        if kind == "filter":
+            try:
+                re.compile(db_filter)
+            except re.error:
+                continue
+
+        db_container = f"db-{inst_conf['database']}"
+        listing = subprocess.run(
+            ["docker", "exec", "-e", f"PGPASSWORD={db_password}", db_container,
+             "psql", "-U", db_user, "-d", "postgres", "-tAc",
+             "SELECT datname FROM pg_database WHERE NOT datistemplate "
+             "AND datdba = (SELECT oid FROM pg_roles WHERE rolname = current_user) "
+             "AND has_database_privilege('public', datname, 'CONNECT');"],
+            capture_output=True, text=True,
+        )
+        if listing.returncode != 0:
+            print(f"[{name}] no se pudo consultar como '{db_user}': {listing.stderr.strip()}")
+            ok = False
+            continue
+        open_dbs = [d.strip() for d in listing.stdout.splitlines() if d.strip()]
+        for db in open_dbs:
+            if not db_scope_matches(scope, db):
+                continue
+            quoted = db.replace('"', '""')
+            result = _pg_exec(db_container, db_user, db_password, "postgres",
+                              f'REVOKE CONNECT ON DATABASE "{quoted}" FROM PUBLIC;', check=False)
+            if result.returncode == 0:
+                print(f"[{name}] CONNECT de PUBLIC cerrado en '{db}'")
+            else:
+                ok = False
+    return ok
 
 
 def prompt_for_user(config, instance, dbname):
@@ -1146,12 +1245,12 @@ def get_databases(config, instance):
         container = f"odoo-{instance}"
 
         odoo_conf = resolve_instance_config(inst_conf, config)
-        db_filter = odoo_conf.get("db_filter")
+        kind, db_filter = resolve_instance_db_scope(odoo_conf)
 
         where_clause = "datistemplate = false AND datname NOT IN ('postgres', 'template1')"
-        if db_filter and db_filter != "*":
-            escaped_filter = db_filter.replace("'", "''")
-            where_clause += f" AND datname ~ '{escaped_filter}'"
+        if kind:
+            escaped = db_filter.replace("'", "''")
+            where_clause += f" AND datname = '{escaped}'" if kind == "name" else f" AND datname ~ '{escaped}'"
         else:
             print(
                 f"\n⚠️  La instancia '{instance}' no tiene un db_filter especifico (o es '*') -- "
@@ -1544,6 +1643,13 @@ def main():
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
 
+    # Passthrough directo del subcomando regenerate-assets: lo mismo que el
+    # boton "Regenerar activos" del menu de debug (scripts/odoo-regenerate-assets)
+    if len(sys.argv) >= 2 and sys.argv[1] == "regenerate-assets":
+        cmd = [str(Path(BASE_PATH) / "scripts" / "odoo-regenerate-assets")] + sys.argv[2:]
+        result = subprocess.run(cmd)
+        sys.exit(result.returncode)
+
     # Passthrough directo del subcomando agent: scripts/odoo-agent gestiona
     # el agente HTTP de .resources/docker-odoo-agent y le pasa sus flags
     # tal cual a install.sh, asi que se delega antes de parsear.
@@ -1675,6 +1781,13 @@ def main():
         help="Crea/actualiza el rol dedicado de Postgres de una instancia y aisla sus bases (owner + REVOKE CONNECT)",
     )
     provision_p.add_argument("instance", help="Nombre de instancia (requiere db_user/db_password en instances.json)")
+
+    # restrict-connect
+    restrict_p = subparsers.add_parser(
+        "restrict-connect",
+        help="Cierra el CONNECT de PUBLIC en las bases nuevas de instancias ya aprovisionadas (sin reiniciar Postgres)",
+    )
+    restrict_p.add_argument("instance", nargs="?", default=None, help="Nombre de instancia (por defecto: todas)")
     pw_p.add_argument("-l", help="Login a restablecer (opcional)")
     pw_p.add_argument("-p", "--password", default="admin", help="Nueva contraseña (por defecto: admin)")
 
@@ -1809,6 +1922,14 @@ def main():
              "(ver ./odoo restore --help para el resto de flags)",
     )
 
+    # regenerate-assets: passthrough directo a scripts/odoo-regenerate-assets
+    # antes de argparse (en main()). El subparser solo queda para el help.
+    subparsers.add_parser(
+        "regenerate-assets",
+        help="Regenera los assets (JS/CSS) de una base, como el botón \"Regenerar activos\" "
+             "del menú de debug. Uso: ./odoo regenerate-assets <instancia> -d <db>",
+    )
+
     # agent: passthrough directo a scripts/odoo-agent antes de argparse
     # (en main()). El subparser solo queda para listar el comando en el help.
     subparsers.add_parser(
@@ -1928,6 +2049,9 @@ def main():
         reset_password(config, args.instance, args.d, args.l, args.password)
     elif args.action == "provision-role":
         provision_instance_role(config, args.instance)
+    elif args.action == "restrict-connect":
+        if not restrict_public_connect(config, args.instance):
+            sys.exit(1)
     elif args.action == "update":
         if args.instance is None:
             args.instance = prompt_for_instance(config, "update")

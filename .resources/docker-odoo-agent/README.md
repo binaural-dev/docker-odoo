@@ -74,6 +74,10 @@ En `PUT /instances/{slug}`:
 
 Flujo para una instancia nueva o que pasa a tener rol: `PUT` → `POST /instances/{slug}/provision-role` (si `needs_provision`) → `start`. `provision-role` sirve también cuando ya hay bases creadas: les pasa la propiedad al rol.
 
+Si quien llama tiene su propia base en ese mismo servicio de Postgres (micro_saas en general-18), debe pedir `provision-role` con `"background": true`: el agente valida, responde al momento con `job_id` y hace el trabajo en segundo plano. Con la llamada síncrona, el reinicio de Postgres le corta la conexión a quien espera la respuesta. El resultado se consulta con `GET /jobs/{job_id}`.
+
+Las bases que la instancia crea **después** de aprovisionar (gestor de bases de Odoo, restore desde la UI) nacen con `CONNECT` abierto a `PUBLIC`. `POST /restrict-connect` (`./odoo restrict-connect [instancia]`) lo cierra con el propio rol de cada instancia, que es dueño de esas bases, así que no reinicia nada. Solo toca bases del rol que cumplen su `db_filter`. `./odoo build` lo aplica también a lo que su auditoría marca como `connect_open`. micro_saas lo llama con un cron.
+
 ## Endpoints
 
 | Método | Ruta | Scope | Hace |
@@ -83,7 +87,9 @@ Flujo para una instancia nueva o que pasa a tener rol: `PUT` → `POST /instance
 | GET | `/instances` | read | `instances.json` sin secretos, más las claves de `odoo_configs` y `databases` |
 | GET | `/instances/status` | read | Estado de cada contenedor `odoo-<slug>` |
 | PUT | `/instances/{slug}` | write | Crea o actualiza la entrada (merge y la misma validación que `./odoo build`). Acepta `max_cron_threads`, `db_user` y `db_password` (ver "Rol de Postgres por instancia"). Devuelve `needs_provision` cuando cambió el rol, su contraseña o el `db_filter` |
-| POST | `/instances/{slug}/provision-role` | write | `./odoo provision-role <slug>`: crea el rol si no existe, le da la propiedad de las bases que cumplen `db_filter` y cierra `CONNECT` a `PUBLIC`. **Reinicia el contenedor `db-<servicio>`** (todas sus instancias pierden la conexión un momento). Con `recreate` (por defecto) regenera configs y recrea `odoo-<slug>` si está corriendo, para que use su rol. Uno a la vez (409) |
+| POST | `/instances/{slug}/provision-role` | write | `./odoo provision-role <slug>`: crea el rol si no existe, le da la propiedad de las bases que cumplen `db_filter` y cierra `CONNECT` a `PUBLIC`. **Reinicia el contenedor `db-<servicio>`** (todas sus instancias pierden la conexión un momento). Con `recreate` (por defecto) regenera configs y recrea `odoo-<slug>` si está corriendo, para que use su rol. Con `background` responde `{job_id}` al momento (ver `/jobs`); `delay` (0-60 s) retrasa el inicio del trabajo para que quien llama confirme su transacción antes del reinicio. Uno a la vez (409) |
+| GET | `/jobs/{job_id}` | read | Estado de un trabajo en segundo plano: `status` (`running`, `done`, `failed`) y, al terminar, `result` con la misma forma que la respuesta síncrona. Solo en memoria: si el agente se reinicia, 404 |
+| POST | `/restrict-connect` | write | `./odoo restrict-connect [instance]`: cierra `CONNECT` de `PUBLIC` en las bases que un rol ya posee y cumplen su `db_filter` (sin `instance`, en todas las instancias). No reinicia nada |
 | DELETE | `/instances/{slug}` | write | Borra el contenedor y la entrada, regenera compose y nginx. Si tenía rol propio, guarda sus credenciales en `var/removed_instance_roles.json` (600) para la purga |
 | POST | `/build` | write | `./odoo build` (uno a la vez; si hay otro en curso, 409) |
 | POST | `/instances/{slug}/start` · `stop` · `restart` | write | Opera solo sobre `odoo-<slug>`; `start` también sincroniza nginx |

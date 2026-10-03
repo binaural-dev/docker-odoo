@@ -5,6 +5,7 @@ Resolves odoo_config references and applies overwrite_odoo_config merges.
 
 import json
 import os
+import re
 import sys
 
 
@@ -99,6 +100,41 @@ def _validate_instance(inst_name, inst_conf, config):
         raise ValueError("Los external_port de las instancias deben ser únicos")
 
 
+def resolve_instance_db_scope(odoo_conf):
+    """Which databases belong to an instance, for Postgres role isolation.
+
+    Returns ("filter", <regex>) when it has a specific db_filter, or
+    ("name", <database>) when it has no db_filter but a 'db_name' with a
+    single database (e.g. an instance pinned to one database that third-party
+    apps address by name, where a db_filter would get in the way). Anything
+    else is (None, None): no way to tell which databases are its own.
+
+    Both are enough for Odoo 18: the cron workers use 'db_name' as their
+    database list when it is set (WorkerCron._db_list), and the web uses it
+    too when there is no dbfilter (service/db.py list_dbs). The dedicated
+    role keeps every other instance from seeing that database."""
+    db_filter = (odoo_conf.get("db_filter") or "").strip()
+    if db_filter and db_filter != "*":
+        return "filter", db_filter
+    db_name = str(odoo_conf.get("db_name") or "").strip()
+    if db_name and "," not in db_name:
+        return "name", db_name
+    return None, None
+
+
+def db_scope_matches(scope, datname):
+    """True if database 'datname' belongs to 'scope' (see resolve_instance_db_scope)."""
+    kind, value = scope
+    if kind == "filter":
+        try:
+            return re.match(value, datname) is not None
+        except re.error:
+            return False
+    if kind == "name":
+        return datname == value
+    return False
+
+
 def _validate_cron_dbfilter_isolation(config):
     """Odoo NO aplica 'dbfilter' al ejecutar cron (ir.cron) -- confirmado
     leyendo el codigo fuente real de Odoo 14.0/16.0/17.0/19.0. 'dbfilter'
@@ -115,7 +151,9 @@ def _validate_cron_dbfilter_isolation(config):
     Por eso, cuando >1 instancia comparte 'database' y el cron esta activo
     (max_cron_threads != 0), cada instancia del grupo DEBE tener:
       - un 'db_filter' especifico (no vacio, no '*', sin placeholders
-        %h/%d -- el cron no tiene un host de request que resolver), Y
+        %h/%d -- el cron no tiene un host de request que resolver) o, sin
+        db_filter, un 'db_name' con UNA sola base (ver
+        resolve_instance_db_scope), Y
       - credenciales propias ('db_user'/'db_password' a nivel de instancia,
         no heredadas del servicio de base de datos compartido) -- sin esto,
         el db_filter por si solo no aisla nada a nivel de Postgres.
@@ -138,15 +176,15 @@ def _validate_cron_dbfilter_isolation(config):
         for inst_name in inst_names:
             inst_conf = config["instances"][inst_name]
             odoo_conf = resolve_instance_config(inst_conf, config)
-            db_filter = odoo_conf.get("db_filter") or ""
             max_cron_threads = odoo_conf.get("max_cron_threads", 1)
 
             if max_cron_threads == 0:
                 continue  # escape hatch legitimo: sin cron, sin riesgo
 
-            if not db_filter or db_filter == "*":
+            kind, value = resolve_instance_db_scope(odoo_conf)
+            if kind is None:
                 filter_violations.append(inst_name)
-            elif "%h" in db_filter or "%d" in db_filter:
+            elif kind == "filter" and ("%h" in value or "%d" in value):
                 placeholder_violations.append(inst_name)
 
             if not inst_conf.get("db_user") or not inst_conf.get("db_password"):
@@ -187,7 +225,7 @@ def _validate_cron_dbfilter_isolation(config):
 
         if filter_violations:
             lines += [
-                "Sin 'db_filter' especifico:",
+                "Sin 'db_filter' especifico ni 'db_name' de una sola base:",
                 *(f"  - {n}" for n in filter_violations),
                 "",
             ]
@@ -238,8 +276,10 @@ def _validate_cron_dbfilter_isolation(config):
             "  - Agregar 'db_user'/'db_password' con un rol dedicado (distinto "
             "al de cualquier otra instancia del grupo y al rol compartido del "
             "servicio), y un 'db_filter' especifico en overwrite_odoo_config "
-            "(ej. '^integra\\-17\\.0'). Correr el aprovisionamiento del rol "
-            "antes de levantar la instancia con esas credenciales.",
+            "(ej. '^integra\\-17\\.0') -- o, si la instancia usa una sola base "
+            "fija, 'db_name' con esa base y sin db_filter. Correr el "
+            "aprovisionamiento del rol antes de levantar la instancia con esas "
+            "credenciales.",
             "  - O, si esta instancia NO debe correr cron (solo se usa para "
             "explorar otra base), poner 'max_cron_threads': 0 explicitamente "
             "en overwrite_odoo_config -- deja constancia de que es "
