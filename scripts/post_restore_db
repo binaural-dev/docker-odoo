@@ -16,8 +16,9 @@ activación de Sandbox Mode si el parámetro 'Environment' todavía indica
 producción):
 
   1. Repone los crons que `odoo_restore` pausó durante el `-u all` (su
-     `active` y `nextcall`, y los triggers pendientes), para que Sandbox
-     Mode vea el estado real de producción.
+     `active` y `nextcall`, y los triggers pendientes), en la misma
+     transacción que Sandbox Mode (paso 4): este necesita el estado real de
+     producción, y si falla el rollback deja todo pausado.
   2. Ajusta el parámetro de sistema 'Environment' (producción -> el entorno
      de pruebas).
   3. Ajusta los parámetros de sistema extra de la instancia, solo los que ya
@@ -77,6 +78,9 @@ MODULE_UPDATE_RETRY_DELAY_SECONDS = 20
 # nextcall, and the pending triggers it put aside
 PAUSED_CRONS_TABLE = "_restore_paused_crons"
 PAUSED_TRIGGERS_TABLE = "_restore_paused_cron_triggers"
+# Created by neutralize_fallback() when the post-restore can't finish
+PAUSED_MAIL_TABLE = "_restore_paused_mail_servers"
+PAUSED_FETCHMAIL_TABLE = "_restore_paused_fetchmail"
 
 
 def load_instance_settings(container):
@@ -159,11 +163,13 @@ def _build_shell_script(environment, system_params):
 import sys
 import time
 
-try:
-    # odoo_restore paused the crons during '-u all' (to keep cron workers
-    # off the half-upgraded database): put back each cron's active and
-    # nextcall, and the pending triggers, first, so Sandbox Mode below finds
-    # production's real cron state ('-u all' may have reactivated some)
+
+def resume_paused():
+    """Put back what odoo_restore (and a failed post-restore) set aside:
+    each cron's active and nextcall, the pending triggers, the outgoing mail
+    and fetchmail servers. Runs inside the same transaction as Sandbox Mode,
+    so the database is never left with production's crons or mail live."""
+    resumed = None
     env.cr.execute("SELECT to_regclass({PAUSED_CRONS_TABLE!r})")
     if env.cr.fetchone()[0]:
         env.cr.execute(
@@ -186,17 +192,25 @@ try:
             )
             resumed = env.cr.rowcount
         env.cr.execute("DROP TABLE {PAUSED_CRONS_TABLE}")
-        env.cr.execute("SELECT to_regclass({PAUSED_TRIGGERS_TABLE!r})")
+    env.cr.execute("SELECT to_regclass({PAUSED_TRIGGERS_TABLE!r})")
+    if env.cr.fetchone()[0]:
+        env.cr.execute(
+            "INSERT INTO ir_cron_trigger (cron_id, call_at) "
+            "SELECT t.cron_id, t.call_at FROM {PAUSED_TRIGGERS_TABLE} t "
+            "WHERE t.cron_id IN (SELECT id FROM ir_cron)"
+        )
+        env.cr.execute("DROP TABLE {PAUSED_TRIGGERS_TABLE}")
+    for table, model_table in (({PAUSED_MAIL_TABLE!r}, "ir_mail_server"), ({PAUSED_FETCHMAIL_TABLE!r}, "fetchmail_server")):
+        env.cr.execute("SELECT to_regclass(%s)", [table])
         if env.cr.fetchone()[0]:
             env.cr.execute(
-                "INSERT INTO ir_cron_trigger (cron_id, call_at) "
-                "SELECT t.cron_id, t.call_at FROM {PAUSED_TRIGGERS_TABLE} t "
-                "WHERE t.cron_id IN (SELECT id FROM ir_cron)"
+                "UPDATE %s SET active = true WHERE id IN (SELECT id FROM %s)" % (model_table, table)
             )
-            env.cr.execute("DROP TABLE {PAUSED_TRIGGERS_TABLE}")
-        env.cr.commit()
-        print("POST_RESTORE_STEP: crons reanudados -> %d" % resumed)
+            env.cr.execute("DROP TABLE %s" % table)
+    return resumed
 
+
+try:
     icp = env["ir.config_parameter"].sudo()
     icp.set_param({ENVIRONMENT_PARAM!r}, {environment!r})
     env.cr.commit()
@@ -212,6 +226,9 @@ try:
         print("POST_RESTORE_STEP: %s -> %s" % (key, value))
 
     if "sandbox_mode" not in env["res.config.settings"]._fields:
+        resumed = resume_paused()
+        env.cr.commit()
+        print("POST_RESTORE_STEP: crons reanudados -> %s" % resumed)
         print(
             "POST_RESTORE_SKIP_SANDBOX: database_neutralize_toggle no esta "
             "instalado en esta base"
@@ -222,11 +239,12 @@ try:
         last_exc = None
         for attempt in range(1, max_attempts + 1):
             try:
-                # El wizard (res.config.settings) se crea de nuevo en cada
-                # intento: un rollback() por un fallo previo (p.ej. el cron
-                # bloqueado) deshace también el create() anterior, así que
-                # reutilizar el mismo registro en el siguiente intento
-                # revienta con MissingError.
+                # Resume and Sandbox Mode in one transaction: Sandbox Mode
+                # needs production's real cron and mail state to save and
+                # turn it off, and if it fails the rollback leaves everything
+                # paused. The wizard is created again on every attempt (a
+                # rollback also undoes the previous create()).
+                resumed = resume_paused()
                 settings = env["res.config.settings"].create({{}})
                 settings.sandbox_mode = True
                 settings.execute()
@@ -246,6 +264,7 @@ try:
         if last_exc is not None:
             raise last_exc
 
+        print("POST_RESTORE_STEP: crons reanudados -> %s" % resumed)
         print("POST_RESTORE_STEP: sandbox_mode -> True")
         print("POST_RESTORE_SANDBOX_APPLIED")
 
@@ -255,6 +274,56 @@ except Exception as exc:
     print("POST_RESTORE_FAILED: %r" % (exc,), file=sys.stderr)
     sys.exit(1)
 '''
+
+
+# Pure SQL, run with psql inside the Odoo container (PGUSER/PGPASSWORD of the
+# instance's role): it must work when the registry can't even load, e.g.
+# after a '-u all' that didn't finish. Sets aside the outgoing mail and
+# fetchmail servers, and pauses the crons if odoo_restore didn't. Everything
+# goes to tables the next post_restore_db run puts back before Sandbox Mode.
+NEUTRALIZE_FALLBACK_SQL = f"""
+DO $$ BEGIN
+IF to_regclass('public.{PAUSED_MAIL_TABLE}') IS NULL THEN
+    CREATE TABLE public.{PAUSED_MAIL_TABLE} AS SELECT id FROM public.ir_mail_server WHERE active;
+    UPDATE public.ir_mail_server SET active = false WHERE active;
+END IF;
+IF to_regclass('public.fetchmail_server') IS NOT NULL
+        AND to_regclass('public.{PAUSED_FETCHMAIL_TABLE}') IS NULL THEN
+    CREATE TABLE public.{PAUSED_FETCHMAIL_TABLE} AS SELECT id FROM public.fetchmail_server WHERE active;
+    UPDATE public.fetchmail_server SET active = false WHERE active;
+END IF;
+IF to_regclass('public.{PAUSED_CRONS_TABLE}') IS NULL THEN
+    CREATE TABLE public.{PAUSED_CRONS_TABLE} AS SELECT id, active, nextcall FROM public.ir_cron;
+    UPDATE public.ir_cron SET active = false, nextcall = '9999-12-31';
+END IF;
+END $$;
+SELECT (SELECT count(*) FROM public.ir_mail_server WHERE active),
+       (SELECT count(*) FROM public.ir_cron WHERE active);
+"""
+
+
+def neutralize_fallback(container, db_name):
+    result = subprocess.run(
+        ["docker", "exec", container, "psql", "-d", db_name, "-v", "ON_ERROR_STOP=1",
+         "-tA", "-c", NEUTRALIZE_FALLBACK_SQL],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"ERROR: tampoco se pudo neutralizar '{db_name}' por SQL: "
+            f"{(result.stderr or result.stdout).strip()}. Desactivar a mano "
+            "ir_mail_server, fetchmail_server e ir_cron antes de usarla.",
+            file=sys.stderr,
+        )
+        return False
+    print(
+        f"AVISO: '{db_name}' quedó neutralizada por SQL (correo saliente, "
+        "fetchmail y crons apartados) porque el post-restore no terminó. "
+        "Corregir el problema y volver a ejecutar scripts/post_restore_db: "
+        "repone todo y activa Sandbox Mode.",
+        file=sys.stderr,
+    )
+    return True
 
 
 def run_post_restore(container, db_name, environment, system_params, odoo_bin="odoo", verbose=False):
@@ -288,7 +357,7 @@ def run_post_restore(container, db_name, environment, system_params, odoo_bin="o
             f"(contenedor {container}, environment={environment})",
             file=sys.stderr,
         )
-        sys.exit(1)
+        return None
 
     sys.stdout.flush()
     return "POST_RESTORE_SANDBOX_APPLIED" in result.stdout
@@ -362,8 +431,21 @@ def main():
     environment = args.environment or settings.get("environment") or DEFAULT_ENVIRONMENT
     system_params = {**(settings.get("system_params") or {}), **cli_params}
 
+    update_ok = True
     if not args.skip_module_update:
-        run_module_update(args.container, args.db_name, odoo_bin=args.odoo_bin)
+        update_ok = run_module_update(args.container, args.db_name, odoo_bin=args.odoo_bin)
+
+    if not update_ok:
+        # The schema is half upgraded: Sandbox Mode's wizard would fail
+        # anyway, and resuming the crons would leave production's crons and
+        # mail live on a database nobody neutralized
+        print(
+            f"ERROR: '{args.db_name}' no terminó el -u all: no se reanudan los "
+            "crons ni se activa Sandbox Mode.",
+            file=sys.stderr,
+        )
+        neutralize_fallback(args.container, args.db_name)
+        sys.exit(1)
 
     sandbox_applied = run_post_restore(
         container=args.container,
@@ -373,6 +455,9 @@ def main():
         odoo_bin=args.odoo_bin,
         verbose=args.verbose,
     )
+    if sandbox_applied is None:
+        neutralize_fallback(args.container, args.db_name)
+        sys.exit(1)
     run_regenerate_assets(args.container, args.db_name, odoo_bin=args.odoo_bin, verbose=args.verbose)
 
     sandbox_note = (

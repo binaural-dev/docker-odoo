@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 import zipfile
 import re
@@ -865,6 +867,99 @@ class FilestoreRestoreManager:
         )
 
 
+# With post-restore, the database is restored and prepared ('-u all',
+# Sandbox Mode, assets) under a work name and renamed to the requested one
+# only at the end. Anything that already knows the final name (a browser tab
+# left open on the previous copy, whose websocket reconnects every few
+# seconds) would otherwise load the registry while modules are 'to upgrade':
+# that worker runs the upgrade itself, fails, resets ir_module_module and
+# deadlocks the real update. The prefix also keeps it out of the usual
+# db_filter (^<prefix>_), so it isn't offered in the database selector.
+RESTORE_WORK_PREFIX = "restoring_"
+POSTGRES_MAX_NAME_BYTES = 63
+
+
+def restore_work_name(db_name):
+    name = f"{RESTORE_WORK_PREFIX}{db_name}"
+    if len(name.encode()) > POSTGRES_MAX_NAME_BYTES:
+        name = f"{RESTORE_WORK_PREFIX}{hashlib.sha1(db_name.encode()).hexdigest()[:16]}"
+    return name
+
+
+class DatabasePromoter:
+    """Renames the work database (and its filestore folder) to the final
+    name once the post-restore is done."""
+
+    RENAME_ATTEMPTS = 5
+    RENAME_RETRY_SECONDS = 3
+
+    def __init__(self, container, db_user, db_host, db_port, psql_bin, filestore_base_path):
+        self.container = container
+        self.db_user = db_user
+        self.db_host = db_host
+        self.db_port = db_port
+        self.psql_bin = psql_bin
+        self.filestore_base_path = filestore_base_path
+
+    def _psql(self, sql):
+        return subprocess.run(
+            [
+                "docker", "exec", self.container, self.psql_bin,
+                "-U", self.db_user, "-h", self.db_host, "-p", str(self.db_port),
+                "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-tAc", sql,
+            ],
+            capture_output=True, text=True,
+        )
+
+    def exists(self, db_name):
+        result = self._psql(f"SELECT 1 FROM pg_database WHERE datname = '{db_name}'")
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"No se pudo consultar si existe la base '{db_name}': "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
+        return result.stdout.strip() == "1"
+
+    def promote(self, work_name, final_name):
+        if self.exists(final_name):
+            raise RuntimeError(
+                f"La base '{final_name}' apareció durante el restore; la copia "
+                f"preparada quedó como '{work_name}'"
+            )
+        # The instance's cron worker keeps a pooled connection to every
+        # database of its role: close them (same role, no superuser needed)
+        # right before renaming, and retry if one comes back in between
+        sql = (
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname = '{work_name}' AND pid <> pg_backend_pid(); "
+            f'ALTER DATABASE "{work_name}" RENAME TO "{final_name}";'
+        )
+        for attempt in range(1, self.RENAME_ATTEMPTS + 1):
+            result = self._psql(sql)
+            if result.returncode == 0:
+                break
+            error = (result.stderr or result.stdout).strip()
+            if attempt == self.RENAME_ATTEMPTS:
+                raise RuntimeError(
+                    f"No se pudo renombrar '{work_name}' a '{final_name}': {error}"
+                )
+            time.sleep(self.RENAME_RETRY_SECONDS)
+
+        work_fs = f"{self.filestore_base_path}/{work_name}"
+        final_fs = f"{self.filestore_base_path}/{final_name}"
+        subprocess.run(
+            [
+                "docker", "exec", "-u", "root", self.container, "sh", "-c",
+                'if [ -d "$1" ]; then '
+                '[ -e "$2" ] && { echo "ya existe $2" >&2; exit 1; }; '
+                'mv "$1" "$2"; fi',
+                "_", work_fs, final_fs,
+            ],
+            check=True,
+        )
+        print(f"Base '{work_name}' renombrada a '{final_name}' (con su filestore).")
+
+
 class RestoreOrchestrator:
     def __init__(
         self,
@@ -887,9 +982,11 @@ class RestoreOrchestrator:
         cleanup_enabled=True,
         db_prefix=None,
         pause_crons=False,
+        use_work_name=False,
     ):
         self.zip_path = zip_path
         self.pause_crons = pause_crons
+        self.use_work_name = use_work_name
         self.container = container_name
         self.new_db_name = new_db_name
         self.db_prefix = db_prefix
@@ -920,8 +1017,15 @@ class RestoreOrchestrator:
             return f"{self.db_prefix}{self.new_db_name}"
         return self.new_db_name
 
+    @property
+    def restore_db_name(self):
+        """Name the database has while it is restored and prepared."""
+        if self.use_work_name:
+            return restore_work_name(self.effective_db_name)
+        return self.effective_db_name
+
     def run(self):
-        effective_db_name = self.effective_db_name
+        effective_db_name = self.restore_db_name
 
         print("\n=== Iniciando proceso de restore ===\n")
         print(
@@ -931,7 +1035,12 @@ class RestoreOrchestrator:
         )
         if self.db_prefix:
             print(f"- Prefijo de base de datos: {self.db_prefix}")
-            print(f"- Nombre efectivo de base de datos: {effective_db_name}\n")
+            print(f"- Nombre efectivo de base de datos: {self.effective_db_name}\n")
+        if self.use_work_name:
+            print(
+                f"- Se restaura y prepara como '{effective_db_name}'; al terminar "
+                f"el post-restore se renombra a '{self.effective_db_name}'\n"
+            )
 
         extractor = ZipExtractor(
             zip_path=self.zip_path,
@@ -983,6 +1092,7 @@ class RestoreOrchestrator:
             self.cleanup_manager.cleanup_local_path(local_filestore_path)
 
         print(f"\n✔ Restore completado correctamente para la base '{effective_db_name}'.\n")
+        return True
 
     def cleanup(self):
         print("\n=== Cleanup de temporales ===")
@@ -1134,6 +1244,13 @@ def main():
     db_service_name = inst_conf["database"]
     db_container = f"db-{db_service_name}"
 
+    filestore_base_path = "/home/odoo/data/filestore"
+    promoter = DatabasePromoter(
+        container=container_name, db_user=db_user, db_host=db_host,
+        db_port=db_port, psql_bin=psql_bin, filestore_base_path=filestore_base_path,
+    )
+    use_work_name = not args.skip_post_restore
+
     restorer = RestoreOrchestrator(
         zip_path=args.z,
         container_name=container_name,
@@ -1141,7 +1258,7 @@ def main():
         db_user=db_user,
         db_host=db_host,
         db_port=db_port,
-        container_filestore_base_path="/home/odoo/data/filestore",
+        container_filestore_base_path=filestore_base_path,
         linux_dump_user="dump_user",
         workdir_base=args.workdir,
         psql_bin=psql_bin,
@@ -1155,7 +1272,14 @@ def main():
         db_prefix=args.db_prefix,
         # post_restore_db turns them back on; without it they'd stay off
         pause_crons=not args.skip_post_restore,
+        use_work_name=use_work_name,
     )
+    if use_work_name:
+        for name in (restorer.effective_db_name, restorer.restore_db_name):
+            if promoter.exists(name):
+                raise RuntimeError(
+                    f"La base de datos '{name}' ya existe. No se puede sobrescribir."
+                )
     try:
         restorer.run()
     finally:
@@ -1167,10 +1291,13 @@ def main():
 
     run_post_restore(
         container_name=container_name,
-        db_name=restorer.effective_db_name,
+        db_name=restorer.restore_db_name,
         environment=args.environment,
         verbose=args.verbose,
     )
+    # Even if the post-restore failed: post_restore_db leaves the database
+    # neutralized in that case, and the requested name is where people look
+    promoter.promote(restorer.restore_db_name, restorer.effective_db_name)
 
 
 if __name__ == "__main__":
