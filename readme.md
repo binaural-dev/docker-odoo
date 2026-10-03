@@ -131,6 +131,8 @@ Cada instancia define su versión de Odoo, puerto externo, base de datos y confi
 }
 ```
 
+`dev_mode` (en `odoo_configs` o `overwrite_odoo_config`) es el valor de `--dev` con que arranca el contenedor; por defecto `"all"`. Con `false` arranca sin `--dev`: el modo desarrollo fuerza `workers=0` (un solo proceso) y su vigilante de archivos reinicia Odoo en cada cambio, así que en entornos de prueba compartidos (staging, QA) conviene desactivarlo.
+
 `db_filter` es el patrón de regex que Odoo usa en runtime para decidir qué bases de datos le pertenecen (ej. `^bananera_` matcheará `bananera_prod`, `bananera_staging`, etc.), y también lo respeta el CLI de gestión: `./odoo update -d all` para una instancia solo actualiza las bases que matchean su `db_filter`, no todas las del servicio de Postgres que comparte con otras instancias. Si una instancia no define `db_filter` (o es `"*"`), `-d all` sigue trayendo todas las bases del servicio, con una advertencia explícita en pantalla.
 
 ⚠️ **Importante**: `db_filter` solo rige el ruteo HTTP (selector de bases en `/web/database/manager`, sesión) y el `-d all` del CLI. **El cron interno de Odoo (`ir.cron`) nunca lo consulta** — es un mecanismo puramente de request web, confirmado leyendo el código fuente real de Odoo 14.0/16.0/17.0/19.0. Si dos instancias comparten un mismo servicio de Postgres, el cron de una puede terminar procesando (y modificando) datos de la base de la OTRA — esto ya pasó en producción una vez. Ver la sección siguiente para el aislamiento real.
