@@ -927,11 +927,15 @@ class DatabasePromoter:
                 f"preparada quedó como '{work_name}'"
             )
         # The instance's cron worker keeps a pooled connection to every
-        # database of its role: close them (same role, no superuser needed)
-        # right before renaming, and retry if one comes back in between
+        # database of its role: close them right before renaming, and retry
+        # if one comes back in between. Only the role's own sessions (no
+        # superuser needed): after loading a large dump autovacuum works on
+        # the database, and terminating it is not allowed, but RENAME stops
+        # autovacuum workers by itself
         sql = (
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = '{work_name}' AND pid <> pg_backend_pid(); "
+            f"WHERE datname = '{work_name}' AND usename = current_user "
+            "AND pid <> pg_backend_pid(); "
             f'ALTER DATABASE "{work_name}" RENAME TO "{final_name}";'
         )
         for attempt in range(1, self.RENAME_ATTEMPTS + 1):

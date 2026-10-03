@@ -72,6 +72,8 @@ REGENERATE_ASSETS_SCRIPT = os.path.join(BASE_PATH, "scripts", "odoo-regenerate-a
 # Postgres aborta una de las dos transacciones con "deadlock detected" sobre
 # `ir_module_module`. Es una condición de carrera real contra el propio
 # servidor, no un fallo aislado, así que se reintenta con backoff.
+# Same path odoo_restore and odoo_restore_scp use inside the container
+FILESTORE_BASE_PATH = "/home/odoo/data/filestore"
 MODULE_UPDATE_RETRY_ATTEMPTS = 4
 MODULE_UPDATE_RETRY_DELAY_SECONDS = 20
 # Created by odoo_restore (pause_crons_sql) with each cron's active and
@@ -156,6 +158,25 @@ def run_module_update(container, db_name, odoo_bin="odoo"):
         flush=True,
     )
     return False
+
+
+def fix_filestore_owner(container, db_name):
+    """'-u all' runs as root and leaves root-owned folders in the filestore
+    (checklist/, new attachments). The Odoo server and shell run as odoo:
+    Odoo silences the makedirs error and then fails writing the file
+    (FileNotFoundError deleting attachments, e.g. regenerating assets)."""
+    path = f"{FILESTORE_BASE_PATH}/{db_name}"
+    result = subprocess.run(
+        ["docker", "exec", "-u", "root", container, "sh", "-c",
+         '[ ! -d "$1" ] || chown -R odoo:odoo "$1"', "_", path],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"AVISO: no se pudo devolver {path} a odoo:odoo: "
+            f"{(result.stderr or result.stdout).strip()}",
+            file=sys.stderr,
+        )
 
 
 def _build_shell_script(environment, system_params):
@@ -434,6 +455,7 @@ def main():
     update_ok = True
     if not args.skip_module_update:
         update_ok = run_module_update(args.container, args.db_name, odoo_bin=args.odoo_bin)
+        fix_filestore_owner(args.container, args.db_name)
 
     if not update_ok:
         # The schema is half upgraded: Sandbox Mode's wizard would fail
