@@ -690,40 +690,52 @@ class DatabaseRestoreManager:
             check=True,
         )
 
-    # Table (inside the restored database) with the crons pause_crons() turned
-    # off; post_restore_db turns exactly those back on after '-u all'
+    # Tables (inside the restored database) with what the cron pause changed;
+    # post_restore_db puts it back after '-u all'
     PAUSED_CRONS_TABLE = "_restore_paused_crons"
+    PAUSED_TRIGGERS_TABLE = "_restore_paused_cron_triggers"
 
-    def pause_crons(self):
-        """Turn off the restored database's crons until post_restore_db ran
-        '-u all' on it. The dump brings production's crons active and overdue:
-        as soon as the database exists, the instance's cron worker (and, without
-        per-instance Postgres roles, every other instance's on the same
-        service) tries to load it half-upgraded, fails, and resets
-        ir_module_module under the update ("deadlock detected"). A cron worker
-        with no active job never loads the database."""
-        table = self.PAUSED_CRONS_TABLE
-        sql = (
-            f"CREATE TABLE IF NOT EXISTS {table} AS SELECT id FROM ir_cron WHERE active; "
-            f"UPDATE ir_cron SET active = false WHERE id IN (SELECT id FROM {table}); "
-            f"SELECT count(*) FROM {table};"
+    @classmethod
+    def pause_crons_sql(cls):
+        """SQL that keeps the cron workers off the restored database until
+        post_restore_db ran '-u all' on it. The dump brings production's
+        crons overdue by days: a cron worker that finds a ready job on a
+        database with modules 'to upgrade' and the job late by more than
+        5 hours takes the states for leftovers of a failed upgrade and
+        resets ir_module_module under the running update ("deadlock
+        detected", "Transient module states were reset").
+
+        Every cron (also the inactive ones: '-u all' reactivates crons from
+        their XML) gets its nextcall moved far away, and the pending
+        triggers are put aside, so no job is ever ready. Deactivating alone
+        is not enough for that reason.
+
+        It runs in the same transaction as the dump (restore_dump), so the
+        database is never visible with its crons live. The dump empties
+        search_path: everything is schema-qualified."""
+        crons, triggers = cls.PAUSED_CRONS_TABLE, cls.PAUSED_TRIGGERS_TABLE
+        return (
+            f"CREATE TABLE public.{crons} AS SELECT id, active, nextcall FROM public.ir_cron; "
+            f"UPDATE public.ir_cron SET active = false, nextcall = '9999-12-31'; "
+            # ir_cron_trigger exists from Odoo 15 on
+            "DO $$ BEGIN "
+            "IF to_regclass('public.ir_cron_trigger') IS NOT NULL THEN "
+            f"CREATE TABLE public.{triggers} AS SELECT * FROM public.ir_cron_trigger; "
+            "DELETE FROM public.ir_cron_trigger; "
+            "END IF; END $$;"
         )
+
+    def paused_crons_count(self):
         result = subprocess.run(
-            self._psql_command("-d", self.db_name, "-v", "ON_ERROR_STOP=1", "-tA", "-c", sql),
+            self._psql_command(
+                "-d", self.db_name, "-tA", "-c",
+                f"SELECT count(*) FILTER (WHERE active) FROM {self.PAUSED_CRONS_TABLE}",
+            ),
             capture_output=True, text=True,
         )
-        if result.returncode != 0:
-            # Not fatal: without it the update still runs (with retries)
-            print(
-                f"AVISO: no se pudieron pausar los crons de '{self.db_name}': "
-                f"{(result.stderr or result.stdout).strip()}",
-                file=sys.stderr,
-            )
-            return
-        paused = (result.stdout.strip().splitlines() or ["?"])[-1]
-        print(f"Crons pausados hasta el post-restore: {paused}")
+        return result.stdout.strip() if result.returncode == 0 else "?"
 
-    def restore_dump(self):
+    def restore_dump(self, pause_crons=False):
         print(f"Iniciando restore de dump.sql en la base '{self.db_name}'")
 
         self._copy_dump_to_container()
@@ -755,6 +767,11 @@ class DatabaseRestoreManager:
 
             if not self.verbose:
                 cmd.insert(-2, "-q")
+            if pause_crons:
+                # Dump and pause in one transaction: cron workers never see
+                # the database half loaded nor with its crons live
+                cmd[-2:-2] = ["-1"]
+                cmd += ["-c", self.pause_crons_sql()]
 
             try:
                 if self.verbose:
@@ -943,10 +960,9 @@ class RestoreOrchestrator:
 
         db_manager.validate_dump_compatibility()
         db_manager.create_database()
-        db_manager.restore_dump()
+        db_manager.restore_dump(pause_crons=self.pause_crons)
         if self.pause_crons:
-            # Right away: from here on the database is visible to cron workers
-            db_manager.pause_crons()
+            print(f"Crons pausados hasta el post-restore: {db_manager.paused_crons_count()} activos")
         self.cleanup_manager.cleanup_local_path(local_dump_path)
         self.cleanup_manager.cleanup_container_path(self.workspace.container_restore_dir)
 

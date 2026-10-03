@@ -15,8 +15,9 @@ Pasos, en este orden (obligatorio: `database_neutralize_toggle` bloquea la
 activación de Sandbox Mode si el parámetro 'Environment' todavía indica
 producción):
 
-  1. Reactiva los crons que `odoo_restore` pausó durante el `-u all`, para
-     que Sandbox Mode vea el estado real de producción.
+  1. Repone los crons que `odoo_restore` pausó durante el `-u all` (su
+     `active` y `nextcall`, y los triggers pendientes), para que Sandbox
+     Mode vea el estado real de producción.
   2. Ajusta el parámetro de sistema 'Environment' (producción -> el entorno
      de pruebas).
   3. Ajusta los parámetros de sistema extra de la instancia, solo los que ya
@@ -72,8 +73,10 @@ REGENERATE_ASSETS_SCRIPT = os.path.join(BASE_PATH, "scripts", "odoo-regenerate-a
 # servidor, no un fallo aislado, así que se reintenta con backoff.
 MODULE_UPDATE_RETRY_ATTEMPTS = 4
 MODULE_UPDATE_RETRY_DELAY_SECONDS = 20
-# Created by odoo_restore (pause_crons) with the crons it turned off
+# Created by odoo_restore (pause_crons_sql) with each cron's active and
+# nextcall, and the pending triggers it put aside
 PAUSED_CRONS_TABLE = "_restore_paused_crons"
+PAUSED_TRIGGERS_TABLE = "_restore_paused_cron_triggers"
 
 
 def load_instance_settings(container):
@@ -158,15 +161,39 @@ import time
 
 try:
     # odoo_restore paused the crons during '-u all' (to keep cron workers
-    # off the half-upgraded database): turn exactly those back on first, so
-    # Sandbox Mode below finds production's real cron state
+    # off the half-upgraded database): put back each cron's active and
+    # nextcall, and the pending triggers, first, so Sandbox Mode below finds
+    # production's real cron state ('-u all' may have reactivated some)
     env.cr.execute("SELECT to_regclass({PAUSED_CRONS_TABLE!r})")
     if env.cr.fetchone()[0]:
         env.cr.execute(
-            "UPDATE ir_cron SET active = true WHERE id IN (SELECT id FROM {PAUSED_CRONS_TABLE})"
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = {PAUSED_CRONS_TABLE!r} AND column_name = 'nextcall'"
         )
-        resumed = env.cr.rowcount
+        if env.cr.fetchone():
+            env.cr.execute(
+                "UPDATE ir_cron c SET active = p.active, nextcall = p.nextcall "
+                "FROM {PAUSED_CRONS_TABLE} p WHERE c.id = p.id"
+            )
+            env.cr.execute(
+                "SELECT count(*) FROM {PAUSED_CRONS_TABLE} p JOIN ir_cron c ON c.id = p.id WHERE p.active"
+            )
+            resumed = env.cr.fetchone()[0]
+        else:
+            # Paused by an older odoo_restore: only the active crons, by id
+            env.cr.execute(
+                "UPDATE ir_cron SET active = true WHERE id IN (SELECT id FROM {PAUSED_CRONS_TABLE})"
+            )
+            resumed = env.cr.rowcount
         env.cr.execute("DROP TABLE {PAUSED_CRONS_TABLE}")
+        env.cr.execute("SELECT to_regclass({PAUSED_TRIGGERS_TABLE!r})")
+        if env.cr.fetchone()[0]:
+            env.cr.execute(
+                "INSERT INTO ir_cron_trigger (cron_id, call_at) "
+                "SELECT t.cron_id, t.call_at FROM {PAUSED_TRIGGERS_TABLE} t "
+                "WHERE t.cron_id IN (SELECT id FROM ir_cron)"
+            )
+            env.cr.execute("DROP TABLE {PAUSED_TRIGGERS_TABLE}")
         env.cr.commit()
         print("POST_RESTORE_STEP: crons reanudados -> %d" % resumed)
 
