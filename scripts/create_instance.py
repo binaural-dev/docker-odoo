@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import json
+import re
+import secrets
+import string
 import sys
 import os
 import subprocess
@@ -20,6 +23,66 @@ def get_used_ports(data):
 
 def get_suggested_port(used_ports):
     return max(used_ports) + 1 if used_ports else 8069
+
+
+def shares_database_service(data, database_name):
+    """True if any other instance (enabled or not) already uses this Postgres
+    service. Disabled siblings count too: once re-enabled they put the new
+    instance in a shared group, and config_loader's
+    _validate_cron_dbfilter_isolation then refuses to load the whole config."""
+    return any(
+        inst.get("database") == database_name
+        for inst in data.get("instances", {}).values()
+    )
+
+
+def dedicated_role_name(name):
+    """Postgres role for the instance. provision-role interpolates it into SQL
+    unquoted, so it must be a plain identifier: lowercase alnum + underscores."""
+    return "app_" + re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def generate_db_password(length=24):
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
+
+
+def build_instance_entry(
+    data, name, odoo_version, port, database_name, odoo_config, addons_list
+):
+    """Build the instances.json entry. When the Postgres service is shared,
+    adds the dedicated role (db_user/db_password) and a specific db_filter,
+    which the config validator requires for every cron-enabled instance in a
+    shared group (ir.cron ignores dbfilter, so only a per-instance role
+    actually isolates its databases)."""
+    overwrite = {"addons": addons_list}
+    entry = {
+        "enabled": True,
+        "odoo_version": odoo_version,
+        "external_port": port,
+        "database": database_name,
+        "odoo_config": odoo_config,
+        "overwrite_odoo_config": overwrite,
+    }
+
+    if shares_database_service(data, database_name):
+        role = dedicated_role_name(name)
+        taken = {
+            inst.get("db_user")
+            for inst in data.get("instances", {}).values()
+            if inst.get("database") == database_name
+        }
+        taken.add(data.get("databases", {}).get(database_name, {}).get("user"))
+        if role in taken:
+            raise ValueError(
+                f"El rol '{role}' ya lo usa otra instancia o el servicio "
+                f"'{database_name}'. Elegí otro nombre de instancia."
+            )
+        overwrite["db_filter"] = f"^{re.escape(name)}"
+        entry["db_user"] = role
+        entry["db_password"] = generate_db_password()
+
+    return entry
 
 
 def interactive_menu(prompt_text, options_list):
@@ -249,14 +312,15 @@ def create_instance(name, repo_url, branch, odoo_version):
     if "instances" not in data:
         data["instances"] = {}
 
-    data["instances"][name] = {
-        "enabled": True,
-        "odoo_version": odoo_version,
-        "external_port": next_port,
-        "database": database_name,
-        "odoo_config": odoo_config,
-        "overwrite_odoo_config": {"addons": addons_list},
-    }
+    try:
+        entry = build_instance_entry(
+            data, name, odoo_version, next_port, database_name, odoo_config, addons_list
+        )
+    except ValueError as e:
+        print(f"❌ Error: {e}")
+        sys.exit(1)
+    data["instances"][name] = entry
+    needs_role = "db_user" in entry
 
     with open(INSTANCES_FILE, "w") as f:
         json.dump(data, f, indent=2)
@@ -264,14 +328,36 @@ def create_instance(name, repo_url, branch, odoo_version):
     print(
         f"\n✅ Instancia '{name}' creada exitosamente en instances.json con el puerto {next_port}!"
     )
+    if needs_role:
+        print(
+            f"🔐 El servicio '{database_name}' es compartido: se asignó el rol dedicado "
+            f"'{entry['db_user']}' y db_filter '{entry['overwrite_odoo_config']['db_filter']}'."
+        )
 
-    print("\n🚀 Aplicando cambios automáticamente (stop -> build -> start)...")
+    steps = "stop -> build -> provision-role -> start" if needs_role else "stop -> build -> start"
+    print(f"\n🚀 Aplicando cambios automáticamente ({steps})...")
     try:
         print(f"\n>> Ejecutando: ./odoo stop {name}")
         subprocess.run(["./odoo", "stop", name], cwd=BASE_PATH, check=True)
 
         print("\n>> Ejecutando: ./odoo build")
         subprocess.run(["./odoo", "build"], cwd=BASE_PATH, check=True)
+
+        if needs_role:
+            # Not check=True: provision-role asks for confirmation (it may
+            # restart the whole shared Postgres service) and the operator can
+            # legitimately postpone it. The instance still starts, it just
+            # can't reach Postgres until the role exists.
+            print(f"\n>> Ejecutando: ./odoo provision-role {name}")
+            result = subprocess.run(
+                ["./odoo", "provision-role", name], cwd=BASE_PATH
+            )
+            if result.returncode != 0:
+                print(
+                    f"\n⚠️  provision-role falló. Hasta correr "
+                    f"'./odoo provision-role {name}' la instancia no podrá "
+                    f"conectarse a Postgres."
+                )
 
         print(f"\n>> Ejecutando: ./odoo start {name}")
         subprocess.run(["./odoo", "start", name], cwd=BASE_PATH, check=True)
