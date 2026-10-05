@@ -111,9 +111,19 @@ def build_odoo(
     # 4. Build images
     runner.info("\n=== Construyendo imágenes Docker ===\n")
     if no_cache:
-        _docker_compose(runner, "build", "--no-cache")
+        returncode = _docker_compose(runner, "build", "--no-cache")
     else:
-        _docker_compose(runner, "build")
+        returncode = _docker_compose(runner, "build")
+
+    # compose builds in parallel and cancels the rest when one image fails:
+    # without this the output ended in "Build completado" anyway, and the
+    # agent (micro_saas) reported the build as successful
+    if returncode != 0:
+        runner.error(
+            f"\n❌ Build fallido: 'docker compose build' terminó con código {returncode}. "
+            f"Revisa el primer 'failed to solve' de arriba.\n"
+        )
+        sys.exit(returncode)
 
     runner.info("\n✅ Build completado.\n")
 

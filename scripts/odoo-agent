@@ -1,0 +1,172 @@
+#!/usr/bin/env bash
+#
+# Gestiona el agente HTTP de docker-odoo (API para micro_saas), que viaja
+# dentro de este repo en .resources/docker-odoo-agent. Mientras no se
+# instale, el código está ahí pero no corre nada.
+#
+#   ./odoo agent                    activa el agente si está apagado, o lo apaga si está activo
+#   ./odoo agent install [flags]    instala o actualiza el agente (flags de install.sh, ver --help)
+#   ./odoo agent on | off           activa / desactiva el servicio (y su arranque automático)
+#   ./odoo agent status             estado del servicio y de la API
+#   ./odoo agent token <create|list|revoke> ...   gestiona los tokens de acceso
+#   ./odoo agent logs               últimas líneas del log del servicio
+#
+set -euo pipefail
+
+BASE_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+AGENT_ROOT="$BASE_PATH/.resources/docker-odoo-agent"
+VENV_PY="$AGENT_ROOT/.venv/bin/python"
+ENV_FILE="$AGENT_ROOT/var/agent.env"
+SERVICE_NAME="docker-odoo-agent"
+SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
+LAUNCHD_LABEL="com.binaural.$SERVICE_NAME"
+PLIST_FILE="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+MAC_LOG="$HOME/Library/Logs/$SERVICE_NAME.log"
+DOMAIN="gui/$(id -u)"
+
+die() { echo "Error: $*" >&2; exit 1; }
+
+[[ -f "$AGENT_ROOT/install.sh" ]] || die "No está el agente en $AGENT_ROOT"
+
+OS="$(uname -s)"
+if [[ "$OS" == "Darwin" ]]; then
+    MANAGER="launchd"
+elif [[ "$OS" == "Linux" ]] && command -v systemctl >/dev/null && [[ -d /run/systemd/system ]]; then
+    MANAGER="systemd"
+else
+    MANAGER=""
+fi
+
+port() {
+    local p=""
+    [[ -f "$ENV_FILE" ]] && p="$(sed -n 's/^AGENT_PORT=//p' "$ENV_FILE" | tail -1)"
+    echo "${p:-9000}"
+}
+
+healthy() { curl -sf "http://127.0.0.1:$(port)/health" >/dev/null 2>&1; }
+
+wait_healthy() {
+    for _ in $(seq 1 15); do healthy && return 0; sleep 1; done
+    return 1
+}
+
+# The service file of the installed agent; empty when it isn't installed
+service_file() {
+    case "$MANAGER" in
+        systemd) [[ -f "$SERVICE_FILE" ]] && echo "$SERVICE_FILE" ;;
+        launchd) [[ -f "$PLIST_FILE" ]] && echo "$PLIST_FILE" ;;
+    esac
+    return 0
+}
+
+is_running() {
+    case "$MANAGER" in
+        systemd) systemctl is-active -q "$SERVICE_NAME" 2>/dev/null ;;
+        launchd) launchctl print "$DOMAIN/$LAUNCHD_LABEL" 2>/dev/null | grep -q "state = running" ;;
+        *) return 1 ;;
+    esac
+}
+
+require_installed() {
+    [[ -n "$MANAGER" ]] || die "Este sistema ($OS) no tiene systemd ni launchd: levanta el agente a mano con
+    cd $AGENT_ROOT && .venv/bin/python -m agent serve"
+    local file
+    file="$(service_file)"
+    [[ -n "$file" ]] || die "El agente no está instalado. Instálalo con: ./odoo agent install"
+    # Both installs share the service name: warn if it runs another checkout
+    if ! grep -q "$AGENT_ROOT" "$file"; then
+        echo "Aviso: el servicio instalado ($file) apunta a otra copia del agente."
+        echo "       Para usar la de este repo ejecuta: ./odoo agent install"
+    fi
+}
+
+SUDO=""
+[[ $EUID -ne 0 ]] && SUDO="sudo"
+
+agent_on() {
+    require_installed
+    if is_running; then echo "El agente ya está activo."; return 0; fi
+    echo "Activando el agente..."
+    case "$MANAGER" in
+        systemd) $SUDO systemctl enable --now "$SERVICE_NAME" ;;
+        launchd)
+            launchctl enable "$DOMAIN/$LAUNCHD_LABEL"
+            if launchctl print "$DOMAIN/$LAUNCHD_LABEL" >/dev/null 2>&1; then
+                launchctl kickstart "$DOMAIN/$LAUNCHD_LABEL"
+            else
+                launchctl bootstrap "$DOMAIN" "$PLIST_FILE"
+            fi
+            ;;
+    esac
+    if wait_healthy; then
+        echo "Agente activo en http://127.0.0.1:$(port)"
+    else
+        die "El servicio arrancó pero no responde en el puerto $(port). Revisa: ./odoo agent logs"
+    fi
+}
+
+agent_off() {
+    require_installed
+    if ! is_running; then echo "El agente ya está desactivado."; return 0; fi
+    echo "Desactivando el agente..."
+    case "$MANAGER" in
+        systemd) $SUDO systemctl disable --now "$SERVICE_NAME" ;;
+        launchd)
+            # disable keeps it from coming back at the next login (RunAtLoad)
+            launchctl disable "$DOMAIN/$LAUNCHD_LABEL"
+            launchctl bootout "$DOMAIN/$LAUNCHD_LABEL" 2>/dev/null || true
+            ;;
+    esac
+    echo "Agente desactivado (no arranca con el sistema hasta './odoo agent on')."
+}
+
+agent_status() {
+    local file
+    file="$(service_file)"
+    echo "Agente:   $AGENT_ROOT"
+    if [[ -z "$MANAGER" ]]; then
+        echo "Servicio: no disponible en $OS (sin systemd ni launchd)"
+    elif [[ -z "$file" ]]; then
+        echo "Servicio: no instalado (./odoo agent install)"
+    elif is_running; then
+        echo "Servicio: activo ($file)"
+    else
+        echo "Servicio: desactivado ($file)"
+    fi
+    if healthy; then
+        echo "API:      responde en http://127.0.0.1:$(port)/health"
+    else
+        echo "API:      no responde en el puerto $(port)"
+    fi
+}
+
+agent_logs() {
+    case "$MANAGER" in
+        systemd) journalctl -u "$SERVICE_NAME" -n "${1:-50}" --no-pager ;;
+        launchd) [[ -f "$MAC_LOG" ]] && tail -n "${1:-50}" "$MAC_LOG" || echo "Sin log en $MAC_LOG" ;;
+        *) die "Sin gestor de servicios en $OS" ;;
+    esac
+}
+
+action="${1:-toggle}"
+[[ $# -gt 0 ]] && shift
+
+case "$action" in
+    toggle)
+        if [[ -n "$MANAGER" && -z "$(service_file)" ]]; then
+            die "El agente no está instalado. Instálalo con: ./odoo agent install"
+        fi
+        if is_running; then agent_off; else agent_on; fi
+        ;;
+    install) exec "$AGENT_ROOT/install.sh" "$@" ;;
+    on) agent_on ;;
+    off) agent_off ;;
+    status) agent_status ;;
+    logs) agent_logs "$@" ;;
+    token)
+        [[ -x "$VENV_PY" ]] || die "El agente no está instalado. Instálalo con: ./odoo agent install"
+        cd "$AGENT_ROOT" && exec "$VENV_PY" -m agent token "$@"
+        ;;
+    -h|--help|help) sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) die "Subcomando desconocido: $action (usa ./odoo agent --help)" ;;
+esac

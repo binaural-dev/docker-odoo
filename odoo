@@ -85,7 +85,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  Cobertura de tests  coverage-status, coverage\n"
             "  Postgres / roles    provision-role, psql remove, restore\n"
             "  Config / infra      new, hosts, enable, disable, "
-            "validate-instances, tui, apk\n"
+            "validate-instances, tui, apk, agent\n"
             "\n"
             "Ejemplos:\n"
             "  ./odoo start contiflex               levanta sólo esa instancia\n"
@@ -669,6 +669,15 @@ def _build_parser() -> argparse.ArgumentParser:
              "(ver ./odoo restore --help para el resto de flags)",
     )
 
+    # agent: passthrough directo a scripts/odoo-agent antes de argparse
+    # (en main()). El subparser solo queda para listar el comando en el help.
+    subparsers.add_parser(
+        "agent",
+        help="Agente HTTP para micro_saas (.resources/docker-odoo-agent). "
+             "Uso: ./odoo agent install | ./odoo agent (activa/desactiva) | "
+             "./odoo agent status|on|off|token|logs",
+    )
+
     # new
     p = subparsers.add_parser(
         "new",
@@ -718,6 +727,13 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "restore":
         return subprocess.run(
             [os.path.join(BASE_PATH, "scripts", "odoo_restore"), *sys.argv[1:]]
+        ).returncode
+
+    # agent: idem — scripts/odoo-agent gestiona el agente HTTP de
+    # .resources/docker-odoo-agent y le pasa sus flags tal cual a install.sh.
+    if len(sys.argv) > 1 and sys.argv[1] == "agent":
+        return subprocess.run(
+            [os.path.join(BASE_PATH, "scripts", "odoo-agent"), *sys.argv[2:]]
         ).returncode
 
     parser = _build_parser()
