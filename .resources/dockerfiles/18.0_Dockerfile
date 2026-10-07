@@ -1,5 +1,5 @@
 FROM ubuntu:jammy
-ENV LANG C.UTF-8
+ENV LANG=C.UTF-8
 USER root
 
 # Enable Odoo user and filestore
@@ -47,7 +47,8 @@ RUN ARCH="$(dpkg --print-architecture)"; \
 
 # Install Node.js 20
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y nodejs
+    && apt-get install -y nodejs \
+    && command -v npm || apt-get install -y npm
 
 # RUN npm install
 RUN npm install --force -g rtlcss@3.4.0 es-check@6.0.0 eslint@8.1.0 prettier@2.7.1 eslint-config-prettier@8.5.0 eslint-plugin-prettier@4.2.1
@@ -99,5 +100,6 @@ RUN ARCH=$(dpkg --print-architecture) && \
 RUN python3 -m pip install --target /usr/lib/python3/dist-packages --upgrade typing_extensions
 RUN python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==0.4.7 pandas coverage setuptools wheel
 
+ARG USERNAME=odoo
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/18.0/requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt

@@ -1,0 +1,300 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Limpieza de archivos legacy del template `integra` ──────────────────────
+# Detecta (audit) y opcionalmente elimina vía PR (apply) los archivos de
+# bootstrap heredados del template `integra` — Dockerfile, workflows de CI,
+# scripts de test/README, docs — que el propio template ya eliminó en su
+# limpieza de referencia (commit 5c2ee0a6, 2026-03-24) al migrar a
+# .pre-commit-config.yaml + submódulos (integra-addons, third-party-addons,
+# odoo-venezuela).
+#
+# Recorre src/custom/*/ (repos independientes, cada uno con su propio
+# remoto). Por cada repo:
+#   audit: reporta cuántos de los 34 archivos legacy siguen presentes en la
+#          rama indicada, sin tocar nada.
+#   apply: por cada repo con >=1 archivo legacy, crea una rama aislada
+#          (git worktree), elimina los archivos presentes, commitea, pushea
+#          y abre un PR contra esa rama con `gh`.
+#
+# Uso:
+#   cleanup-legacy-template-files audit <branch> [repo...]
+#   cleanup-legacy-template-files apply <branch> [repo...]
+#
+#   branch:   rama a auditar/limpiar (ej. staging, release, 19.0)
+#   repo...:  nombres de repos dentro de src/custom/ (default: todos)
+#
+# Opciones:
+#   --exclude repo1,repo2   repos a saltar aunque tengan archivos legacy
+#   --ticket ID             ID de ticket/tarea para el commit/PR (default: none)
+#   --org NAME              organización de GitHub (default: binaural-dev)
+#   --dry-run               en modo apply, arma todo pero no pushea ni abre PR
+#
+# Ejemplos:
+#   ./scripts/cleanup-legacy-template-files audit staging
+#   ./scripts/cleanup-legacy-template-files apply staging aromacom gno
+#   ./scripts/cleanup-legacy-template-files apply release --exclude donarca,farmacia-xana
+#
+# Requiere: git, gh (autenticado con permisos de push sobre los repos objetivo).
+#
+# Nota de seguridad (aprendida en integra): si el repo objetivo tiene un
+# ruleset de GitHub que bloquea "creation" de ramas (repo template maestro,
+# no los repos de custom/), este script va a fallar el push con GH013 y NO
+# hace fallback automático a fork — se detiene y reporta el error para que
+# se resuelva a mano (ver si corresponde bypass de un Org Admin o un PR
+# cross-fork intencional).
+
+BASE_PATH="$(cd "$(dirname "$0")/.." && pwd)"
+CUSTOM_DIR="$BASE_PATH/src/custom"
+
+ORG="binaural-dev"
+TICKET="none"
+DRY_RUN="false"
+EXCLUDE=()
+
+LEGACY_FILES=(
+  ".devcontainer/devcontainer.json"
+  ".env_example"
+  ".github/workflows/ci-build.yml"
+  ".github/workflows/ci_delete_old_branch.yml"
+  ".github/workflows/dummy.yml"
+  ".github/workflows/generate_readme.yml"
+  ".github/workflows/pull_request_forks.yml"
+  ".github/workflows/pylint.yml"
+  ".github/workflows/tag.yml"
+  ".mergify.yml"
+  "Dockerfile"
+  "Dockerfile.test"
+  "config/odoo.conf"
+  "doc/code-standard.md"
+  "doc/getting-started.md"
+  "doc/git-standard.md"
+  "doc/readme.md"
+  "docker-compose_example.yml"
+  "entrypoint.sh"
+  "scripts/dummy.py"
+  "scripts/gen_addon_readme.py"
+  "scripts/gen_addon_readme.rst.jinja"
+  "scripts/odoo-pw"
+  "scripts/odoo-update"
+  "scripts/requirements.txt"
+  "scripts/utils/_hash.py"
+  "scripts/utils/gitutils.py"
+  "scripts/utils/manifest.py"
+  "test/run.sh"
+  "test/run_coverage.sh"
+  "test/run_odoo_tests.sh"
+  "test/run_pytest.sh"
+  "wait-for-psql.py"
+  "commit_template.txt"
+)
+
+usage() {
+  sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+  exit 1
+}
+
+[ $# -lt 2 ] && usage
+MODE="$1"; shift
+BRANCH="$1"; shift
+
+REPOS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --exclude)
+      IFS=',' read -r -a EXCLUDE <<< "$2"
+      shift 2
+      ;;
+    --ticket)
+      TICKET="$2"
+      shift 2
+      ;;
+    --org)
+      ORG="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN="true"
+      shift
+      ;;
+    --help|-h)
+      usage
+      ;;
+    *)
+      REPOS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+case "$MODE" in
+  audit|apply) ;;
+  *) echo "Modo invalido: $MODE (usar 'audit' o 'apply')" >&2; usage ;;
+esac
+
+if [ ${#REPOS[@]} -eq 0 ]; then
+  while IFS= read -r d; do
+    REPOS+=("$(basename "$d")")
+  done < <(find "$CUSTOM_DIR" -mindepth 1 -maxdepth 1 -type d | sort)
+fi
+
+is_excluded() {
+  local repo="$1"
+  for e in "${EXCLUDE[@]:-}"; do
+    [ "$repo" = "$e" ] && return 0
+  done
+  return 1
+}
+
+case "$BRANCH" in
+  staging) ORIGEN="stg" ;;
+  release) ORIGEN="rls" ;;
+  *) ORIGEN="$(echo "$BRANCH" | tr '.' '-' | tr -cd 'a-zA-Z0-9-')" ;;
+esac
+
+WORK_ROOT="$(mktemp -d /tmp/cleanup-legacy-template.XXXXXX)"
+RESULTS="$WORK_ROOT/results.tsv"
+: > "$RESULTS"
+trap 'rm -rf "$WORK_ROOT"' EXIT
+
+echo "== modo: $MODE | rama: $BRANCH | repos: ${#REPOS[@]} | org: $ORG =="
+
+audit_one() {
+  local repo="$1" dir="$CUSTOM_DIR/$1"
+  [ -d "$dir" ] || { echo -e "${repo}\tNO_DIR\t-" >> "$RESULTS"; return; }
+
+  git -C "$dir" fetch origin "$BRANCH" --quiet 2>/dev/null || true
+  if ! git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+    echo -e "${repo}\tNO_BRANCH\t-" >> "$RESULTS"
+    return
+  fi
+
+  local present=()
+  for f in "${LEGACY_FILES[@]}"; do
+    git -C "$dir" cat-file -e "origin/$BRANCH:$f" 2>/dev/null && present+=("$f")
+  done
+
+  local joined
+  joined=$(IFS=,; echo "${present[*]:-}")
+  echo -e "${repo}\t${#present[@]}\t${joined}" >> "$RESULTS"
+}
+
+apply_one() {
+  local repo="$1" dir="$CUSTOM_DIR/$1"
+  local branch_name="${ORIGEN}_remove-ti_${TICKET}_cleanup-legacy-template-files"
+  local wt_dir="$WORK_ROOT/wt/$repo"
+
+  [ -d "$dir" ] || { echo -e "${repo}\tERROR\tno existe $dir" >> "$RESULTS"; return; }
+
+  git -C "$dir" fetch origin "$BRANCH" --quiet 2>/dev/null || true
+  if ! git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+    echo -e "${repo}\tSKIP\tno tiene rama $BRANCH" >> "$RESULTS"
+    return
+  fi
+
+  local present=()
+  for f in "${LEGACY_FILES[@]}"; do
+    git -C "$dir" cat-file -e "origin/$BRANCH:$f" 2>/dev/null && present+=("$f")
+  done
+  if [ ${#present[@]} -eq 0 ]; then
+    echo -e "${repo}\tCLEAN\tsin archivos legacy" >> "$RESULTS"
+    return
+  fi
+
+  local filelist="$WORK_ROOT/${repo}.files.txt"
+  printf '%s\n' "${present[@]}" > "$filelist"
+
+  git -C "$dir" worktree remove "$wt_dir" --force >/dev/null 2>&1 || true
+  git -C "$dir" branch -D "$branch_name" >/dev/null 2>&1 || true
+
+  if ! git -C "$dir" worktree add -q -b "$branch_name" "$wt_dir" "origin/$BRANCH" 2>"$WORK_ROOT/${repo}.err"; then
+    echo -e "${repo}\tERROR\tfallo worktree add: $(tr '\n' ' ' < "$WORK_ROOT/${repo}.err")" >> "$RESULTS"
+    return
+  fi
+
+  git -C "$wt_dir" rm -q --pathspec-from-file="$filelist"
+
+  local commit_msg="$WORK_ROOT/commit_msg.txt"
+  cat > "$commit_msg" << EOF
+[IMP] template: limpieza de archivos legacy
+
+Se eliminan archivos de bootstrap (Docker, CI, scripts, docs) heredados
+del template integra original.
+
+Problema: el repo arrastra infraestructura obsoleta que el template
+integra ya elimino en su limpieza de referencia (commit 5c2ee0a6) al
+migrar a pre-commit + submodulos.
+
+Solucion: se remueven los ${#present[@]} archivos legacy detectados en
+la rama $BRANCH, sin reemplazo funcional porque no tienen referencias
+activas en el repo.
+
+References:
+- Ticket: $TICKET
+- Tarea: none
+- PR: none
+EOF
+  git -C "$wt_dir" commit -q -F "$commit_msg"
+
+  if [ "$DRY_RUN" = "true" ]; then
+    echo -e "${repo}\tDRY_RUN\t${#present[@]} archivos. Rama local $branch_name lista (revisar con: git -C $dir checkout $branch_name)" >> "$RESULTS"
+    git -C "$dir" worktree remove "$wt_dir" --force >/dev/null 2>&1 || true
+    return
+  fi
+
+  if ! git -C "$wt_dir" push -q origin "$branch_name" 2>"$WORK_ROOT/${repo}.pusherr"; then
+    echo -e "${repo}\tERROR\tfallo push: $(tr '\n' ' ' < "$WORK_ROOT/${repo}.pusherr")" >> "$RESULTS"
+    git -C "$dir" worktree remove "$wt_dir" --force >/dev/null 2>&1 || true
+    return
+  fi
+
+  local pr_body="$WORK_ROOT/${repo}.prbody.md"
+  {
+    echo "## ¿Por que?"
+    echo "El repo conserva en \`$BRANCH\` archivos de infraestructura legacy (Docker, CI, scripts, docs) heredados del bootstrap original del template \`integra\`, ya eliminados en el template de referencia (commit \`5c2ee0a6\`)."
+    echo
+    echo "## ¿Que cambia?"
+    echo "Se eliminan ${#present[@]} archivos legacy detectados:"
+    echo
+    while IFS= read -r f; do echo "- \`$f\`"; done < "$filelist"
+    echo
+    echo "## ¿Como se probo?"
+    echo "- [x] No aplica build/tests: archivos de infraestructura sin referencias activas"
+    echo "- [ ] Verificar que ningun workflow/docker-compose restante en $BRANCH construya desde algun archivo eliminado"
+    echo
+    echo "## References"
+    echo "- Ticket: $TICKET"
+  } > "$pr_body"
+
+  local pr_url
+  pr_url=$(gh pr create \
+    --repo "${ORG}/${repo}" \
+    --base "$BRANCH" \
+    --head "$branch_name" \
+    --title "[IMP] template: limpieza de archivos legacy (${#present[@]} archivos)" \
+    --body-file "$pr_body" \
+    2>"$WORK_ROOT/${repo}.prerr") || true
+
+  if [ -z "${pr_url:-}" ]; then
+    echo -e "${repo}\tERROR\tfallo gh pr create: $(tr '\n' ' ' < "$WORK_ROOT/${repo}.prerr")" >> "$RESULTS"
+  else
+    echo -e "${repo}\tOK\t${pr_url}" >> "$RESULTS"
+  fi
+
+  git -C "$dir" worktree remove "$wt_dir" --force >/dev/null 2>&1 || true
+}
+
+for repo in "${REPOS[@]}"; do
+  if is_excluded "$repo"; then
+    echo -e "${repo}\tEXCLUDED\t-" >> "$RESULTS"
+    continue
+  fi
+  if [ "$MODE" = "audit" ]; then
+    audit_one "$repo"
+  else
+    apply_one "$repo"
+  fi
+done
+
+echo
+column -t -s $'\t' "$RESULTS"
