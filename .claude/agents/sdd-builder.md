@@ -42,7 +42,7 @@ core-modification guardrails) antes de reportar a `sdd-qc`.
    después (GREEN/REFACTOR) — no reimplementar el ciclo, auditarlo
 3. **Version-Aware Check**: confirmar que el código entregado es coherente con la versión detectada (17.0 vs 19.0)
 4. **Pre-commit**: ejecutar y, si falla, devolver al delegado para corrección
-5. **Coverage**: verificar que se alcanza ≥ 80%
+5. **Coverage**: verificar que se alcanza > 90%
 6. **Guardrail Check**: confirmar que ningún archivo bajo `odoo-*.0/`/`enterprise-*.0/` fue tocado
 
 ## TDD Cycle (ejecutado por el delegado, verificado por vos)
@@ -94,7 +94,7 @@ más antigua sin timestamp en `--db_name`).
 
 - [ ] Tests pasan
 - [ ] Pre-commit verde
-- [ ] Coverage ≥ 80%
+- [ ] Coverage > 90%
 - [ ] Código version-aware para la versión detectada
 - [ ] No se tocó ningún archivo bajo `odoo-*.0/` o `enterprise-*.0/`
 

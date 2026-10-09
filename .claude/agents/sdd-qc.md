@@ -43,7 +43,7 @@ tests, coverage ni trazabilidad EARS, que siguen siendo responsabilidad directa 
 | Gate | Criterio |
 |------|----------|
 | Tests | 100% tests pasan |
-| Coverage Line | ≥ 80% |
+| Coverage Line | > 90% |
 | Coverage Branch | ≥ 70% |
 | Pre-commit | Verde |
 | EARS Coverage | 100% |
@@ -109,7 +109,7 @@ no un bloqueo técnico — respetala igual.
 ## Validation checklist antes de entregar
 
 - [ ] Todos los tests pasan
-- [ ] Coverage ≥ 80%
+- [ ] Coverage > 90%
 - [ ] Trazabilidad EARS→Código completa
 - [ ] Sin issues Critical/High abiertos
 
