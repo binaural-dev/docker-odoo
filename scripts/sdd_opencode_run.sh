@@ -207,6 +207,15 @@ if [[ ${#missing_fields[@]} -gt 0 ]]; then
   reject_dispatch "missing required context fields: ${missing_csv}"
 fi
 
+# `environment` must be a real value: an instance name, or `none` for tasks with no target instance.
+# Empty/placeholder values (<env>, TBD, unknown, N/A) were the second most common rejection cause
+# when only the key's presence was checked, and reached OpenCode as a guess.
+_env_value="$(extract_context_field environment)"
+if [[ -z "$_env_value" ]] || [[ ! "$_env_value" =~ ^[A-Za-z0-9._-]+$ ]] || \
+   [[ "${_env_value,,}" =~ ^(tbd|todo|unknown|n/a|na|null|xxx)$ ]]; then
+  reject_dispatch "invalid environment '${_env_value}': use the instance name (src/custom/<client>, ./odoo list) or 'none' for tasks without a target instance"
+fi
+
 # --- cwd must match the declared repo -------------------------------------
 # --dir/WORK_DIR is the real technical boundary of what OpenCode can see/edit
 # (the engine-level odoo-*.0/enterprise-*.0 deny rules use paths relative to
@@ -400,13 +409,17 @@ fi
 
 DISPATCH_MODULE="$(extract_context_field module)"
 DISPATCH_BRANCH="$(extract_context_field branch)"
+# Optional `phase:` in Context{} (spec|plan|tasks|build|qc|review-fix|...); defaults to the full pipeline.
+DISPATCH_PHASE="$(extract_context_field phase)"; DISPATCH_PHASE="${DISPATCH_PHASE:-pipeline}"
 append_metric "dispatch" \
   "agent=$AGENT" "model=$(resolve_model)" "repo=$DISPATCH_REPO" "module=$DISPATCH_MODULE" \
-  "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH"
+  "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH" "phase=$DISPATCH_PHASE"
 
 OC_ARGS=("run" "--agent" "$AGENT" "--auto")
 [[ -n "$MODEL" ]] && OC_ARGS+=("--model" "$MODEL")
 [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]] && OC_ARGS+=("--dir" "$WORK_DIR")
+# The title lets the result event map this job to its OpenCode session id (see INNER_CMD).
+OC_ARGS+=("--title" "$JOB_ID")
 OC_ARGS+=("$PROMPT")
 # --auto only resolves "ask" rules for this headless run (no TTY to prompt);
 # explicit "deny" rules in each agent's permission block (see
@@ -449,7 +462,24 @@ tail_body="\$(tail -n 40 "$OUT" 2>/dev/null || true)"
   echo "--- tail (last 40 lines) ---"
   printf '%s\n' "\$tail_body"
 } > "$RESULT_FILE"
-echo "{\"ts\":\"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"job\":\"$JOB_ID\",\"event\":\"result\",\"status\":\"\$st\",\"exit_code\":\$ec,\"duration_s\":\$_duration}" >> "$METRICS_FILE"
+_ses="\$("$OC_BIN" session list -n 30 --format json 2>/dev/null | python3 -c 'import json,sys
+try:
+    print(next((s["id"] for s in json.load(sys.stdin) if s.get("title")=="$JOB_ID"), ""))
+except Exception:
+    print("")' 2>/dev/null || true)"
+python3 - "\$st" "\$ec" "\$_duration" "\$_ses" "$JOB_ID" "$OUT" >> "$METRICS_FILE" <<'PY' || true
+import datetime, json, sys
+st, ec, dur, ses, job, out = sys.argv[1:]
+d = {"ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "job": job, "event": "result",
+     "status": st, "exit_code": int(ec), "duration_s": int(dur), "opencode_session": ses}
+if st == "failed":
+    try:
+        lines = [l.strip() for l in open(out, errors="replace").read().splitlines() if l.strip()]
+        d["cause"] = " | ".join(lines[-3:])[:400]
+    except OSError:
+        pass
+print(json.dumps(d))
+PY
 rm -f "$LOCK_FILE"
 EOF
 )

@@ -41,6 +41,9 @@ done
 [[ -d "$JOBS_DIR" ]] || { echo '{"reaped_sessions":0,"reaped_dirs":0}'; exit 0; }
 
 TTL_SECONDS=$(( TTL_HOURS * 3600 ))
+ARCHIVE_DIR="$(dirname "$JOBS_DIR")/archive"
+ARCHIVE_DAYS=30
+[[ -d "$ARCHIVE_DIR" ]] && find "$ARCHIVE_DIR" -type f -mtime +"$ARCHIVE_DAYS" -delete 2>/dev/null || true
 NOW=$(date +%s)
 
 REAPED_SESSIONS=0
@@ -49,6 +52,14 @@ REAPED_DIRS=0
 for job_dir in "$JOBS_DIR"/*/; do
   [[ -d "$job_dir" ]] || continue
   job_id="$(basename "$job_dir")"
+
+  # A job whose tmux session died without a checkpoint stays "running" until someone polls it
+  # (sdd-1791555935028 sat like that for hours). Flip it to orphaned here so the metric is emitted
+  # and the reporter sees it; status.sh owns the transition and is idempotent.
+  if [[ "$(cat "$job_dir/status" 2>/dev/null)" == "running" ]] && \
+     ! tmux -S "$TMUX_SOCKET" has-session -t "$job_id" 2>/dev/null; then
+    bash "$(dirname "$0")/sdd_opencode_status.sh" "$job_id" >/dev/null 2>&1 || true
+  fi
 
   age=$(( NOW - $(stat -c '%Y' "$job_dir" 2>/dev/null || echo "$NOW") ))
   stale=0
@@ -60,6 +71,14 @@ for job_dir in "$JOBS_DIR"/*/; do
     if tmux -S "$TMUX_SOCKET" has-session -t "$job_id" 2>/dev/null; then
       tmux -S "$TMUX_SOCKET" kill-session -t "$job_id" 2>/dev/null || true
       REAPED_SESSIONS=$(( REAPED_SESSIONS + 1 ))
+    fi
+    # Keep the verdict evidence past the job-dir TTL: result.handoff (or the log tail) goes to archive/
+    # and is pruned after ARCHIVE_DAYS. Without it, FAIL/orphaned jobs left no evidence after 6 h.
+    mkdir -p "$ARCHIVE_DIR"
+    if [[ -f "$job_dir/result.handoff" ]]; then
+      cp "$job_dir/result.handoff" "$ARCHIVE_DIR/$job_id.handoff" 2>/dev/null || true
+    elif [[ -f "$job_dir/output.log" ]]; then
+      tail -n 60 "$job_dir/output.log" > "$ARCHIVE_DIR/$job_id.tail" 2>/dev/null || true
     fi
     rm -rf "$job_dir"
     REAPED_DIRS=$(( REAPED_DIRS + 1 ))

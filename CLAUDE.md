@@ -10,8 +10,8 @@ sharing a common pool of addon repos, generated into Docker Compose via Python g
 
 **Before doing anything else, read the two authoritative rules files — do not duplicate their content here:**
 - `/home/binlp011/sources/docker-multi/AGENTS.md` — repo-root rules: workspace structure, skill inventory summary,
-  Docker instance docs, ~259 numbered "Reglas Clave" (versioning, module-reuse search order, JS `_t()` conventions,
-  `warehouse_id` context, `float_compare`, recordset safety), **FIX-032 to FIX-073** (17.0) / **FIX-097** (19.0)
+  Docker instance docs, ~290 numbered "Reglas Clave" (versioning, module-reuse search order, JS `_t()` conventions,
+  `warehouse_id` context, `float_compare`, recordset safety), **FIX-032 to FIX-073** (17.0) / **FIX-109** (19.0)
   paired code-review lessons, **core-modification guardrails** (never edit `odoo-*.0/` or `enterprise-*.0/`, enforced by CI
   git-diff check), MCP server docs, multi-currency/l10n_ve rules, compute-cache/xpath rules. The tail of the file
   (from "Conductor Methodology" onward) is a historical changelog of self-improvement loops — not actionable.
@@ -79,16 +79,11 @@ via the `INSTANCE_ADDONS` env var.
 ## Testing
 
 - `scripts/run_tests.sh --modules=<mods> --container=<name> [--db_name=] [--tags=] [--no-cov]` — the standard
-  way to run tests; default container is `odoo-qa-consultoria-19`. Installs/updates the modules, runs
-  `--test-tags`, and (unless `--no-cov`) runs `coverage run/report` scoped to the module source paths.
-  Note: `src/scripts/run_tests.sh` (a different, older copy) appends a timestamp to `--db_name` where the root
-  version doesn't — prefer the root `scripts/run_tests.sh`.
-- `src/comandos_tests_farming.txt` is a manual command cookbook for `binaural_farming*` modules; it itself
-  recommends using `scripts/run_tests.sh` instead of copy-pasting from it. `--http-tests` has a known caveat of
-  3 expected `at_install` HttpCase failures.
+  way to run tests (default container `odoo-qa-consultoria-19`); prefer the root script over `src/scripts/run_tests.sh`.
 - **Higiene de bases de datos**: el clúster Postgres (`db-pg16`) es compartido entre casi todas las instancias y contiene bases reales de otros clientes junto a las de test — ver AGENTS.md regla 139 antes de borrar cualquier base.
-- E2E with Playwright: if the Playwright MCP server disconnects mid-flow, continue with Node Playwright
-  (`npx --no-install playwright --version`; skill `playwright-mcp-usage` §Troubleshooting, AGENTS.md rule 248).
+- **Commits sin `Co-Authored-By` de IA** (convención Binaural; prevalece sobre la atribución del arnés): ver AGENTS.md reglas 280-282.
+- Tras editar un `.po`: `msgfmt -c -o /dev/null <archivo>.po` (AGENTS.md reglas 263-265).
+- **Detalle (CI de PR, instancia efímera de worktree, PDF/wkhtmltopdf, kiosko, review-fix, `subTest`, E2E, HTTP `auth="none"`, TTL del caché, etc.)**: skill `docker-multi-testing-rules` — leerla antes de correr tests, tocar bases de datos o preparar un PR.
 
 ## Linting / pre-commit
 
@@ -106,36 +101,12 @@ via the `INSTANCE_ADDONS` env var.
 
 ## MCP servers already configured
 
-These are set up in `~/.config/opencode/opencode.jsonc` and documented in AGENTS.md's MCP section / `src/Agents.md`'s
-Codebase Memory section — connect to them rather than re-implementing equivalent search/query logic:
-
-- **`codebase-memory-mcp`** — knowledge graph over 11 indexed repos (odoo-17/19, enterprise-17/19, addon repos).
-  Re-indexing after `git pull` is manual (`detect_changes` then `index_repository`), not automatic — check
-  freshness before trusting it for a just-pulled branch. **Use this before `grep`/`glob`/raw file reads for any
-  non-trivial code search** (finding a model, tracing callers, understanding a module's architecture) — it
-  resolves to precise snippets instead of full-file reads, which is dramatically cheaper on context. Priority
-  order: `search_graph` (find by pattern) → `trace_path` (callers/callees) → `get_code_snippet` (read one
-  function/class) → `query_graph` (Cypher for complex patterns) → `get_architecture` (module overview). Fall
-  back to `grep`/`glob` only for: literal strings/error messages, non-code files (Dockerfiles, shell scripts,
-  configs), or when the MCP tools return insufficient results.
-- **`postgres-db`** — `scripts/mcp_servers/postgres_server.py`, connects to `postgresql://odoo:odoo@localhost:5432/postgres`,
-  read-only (`MCP_ALLOW_WRITE=false`). Tools: query/execute/list_databases/list_tables/describe_table/search_tables/explain. Nota: si el contenedor `db-pg16` no publica el puerto 5432 al host (`docker port db-pg16` vacío), este MCP no puede conectar — ver AGENTS.md regla 188 y skill `postgresql-db-work` para el fallback (`docker exec db-pg16 psql`) y para escrituras vía ORM (`odoo shell`). Nota adicional: si alguna instancia de ese servicio ya fue aprovisionada con `./odoo provision-role`, el rol `odoo` (bootstrap) puede estar en NOLOGIN en reposo — un fallo de conexión/autenticación en ese caso no es necesariamente el caveat del puerto, ver AGENTS.md regla 261.
-- **`openrag`** — proxies to an externally-run RAG stack (Ollama, OpenSearch, Langflow, Docling Serve — none of
-  which are started by `./odoo`; see AGENTS.md's "Stack Tercerizado" notes) for semantic search. Also hosts the
-  long-tail skill catalog — see "Skills: where to look" below.
-- **Odoo record access (`plugin:core:odoo` / `claude_ai_Binaural_MCP`)** — two different MCP
-  connectors expose read/search/post_message over Binaural's central Odoo (`project.task`,
-  `helpdesk.ticket`, etc.), not documented above historically. `plugin:core:odoo` is the richer one
-  (supports `body_is_html`, `partner_ids`, real Odoo mentions) but was **confirmed broken** in a
-  2026-09-22 session (`get_current_context`/`post_message` return "Invalid credentials or
-  insufficient permissions") — verify with `get_current_context` before relying on it, don't assume
-  it works. `claude_ai_Binaural_MCP` works but is plain-text only (no `partner_ids`/HTML, no
-  `mail.followers` query). **Always post to a task/ticket chatter via skill
-  `core:escribir-en-chatter`** (draft-then-confirm gate, links PRs as `github_pr_ids` records,
-  resolves real mentions) — never call `post_message` directly ad-hoc. Ver AGENTS.md regla 228.
-
-Don't confuse these with the unrelated Odoo addon module named `mcp_server` found under some
-`src/custom/*/third-party-addons/` trees — that's an Odoo module, not agent tooling.
+Configurados en `~/.config/opencode/opencode.jsonc`; conectarse a ellos en vez de reimplementar su lógica.
+- **`codebase-memory-mcp`**: usar ANTES de `grep`/`glob` para búsquedas de código no triviales (`search_graph` → `trace_path` → `get_code_snippet`). Reindexar tras un `git pull` es manual.
+- **`postgres-db`**: solo lectura; si no conecta, ver AGENTS.md reglas 188 y 261.
+- **`openrag`**: búsqueda semántica y catálogo long-tail de skills (ver "Skills: where to look").
+- **Chatter de Odoo**: publicar SIEMPRE con la skill `core:escribir-en-chatter`, nunca `post_message` directo (AGENTS.md regla 228).
+- **Detalle** (herramientas, caveats de `plugin:core:odoo` vs `claude_ai_Binaural_MCP`, módulo `mcp_server` que no es tooling): skill `docker-multi-mcp-servers`.
 
 ## Skills: where to look
 
@@ -150,7 +121,7 @@ at a median of ~87k tokens, and only 4 of the 593 versioned skills had ever been
 **Before assuming a very specific skill doesn't exist, search for it with `mcp__openrag__openrag_search`**
 using the knowledge filter `odoo-skills-long-tail` (id `94ecfff6-a584-4772-a8df-cdae572ad5e2`), or read its
 `SKILL.md` directly under the versioned catalog. For the ingestion rules for adding skills to that index, see
-skill `openrag`.
+skill `openrag`. `binaural-checker-kiosk` se excluyó del conjunto siempre cargado (skill de módulo) y se busca con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/binaural-checker-kiosk/SKILL.md`. `claude-cache-ttl-check`, `claude-code-cost-controls` y `opencode-cost-controls` también son long-tail (OpenRAG `odoo-skills-long-tail` o `src/.opencode/skills/<nombre>/SKILL.md`). Para ingestar/actualizar skills usar `src/scripts/skill_ingest.py` (no `ingest_document.py` directo; ver skill `openrag`).
 
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 

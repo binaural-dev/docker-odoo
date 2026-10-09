@@ -55,8 +55,10 @@ if [[ "$STATUS" == "running" ]] && ! session_alive; then
   STATUS="orphaned"
   # Guarded by the running->orphaned transition above, so this only fires
   # once per job no matter how many times status.sh is polled afterwards.
-  printf '{"ts":"%s","job":"%s","event":"orphaned"}\n' \
-    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$JOB_ID" >> "$METRICS_FILE"
+  _cause="$(tail -n 12 "$OUT" 2>/dev/null | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -v '^[[:space:]]*$' | tail -n 3 | cut -c1-160 | tr '\n' '|' | json_escape)"
+  [[ -n "$_cause" ]] || _cause='""'
+  printf '{"ts":"%s","job":"%s","event":"orphaned","cause":%s}\n' \
+    "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$JOB_ID" "$_cause" >> "$METRICS_FILE"
 fi
 
 case "$STATUS" in
