@@ -98,6 +98,13 @@ from odoo_cli.core.prompts import (
 # usual "leave it empty to mean all instances" semantics). The
 # dispatch resolves ``args.instance`` to a concrete name before
 # calling the action.
+# Comandos que dejan un servidor Odoo corriendo (con hilos de cron) contra el
+# servicio de Postgres compartido, y que por eso exigen aislamiento real por
+# instancia antes de ejecutarse. 'build' entra porque genera el compose y las
+# configs con las que despues arranca todo. 'update'/'test' no: corren con
+# --stop-after-init y no levantan cron.
+ACTIONS_REQUIRING_DB_ISOLATION = {"build", "start", "restart"}
+
 _INSTANCE_AWARE_ACTIONS = {
     "start", "stop", "restart", "logs", "remove",
     "fix-files", "init", "bash", "psql", "pw", "update", "test",
@@ -190,6 +197,20 @@ def dispatch(
 
     if args.action in _INSTANCE_AWARE_ACTIONS and not _skip_instance:
         args.instance = _resolve_instance(runner, config, args)
+
+    if args.action in ACTIONS_REQUIRING_DB_ISOLATION:
+        from generators.config_loader import enforce_cron_dbfilter_isolation
+
+        # Con instancia concreta el chequeo se acota a ella, para que migrar
+        # el grupo pueda ser incremental en vez de todo-o-nada. Sin instancia
+        # (build, o start/restart sobre todas) se exige al grupo completo.
+        scope = [args.instance] if getattr(args, "instance", None) else None
+        try:
+            enforce_cron_dbfilter_isolation(config, scope)
+        except ValueError as exc:
+            runner.error("\n=== ❌ AISLAMIENTO DE BASE DE DATOS ===\n")
+            runner.info(str(exc))
+            return 1
 
     if args.action == "build":
         build_odoo(

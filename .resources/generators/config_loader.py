@@ -137,7 +137,14 @@ def is_production_instance(inst_conf) -> bool:
 
 
 def _validate_config(config):
-    """Validate the configuration structure."""
+    """Validate the configuration structure.
+
+    Solo estructura: secciones, campos requeridos, referencias resolubles --
+    lo que hace ilegible el archivo para CUALQUIER comando. El aislamiento
+    cron/db_filter NO se valida aca: es una politica de ejecucion, y la
+    exigen en el dispatch los comandos que dejan un Odoo corriendo (ver
+    enforce_cron_dbfilter_isolation).
+    """
     required_sections = ["odoo_configs", "databases", "instances"]
     for section in required_sections:
         if section not in config:
@@ -154,7 +161,6 @@ def _validate_config(config):
     for inst_name, inst_conf in config["instances"].items():
         _validate_instance(inst_name, inst_conf, config)
 
-    _validate_cron_dbfilter_isolation(config)
 
 
 def _validate_database(db_name, db_conf):
@@ -221,8 +227,11 @@ def _validate_instance(inst_name, inst_conf, config):
         raise ValueError("Los external_port de las instancias deben ser únicos")
 
 
-def _validate_cron_dbfilter_isolation(config):
-    """Odoo NO aplica 'dbfilter' al ejecutar cron (ir.cron) -- confirmado
+def _cron_dbfilter_isolation_findings(config):
+    """Detecta, por servicio de Postgres compartido, que instancias no
+    tienen aislamiento real frente al cron.
+
+    Odoo NO aplica 'dbfilter' al ejecutar cron (ir.cron) -- confirmado
     leyendo el codigo fuente real de Odoo 14.0/16.0/17.0/19.0. 'dbfilter'
     solo rige el ruteo HTTP (selector de bases, sesion). Cuando varias
     instancias comparten un mismo servicio de Postgres, el cron de una
@@ -243,12 +252,21 @@ def _validate_cron_dbfilter_isolation(config):
         el db_filter por si solo no aisla nada a nivel de Postgres.
 
     Escape hatch legitimo: 'max_cron_threads': 0 (instancia sin cron, sin
-    este riesgo, no exige nada de lo anterior)."""
+    este riesgo, no exige nada de lo anterior).
+
+    Esta funcion NO levanta excepciones: solo reporta. Quien decide si eso
+    bloquea o solo avisa es el llamador -- ver enforce_cron_dbfilter_isolation()
+    (comandos que dejan un Odoo corriendo) y cron_dbfilter_isolation_warning()
+    (el resto). Devuelve {db_name: findings} unicamente para los servicios
+    con al menos una violacion.
+    """
     from collections import defaultdict
 
     groups = defaultdict(list)
     for inst_name, inst_conf in config["instances"].items():
         groups[inst_conf["database"]].append(inst_name)
+
+    findings = {}
 
     for db_name, inst_names in groups.items():
         if len(inst_names) <= 1:
@@ -301,74 +319,178 @@ def _validate_cron_dbfilter_isolation(config):
                 or duplicate_role_violations or reused_shared_role_violations):
             continue
 
-        lines = [
+        findings[db_name] = {
+            "group": inst_names,
+            "shared_service_user": shared_service_user,
+            "filter": filter_violations,
+            "placeholder": placeholder_violations,
+            "credentials": credential_violations,
+            "duplicate_role": duplicate_role_violations,
+            "reused_shared_role": reused_shared_role_violations,
+        }
+
+    return findings
+
+
+def _scope_findings(findings, instances):
+    """Recorta los findings a las instancias `instances` (None = todas).
+
+    Sirve para que './odoo start <inst>' exija solo lo que depende de esa
+    instancia: una vez migrada a rol dedicado, arranca aunque el resto del
+    grupo siga pendiente -- si no, la migracion seria todo-o-nada. Las
+    violaciones de rol duplicado se conservan enteras (con la otra instancia
+    del par), porque el problema es la colision, no quien la introdujo.
+    """
+    if instances is None:
+        return findings
+
+    wanted = set(instances)
+    scoped = {}
+    for db_name, f in findings.items():
+        sub = dict(f)
+        sub["filter"] = [n for n in f["filter"] if n in wanted]
+        sub["placeholder"] = [n for n in f["placeholder"] if n in wanted]
+        sub["credentials"] = [n for n in f["credentials"] if n in wanted]
+        sub["duplicate_role"] = {
+            db_user: insts for db_user, insts in f["duplicate_role"].items()
+            if wanted & set(insts)
+        }
+        sub["reused_shared_role"] = [
+            n for n in f["reused_shared_role"] if n in wanted
+        ]
+
+        if (sub["filter"] or sub["placeholder"] or sub["credentials"]
+                or sub["duplicate_role"] or sub["reused_shared_role"]):
+            scoped[db_name] = sub
+
+    return scoped
+
+
+def _affected_instances(f):
+    """Nombres de instancia involucrados en un finding de un servicio."""
+    affected = set(f["filter"]) | set(f["placeholder"]) | set(f["credentials"])
+    affected |= set(f["reused_shared_role"])
+    for insts in f["duplicate_role"].values():
+        affected |= set(insts)
+    return sorted(affected)
+
+
+def _format_isolation_error(findings):
+    """Texto completo, con el detalle por instancia y como corregirlo."""
+    lines = []
+
+    for db_name, f in findings.items():
+        if lines:
+            lines.append("")
+
+        lines += [
             f"Instancia(s) inseguras compartiendo el servicio de base de "
-            f"datos '{db_name}' (grupo: {', '.join(inst_names)}):",
+            f"datos '{db_name}' (grupo: {', '.join(f['group'])}):",
             "",
         ]
 
-        if filter_violations:
+        if f["filter"]:
             lines += [
                 "Sin 'db_filter' especifico:",
-                *(f"  - {n}" for n in filter_violations),
+                *(f"  - {n}" for n in f["filter"]),
                 "",
             ]
 
-        if placeholder_violations:
+        if f["placeholder"]:
             lines += [
                 "'db_filter' usa %h/%d (placeholders de host, no resolubles "
                 "desde cron -- no hay una peticion HTTP detras):",
-                *(f"  - {n}" for n in placeholder_violations),
+                *(f"  - {n}" for n in f["placeholder"]),
                 "",
             ]
 
-        if credential_violations:
+        if f["credentials"]:
             lines += [
                 "Sin 'db_user'/'db_password' propios (dependen del rol "
                 "compartido del servicio, sin aislamiento real de Postgres):",
-                *(f"  - {n}" for n in credential_violations),
+                *(f"  - {n}" for n in f["credentials"]),
                 "",
             ]
 
-        if duplicate_role_violations:
+        if f["duplicate_role"]:
             lines += ["'db_user' repetido entre instancias del mismo grupo (no son roles realmente distintos -- Postgres ve un solo rol, dueno de la union de bases de ambas):"]
-            for db_user, insts in duplicate_role_violations.items():
+            for db_user, insts in f["duplicate_role"].items():
                 lines.append(f"  - '{db_user}' usado por: {', '.join(insts)}")
             lines.append("")
 
-        if reused_shared_role_violations:
+        if f["reused_shared_role"]:
             lines += [
-                f"'db_user' igual al rol compartido del servicio ('{shared_service_user}') -- no es un rol dedicado, es el mismo que ya usan las demas instancias sin credenciales propias:",
-                *(f"  - {n}" for n in reused_shared_role_violations),
+                f"'db_user' igual al rol compartido del servicio ('{f['shared_service_user']}') -- no es un rol dedicado, es el mismo que ya usan las demas instancias sin credenciales propias:",
+                *(f"  - {n}" for n in f["reused_shared_role"]),
                 "",
             ]
 
-        lines += [
-            "Por que las dos cosas son obligatorias juntas: Odoo NO aplica "
-            "'dbfilter' al ejecutar cron (ir.cron), solo al ruteo HTTP -- ya "
-            "paso en produccion que el cron de una instancia proceso datos "
-            "de la base de OTRA instancia del mismo servicio "
-            "(integra-maintenance-comercial-19.0.1 -> "
-            "integra-maintenance-19.0.1). La proteccion real es que cada "
-            "instancia tenga su PROPIO rol de Postgres, dueno solo de sus "
-            "propias bases -- eso tambien evita que una base de una version "
-            "de Odoo (ej. 17.0) termine usandose desde una instancia de otra "
-            "version (ej. 19.0).",
-            "",
-            "Para arreglar cada instancia listada arriba, en su nivel raiz "
-            "(no dentro de overwrite_odoo_config):",
-            "  - Agregar 'db_user'/'db_password' con un rol dedicado (distinto "
-            "al de cualquier otra instancia del grupo y al rol compartido del "
-            "servicio), y un 'db_filter' especifico en overwrite_odoo_config "
-            "(ej. '^integra\\-17\\.0'). Correr el aprovisionamiento del rol "
-            "antes de levantar la instancia con esas credenciales.",
-            "  - O, si esta instancia NO debe correr cron (solo se usa para "
-            "explorar otra base), poner 'max_cron_threads': 0 explicitamente "
-            "en overwrite_odoo_config -- deja constancia de que es "
-            "intencional, no un olvido.",
-        ]
+    lines += [
+        "Por que las dos cosas son obligatorias juntas: Odoo NO aplica "
+        "'dbfilter' al ejecutar cron (ir.cron), solo al ruteo HTTP -- ya "
+        "paso en produccion que el cron de una instancia proceso datos "
+        "de la base de OTRA instancia del mismo servicio "
+        "(integra-maintenance-comercial-19.0.1 -> "
+        "integra-maintenance-19.0.1). La proteccion real es que cada "
+        "instancia tenga su PROPIO rol de Postgres, dueno solo de sus "
+        "propias bases -- eso tambien evita que una base de una version "
+        "de Odoo (ej. 17.0) termine usandose desde una instancia de otra "
+        "version (ej. 19.0).",
+        "",
+        "Para arreglar cada instancia listada arriba, en su nivel raiz "
+        "(no dentro de overwrite_odoo_config):",
+        "  - Agregar 'db_user'/'db_password' con un rol dedicado (distinto "
+        "al de cualquier otra instancia del grupo y al rol compartido del "
+        "servicio), y un 'db_filter' especifico en overwrite_odoo_config "
+        "(ej. '^integra\\-17\\.0'). Correr './odoo provision-role <instancia>' "
+        "antes de levantarla con esas credenciales.",
+        "  - O, si esta instancia NO debe correr cron (solo se usa para "
+        "explorar otra base), poner 'max_cron_threads': 0 explicitamente "
+        "en overwrite_odoo_config -- deja constancia de que es "
+        "intencional, no un olvido.",
+    ]
 
-        raise ValueError("\n".join(lines))
+    return "\n".join(lines)
+
+
+def enforce_cron_dbfilter_isolation(config, instances=None):
+    """Levanta ValueError si las instancias pedidas comparten servicio de
+    Postgres sin aislamiento real (ver _cron_dbfilter_isolation_findings).
+
+    Solo debe llamarse desde los comandos que dejan un servidor Odoo
+    corriendo con cron sobre el Postgres compartido ('build', 'start',
+    'restart'). Los demas comandos -- 'list', 'logs', 'psql', backups,
+    restores, precommit -- no crean el riesgo y no tienen por que quedar
+    bloqueados por el: para esos esta cron_dbfilter_isolation_warning().
+
+    `instances` acota el chequeo a esas instancias; None lo aplica a todas
+    (el caso de 'build' y de 'start'/'restart' sin instancia).
+    """
+    findings = _scope_findings(_cron_dbfilter_isolation_findings(config), instances)
+    if findings:
+        raise ValueError(_format_isolation_error(findings))
+
+
+def cron_dbfilter_isolation_warning(config):
+    """Aviso compacto -- una linea por servicio -- para los comandos que no
+    exigen aislamiento. Devuelve None si no hay nada que avisar."""
+    findings = _cron_dbfilter_isolation_findings(config)
+    if not findings:
+        return None
+
+    lines = []
+    for db_name, f in findings.items():
+        affected = _affected_instances(f)
+        lines.append(
+            f"\033[1;33m⚠️  {len(affected)} de {len(f['group'])} instancia(s) del "
+            f"servicio '{db_name}' no tienen aislamiento de cron/db_filter: el "
+            f"cron de una puede tocar las bases de las otras.\033[0m"
+        )
+    lines.append(
+        "   Este comando no levanta ninguna, sigue adelante. 'build', 'start' y "
+        "'restart' si lo exigen, y ahi sale el detalle y como corregirlo."
+    )
+    return "\n".join(lines)
 
 
 def resolve_instance_config(inst_conf, config):

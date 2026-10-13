@@ -29,7 +29,8 @@ COMPOSE_FILE = "docker-compose.generated.yml"
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 
 from generators.config_loader import (  # noqa: E402
-    _validate_config, get_unique_odoo_versions, resolve_instance_config,
+    _validate_config, enforce_cron_dbfilter_isolation,
+    get_unique_odoo_versions, resolve_instance_config,
 )
 from generators.dockerfile_generator import generate_dockerfiles  # noqa: E402
 from generators.compose_generator import generate_compose  # noqa: E402
@@ -158,6 +159,10 @@ def _write_config(config):
     }
     try:
         _validate_config(to_validate)
+        # _validate_config ya no incluye el aislamiento cron/db_filter (solo
+        # lo exigen build/start/restart en el CLI), pero lo que escribe el
+        # agente es para levantarlo: se sigue exigiendo aca.
+        enforce_cron_dbfilter_isolation(to_validate)
     except (ValueError, KeyError) as e:
         raise AgentError(f"instances.json quedaría inválido: {e}")
 

@@ -47,11 +47,11 @@ from pathlib import Path
 BASE_PATH = str(Path(__file__).resolve().parent)
 sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 
-from generators.config_loader import load_config
+from generators.config_loader import cron_dbfilter_isolation_warning, load_config
 
 from odoo_cli.core.cli_runner import CliRunner
 from odoo_cli.core.actions.validate import validate_instances
-from odoo_cli.core.dispatch import dispatch
+from odoo_cli.core.dispatch import ACTIONS_REQUIRING_DB_ISOLATION, dispatch
 
 
 # ============================================================
@@ -757,6 +757,15 @@ def main() -> int:
     # ``runner.error``.
     config = load_config(BASE_PATH)
     validate_instances(runner, config)
+
+    # El aislamiento cron/db_filter solo lo exigen build/start/restart (ver
+    # ACTIONS_REQUIRING_DB_ISOLATION en dispatch); el resto ('list', 'logs',
+    # 'psql', 'stop', 'remove', backups...) solo recibe el aviso: bloquearlos
+    # dejaba el CLI entero inutilizable por una config que no iban a usar.
+    if args.action not in ACTIONS_REQUIRING_DB_ISOLATION:
+        warning = cron_dbfilter_isolation_warning(config)
+        if warning:
+            print(warning, file=sys.stderr)
 
     return dispatch(runner, args, config, BASE_PATH)
 

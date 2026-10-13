@@ -202,7 +202,7 @@ def audit_db_filter_drift(config: dict) -> list[dict]:
             expected_user = inst_conf.get("db_user")
 
             if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
-                continue  # ya lo reporta _validate_cron_dbfilter_isolation, no duplicar
+                continue  # ya lo reporta enforce_cron_dbfilter_isolation, no duplicar
 
             try:
                 matched = [r for r in rows if re.match(db_filter, r["datname"])]

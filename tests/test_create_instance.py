@@ -3,8 +3,8 @@
 
 A new instance on a Postgres service that other instances already use must
 come out with its own role and db_filter, otherwise config_loader's
-_validate_cron_dbfilter_isolation rejects the whole config and every
-`./odoo` command fails.
+enforce_cron_dbfilter_isolation rejects './odoo build'/'start' for the
+whole group.
 
 Run with::
 
@@ -33,7 +33,10 @@ from create_instance import (  # noqa: E402
     resolve_enterprise_folder,
     resolve_odoo_config,
 )
-from generators.config_loader import _validate_config  # noqa: E402
+from generators.config_loader import (  # noqa: E402
+    _validate_config,
+    enforce_cron_dbfilter_isolation,
+)
 
 
 def _data(instances=None):
@@ -101,6 +104,7 @@ class BuildInstanceEntryTests(unittest.TestCase):
         data = _data({"binaural": SIBLING})
         data["instances"]["farmacia-santa-rosa-v19"] = _build(data)
         _validate_config(data)  # must not raise
+        enforce_cron_dbfilter_isolation(data)  # must not raise
 
 
 def _layout(configs, databases, instances=None):

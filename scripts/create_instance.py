@@ -46,7 +46,7 @@ def shares_database_service(data, database_name):
     """True if any other instance (enabled or not) already uses this Postgres
     service. Disabled siblings count too: once re-enabled they put the new
     instance in a shared group, and config_loader's
-    _validate_cron_dbfilter_isolation then refuses to load the whole config."""
+    enforce_cron_dbfilter_isolation then refuses build/start for the group."""
     return any(
         inst.get("database") == database_name
         for inst in data.get("instances", {}).values()
