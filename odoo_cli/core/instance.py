@@ -225,7 +225,10 @@ def _instance_has_db(
     db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
     db_port = get_db_internal_port(db_conf)
     service = f"odoo-{instance}"
-    env = {"PGPASSWORD": db_password, "PATH": os.environ.get("PATH", "")}
+    # Heredar el entorno completo: con solo PATH (o un PATH fijo) el CLI de
+    # docker no se encuentra en /opt/homebrew/bin, y sin HOME/DOCKER_* no ve
+    # el contexto activo (colima, Docker Desktop...) y no llega al daemon.
+    env = {**os.environ, "PGPASSWORD": db_password}
     proc = subprocess.run(
         [
             "docker", "compose", "-f", _COMPOSE_FILE, "exec", "-T", service,

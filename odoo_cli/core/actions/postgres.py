@@ -403,8 +403,49 @@ def provision_role_sql(runner: "Runner", target: dict) -> list[str]:
                  f'REVOKE CONNECT ON DATABASE "{db}" FROM PUBLIC;')
         _pg_exec(runner, db_container, bootstrap_user, bootstrap_password, "postgres",
                  f'GRANT CONNECT ON DATABASE "{db}" TO {db_user};')
+        _ensure_untrusted_extensions(
+            runner, db_container, bootstrap_user, bootstrap_password, db
+        )
 
     return matching
+
+
+# Extensiones que Odoo necesita y que Postgres NO marca como trusted: un
+# rol no superusuario (los app_* son NOSUPERUSER a proposito) no puede
+# crearlas aunque sea dueño de la base, y Odoo falla despues al crear
+# tablas -- p. ej. Odoo 19 (modulos ai) con 'type "vector" does not exist'.
+# pg_trgm/unaccent son trusted y Odoo las crea solo; no hace falta listarlas.
+UNTRUSTED_EXTENSIONS = ("vector",)
+
+
+def _ensure_untrusted_extensions(
+    runner: "Runner", db_container: str, bootstrap_user: str,
+    bootstrap_password: str, db: str,
+) -> None:
+    """Crea en ``db``, como el rol bootstrap (superusuario), las
+    UNTRUSTED_EXTENSIONS que el servidor tenga disponibles y la base aun no.
+    Requiere que el bootstrap ya pueda loguear (dentro del break-glass)."""
+    names = ", ".join(f"'{e}'" for e in UNTRUSTED_EXTENSIONS)
+    result = subprocess.run(
+        ["docker", "exec", "-e", f"PGPASSWORD={bootstrap_password}",
+         _container_id(db_container), "psql", "-U", bootstrap_user, "-d", db,
+         "-tAc",
+         f"SELECT name FROM pg_available_extensions WHERE name IN ({names}) "
+         f"AND installed_version IS NULL;"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        runner.warn(
+            f"    ⚠️  No se pudieron revisar las extensiones de {db}: "
+            f"{result.stderr.strip()}"
+        )
+        return
+    for ext in (line.strip() for line in result.stdout.splitlines()):
+        if not ext:
+            continue
+        runner.info(f"    → Creando extensión '{ext}' en {db}")
+        _pg_exec(runner, db_container, bootstrap_user, bootstrap_password, db,
+                 f'CREATE EXTENSION IF NOT EXISTS "{ext}";')
 
 
 def provision_instance_role(runner: "Runner", config: dict, instance: str) -> None:

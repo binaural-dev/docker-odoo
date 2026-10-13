@@ -8,6 +8,7 @@ Validaciones que viven en ambos entry points:
   con un mensaje claro.
 """
 
+import os
 import subprocess
 
 
@@ -33,7 +34,10 @@ def _check_db_exists(container, db_host, db_user, db_port, db_password, dbname, 
     ``docker compose exec`` con ``compose_file`` explícito, nunca con
     ``docker exec`` plano.
     """
-    env = {"PGPASSWORD": db_password, "PATH": "/usr/bin:/bin:/usr/local/bin"}
+    # Heredar el entorno completo: con solo PATH (o un PATH fijo) el CLI de
+    # docker no se encuentra en /opt/homebrew/bin, y sin HOME/DOCKER_* no ve
+    # el contexto activo (colima, Docker Desktop...) y no llega al daemon.
+    env = {**os.environ, "PGPASSWORD": db_password}
     psql_base = [
         "docker", "compose", "-f", compose_file, "exec", "-T", container,
         "psql",
