@@ -6,6 +6,7 @@ import string
 import sys
 import os
 import subprocess
+import time
 from pathlib import Path
 
 BASE_PATH = Path(__file__).resolve().parent.parent
@@ -188,6 +189,75 @@ def _ask_from_list(prompt_text, values):
     return interactive_menu(
         prompt_text, [(i, v, v) for i, v in enumerate(values, start=1)]
     )
+
+
+COMPOSE_FILE = "docker-compose.generated.yml"
+
+
+def _db_service(database_name):
+    return f"db-{database_name}"
+
+
+def start_db_service(database_name, db_user, timeout=60):
+    """Levanta solo el Postgres del servicio y espera a que acepte conexiones.
+
+    'provision-role' hace docker exec contra ese contenedor, y 'build' no
+    levanta nada: sin esto, con Postgres apagado, provision-role fallaba
+    siempre al crear una instancia nueva."""
+    service = _db_service(database_name)
+    subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "up", "-d", service],
+        cwd=BASE_PATH, check=True,
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        ready = subprocess.run(
+            ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T", service,
+             "pg_isready", "-q", "-U", db_user, "-d", "postgres"],
+            cwd=BASE_PATH, capture_output=True,
+        )
+        if ready.returncode == 0:
+            return True
+        time.sleep(1)
+    return False
+
+
+def role_can_login(database_name, db_conf, role):
+    """True/False si el rol existe y puede loguear; None si no se pudo
+    consultar (servicio externo, contenedor caído...).
+
+    Se verifica en Postgres en vez de confiar en el exit code de
+    provision-role: si el operador cancela la confirmación, sale con 0."""
+    result = subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "exec", "-T",
+         "-e", f"PGPASSWORD={db_conf.get('password', '')}",
+         _db_service(database_name),
+         "psql", "-U", db_conf.get("user", "odoo"), "-d", "postgres", "-tAc",
+         f"SELECT rolcanlogin FROM pg_roles WHERE rolname = '{role}'"],
+        cwd=BASE_PATH, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() == "t"
+
+
+def provision_dedicated_role(name, database_name, db_conf, role):
+    """Corre provision-role con Postgres levantado y confirma que el rol
+    quedó creado. Devuelve True solo si se pudo verificar."""
+    if db_conf.get("create_container", True):
+        print(f"\n>> Levantando Postgres ({_db_service(database_name)})")
+        if not start_db_service(database_name, db_conf.get("user", "odoo")):
+            print(f"❌ {_db_service(database_name)} no respondió a tiempo.")
+            return False
+
+    print(f"\n>> Ejecutando: ./odoo provision-role {name}")
+    result = subprocess.run(["./odoo", "provision-role", name], cwd=BASE_PATH)
+
+    can_login = role_can_login(database_name, db_conf, role)
+    if can_login is None:
+        # No se pudo consultar (p. ej. Postgres externo): queda el exit code.
+        return result.returncode == 0
+    return can_login
 
 
 def interactive_menu(prompt_text, options_list):
@@ -462,21 +532,19 @@ def create_instance(name, repo_url, branch, odoo_version):
         print("\n>> Ejecutando: ./odoo build")
         subprocess.run(["./odoo", "build"], cwd=BASE_PATH, check=True)
 
-        if needs_role:
-            # Not check=True: provision-role asks for confirmation (it may
-            # restart the whole shared Postgres service) and the operator can
-            # legitimately postpone it. The instance still starts, it just
-            # can't reach Postgres until the role exists.
-            print(f"\n>> Ejecutando: ./odoo provision-role {name}")
-            result = subprocess.run(
-                ["./odoo", "provision-role", name], cwd=BASE_PATH
+        if needs_role and not provision_dedicated_role(
+            name, database_name, data["databases"][database_name], entry["db_user"]
+        ):
+            # Levantarla sin el rol solo deja a Odoo reintentando contra
+            # Postgres con 'password authentication failed' en bucle.
+            print(
+                f"\n⚠️  No se pudo verificar el rol '{entry['db_user']}' en Postgres, "
+                f"así que la instancia NO se levantó.\n"
+                f"   La instancia ya está en instances.json; para terminar:\n"
+                f"     ./odoo provision-role {name}\n"
+                f"     ./odoo start {name}\n"
             )
-            if result.returncode != 0:
-                print(
-                    f"\n⚠️  provision-role falló. Hasta correr "
-                    f"'./odoo provision-role {name}' la instancia no podrá "
-                    f"conectarse a Postgres."
-                )
+            sys.exit(1)
 
         print(f"\n>> Ejecutando: ./odoo start {name}")
         subprocess.run(["./odoo", "start", name], cwd=BASE_PATH, check=True)

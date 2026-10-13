@@ -19,12 +19,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 for path in (os.path.join(REPO_ROOT, "scripts"), os.path.join(REPO_ROOT, ".resources")):
     if path not in sys.path:
         sys.path.insert(0, path)
 
+import create_instance  # noqa: E402
 from create_instance import (  # noqa: E402
     build_instance_entry,
     dedicated_role_name,
@@ -195,6 +197,71 @@ class LayoutResolutionTest(unittest.TestCase):
                 "overwrite_odoo_config": {"addons": ["src/odoo-enterprise/17", "src/custom/x"]},
             }})
             self.assertEqual(resolve_enterprise_folder(data, "17.0", base), "src/odoo-enterprise/17")
+
+
+class _Proc:
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode = returncode
+        self.stdout = stdout
+
+
+class ProvisionDedicatedRoleTest(unittest.TestCase):
+    """provision-role must leave a role that can log in before the instance
+    is started; otherwise Odoo loops on 'password authentication failed'."""
+
+    DB = {"user": "odoo", "password": "pw"}
+
+    def _run(self, provision_rc, role_query, db_conf=None, db_ready=True):
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            if cmd[:2] == ["./odoo", "provision-role"]:
+                return _Proc(provision_rc)
+            if "pg_isready" in cmd:
+                return _Proc(0 if db_ready else 1)
+            if "psql" in cmd:
+                return role_query
+            return _Proc(0)
+
+        with patch.object(create_instance.subprocess, "run", side_effect=fake_run), \
+                patch.object(create_instance.time, "sleep"), \
+                patch.object(create_instance.time, "monotonic", side_effect=range(0, 1000, 30)):
+            ok = create_instance.provision_dedicated_role(
+                "acme", "v19", db_conf or dict(self.DB), "app_acme"
+            )
+        return ok, calls
+
+    def test_ok_when_role_can_login(self):
+        ok, calls = self._run(0, _Proc(0, "t\n"))
+        self.assertTrue(ok)
+        up = [c for c in calls if "up" in c]
+        self.assertEqual(up[0][-1], "db-v19", "Postgres must be started first")
+        self.assertLess(calls.index(up[0]), calls.index(["./odoo", "provision-role", "acme"]))
+
+    def test_cancelled_provision_exits_0_but_is_detected(self):
+        ok, _ = self._run(0, _Proc(0, ""))
+        self.assertFalse(ok)
+
+    def test_role_without_login_is_rejected(self):
+        ok, _ = self._run(0, _Proc(0, "f\n"))
+        self.assertFalse(ok)
+
+    def test_unverifiable_falls_back_to_exit_code(self):
+        self.assertTrue(self._run(0, _Proc(2))[0])
+        self.assertFalse(self._run(1, _Proc(2))[0])
+
+    def test_external_db_is_not_started(self):
+        ok, calls = self._run(
+            0, _Proc(0, "t"), db_conf=dict(self.DB, create_container=False)
+        )
+        self.assertTrue(ok)
+        self.assertFalse(any("up" in c for c in calls))
+
+    def test_db_that_never_gets_ready_skips_provision(self):
+        ok, calls = self._run(0, _Proc(0, "t"), db_ready=False)
+        self.assertFalse(ok)
+        self.assertNotIn(["./odoo", "provision-role", "acme"], calls)
 
 
 if __name__ == "__main__":
