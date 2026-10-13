@@ -58,3 +58,47 @@ todos los módulos instalados.
 - **WHEN** se ejecuta `update`
 - **THEN** se actualiza exactamente ese módulo, sin pasar por la lógica de
   actualización incremental ni por el flag de forzado
+
+### Requirement: Medir cobertura de muchos módulos no debe reinstalar la base cada vez
+
+Cuando se mide un módulo tras otro, el CLI DEBE poder partir de una plantilla de
+base de datos ya poblada en vez de dejar que Odoo instale los módulos base desde
+cero en cada corrida, y esa optimización NO DEBE alterar las cifras medidas.
+
+#### Scenario: Correr con `--db-template`
+- **GIVEN** una plantilla horneada con la misma versión de Odoo que el contenedor
+- **WHEN** se corre `odoo-test <modulo> --db-template <plantilla>`
+- **THEN** la base de test se clona de la plantilla, y el `pct`/`stmts`/`miss`
+  del módulo es idéntico al que se obtiene sin plantilla
+
+#### Scenario: La base clonada necesita su filestore
+- **GIVEN** que clonar una base con `createdb -T` no clona su filestore
+- **WHEN** se crea la base de test desde una plantilla
+- **THEN** el filestore de la plantilla se copia junto con la base, y se borra
+  con ella, para que ningún `ir_attachment.store_fname` apunte a un archivo
+  ausente
+
+### Requirement: Una suite trabada no debe colgar la corrida indefinidamente
+
+El CLI DEBE poder cortar una corrida que exceda un tiempo dado, sin perder la
+cobertura parcial ya recolectada y sin dejar recursos colgados.
+
+#### Scenario: Corrida que excede el `--timeout`
+- **WHEN** una corrida con `--timeout <s>` se pasa de ese tiempo
+- **THEN** el proceso se corta DENTRO del contenedor (matar el cliente de
+  `docker exec` no mataría el proceso de adentro), el reporte de cobertura
+  parcial se genera igual, el resultado queda identificado con exit code 124 y
+  `fail_reason: "timeout"`, y la base de datos y su filestore se borran
+
+### Requirement: El resultado debe permitir distinguir "sin tests" de "no instala" en una sola pasada
+
+El export de resultados DEBE incluir el estado real de instalación de cada
+módulo leído de `ir_module_module`, no solo su forma derivada.
+
+#### Scenario: Un módulo que reporta 0 % de cobertura
+- **GIVEN** un módulo cuya corrida reporta 0 %
+- **WHEN** se exporta el resultado con `--out-json`
+- **THEN** el JSON incluye `module_states` con el `state` crudo de
+  `ir_module_module`, de modo que un consumidor pueda saber si el 0 % es falta
+  de pruebas o una instalación fallida **sin volver a instalar el módulo**
+

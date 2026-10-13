@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import re
 import sys
 import os
 import subprocess
@@ -8,6 +9,23 @@ from pathlib import Path
 BASE_PATH = Path(__file__).resolve().parent.parent
 INSTANCES_FILE = BASE_PATH / "instances.json"
 CUSTOM_DIR = BASE_PATH / "src" / "custom"
+
+# El nombre termina en el servicio/contenedor 'odoo-<nombre>' de docker compose y
+# en la carpeta src/custom/<nombre>: tiene que ser un nombre de contenedor valido
+# (un '\' o un espacio colado por el terminal rompia la instancia entera).
+INSTANCE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def is_valid_instance_name(name):
+    return bool(INSTANCE_NAME_RE.match(name))
+
+
+def print_invalid_name_error(name):
+    print(f"❌ Error: El nombre de instancia {name!r} no es válido.")
+    print(
+        "💡 Usa solo letras, números, '_', '-' o '.', empezando por letra o número "
+        "(ej. proalca, 17_proalca_bs)."
+    )
 
 
 def get_used_ports(data):
@@ -125,6 +143,10 @@ def is_ssh_url(url):
 
 
 def create_instance(name, repo_url, branch, odoo_version):
+    if not is_valid_instance_name(name):
+        print_invalid_name_error(name)
+        sys.exit(1)
+
     if not is_ssh_url(repo_url):
         print(
             "❌ Error: La URL del repositorio debe ser SSH (debe empezar con 'git@' o 'ssh://')."
@@ -242,12 +264,18 @@ def create_instance(name, repo_url, branch, odoo_version):
     if "instances" not in data:
         data["instances"] = {}
 
+    # Las instancias que comparten el servicio de Postgres ('pg16') deben tener
+    # aislamiento de cron (ver enforce_cron_dbfilter_isolation en config_loader):
+    # o rol de Postgres propio + db_filter especifico, o 'max_cron_threads': 0.
+    # Por defecto se deja sin cron, igual que el resto de instancias de desarrollo;
+    # si esta necesita cron, hay que darle db_user/db_password/db_filter propios y
+    # correr './odoo provision-role <instancia>' (ver readme).
     data["instances"][name] = {
         "odoo_version": odoo_version,
         "external_port": next_port,
         "database": "pg16",
         "odoo_config": odoo_config,
-        "overwrite_odoo_config": {"addons": addons_list},
+        "overwrite_odoo_config": {"addons": addons_list, "max_cron_threads": 0},
     }
 
     with open(INSTANCES_FILE, "w") as f:
@@ -257,16 +285,16 @@ def create_instance(name, repo_url, branch, odoo_version):
         f"\n✅ Instancia '{name}' creada exitosamente en instances.json con el puerto {next_port}!"
     )
 
-    print("\n🚀 Aplicando cambios automáticamente (stop -> build -> start)...")
+    # No se detiene nada: 'build' regenera compose/nginx y 'start <instancia>'
+    # levanta solo la nueva (compose recrea nginx porque cambia su lista de
+    # puertos). Las demas instancias siguen corriendo.
+    print("\n🚀 Aplicando cambios automáticamente (build -> start)...")
     try:
-        print("\n>> Ejecutando: ./odoo stop")
-        subprocess.run(["./odoo", "stop", "all"], cwd=BASE_PATH, check=True)
-
         print("\n>> Ejecutando: ./odoo build")
         subprocess.run(["./odoo", "build"], cwd=BASE_PATH, check=True)
 
-        print("\n>> Ejecutando: ./odoo start")
-        subprocess.run(["./odoo", "start", "all"], cwd=BASE_PATH, check=True)
+        print(f"\n>> Ejecutando: ./odoo start {name}")
+        subprocess.run(["./odoo", "start", name], cwd=BASE_PATH, check=True)
 
         print(
             f"\n🎉 ¡Instancia {name} lista y ejecutándose en http://localhost:{next_port}!\n"
@@ -280,8 +308,14 @@ if __name__ == "__main__":
     print("\n=== Creador de Instancias Odoo ===")
     try:
         name = sys.argv[1] if len(sys.argv) > 1 else ""
+        if name and not is_valid_instance_name(name):
+            print_invalid_name_error(name)
+            sys.exit(1)
         while not name:
             name = input("📦 Ingresa el nombre de la instancia (ej. micliente): ").strip()
+            if name and not is_valid_instance_name(name):
+                print_invalid_name_error(name)
+                name = ""
 
         repo_url = sys.argv[2] if len(sys.argv) > 2 else ""
         while not repo_url or not is_ssh_url(repo_url):

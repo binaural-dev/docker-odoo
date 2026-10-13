@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Convierte un dataset-<fecha>.json (salida de coverage-sweep-aggregate) en una
+linea base (baseline-<fecha>.json) para el barrido siguiente.
+
+El dataset guarda dos criterios por modulo: pct/stmts/miss (sin contar los
+archivos de test) y pct_all/stmts_all/miss_all (contandolos). La linea base de
+agosto se midio contando los archivos de test y build_progress compara
+base["pct"] contra pct_all, asi que aqui se promueve el criterio *_all a los
+campos sin sufijo. Las versiones de la base son las etiquetas de linea
+(17.0, l10nve_17.0, 19.0), de modo que --baseline-map es LINEA=LINEA.
+"""
+import argparse
+import json
+
+ap = argparse.ArgumentParser(description=__doc__,
+                             formatter_class=argparse.RawDescriptionHelpFormatter)
+ap.add_argument("--dataset", required=True)
+ap.add_argument("--out", required=True)
+args = ap.parse_args()
+
+ds = json.load(open(args.dataset, encoding="utf8"))
+versions = {}
+for label, block in ds["lines"].items():
+    mods = []
+    for m in block["modules"]:
+        m = dict(m)
+        for k in ("pct", "stmts", "miss", "klass"):
+            m[k] = m.pop(f"{k}_all", m[k])
+        mods.append(m)
+    versions[label] = {
+        "repos": block["repos"], "modules": mods, "excluded": block["excluded"],
+        "summary": block["summary_all"], "by_repo": block["by_repo_all"],
+    }
+json.dump({"schema_version": 1, "source": f"dataset {args.dataset}",
+           "data": {"versions": versions, "measured_at": ds["measured_at"],
+                    "findings": ds.get("findings")}},
+          open(args.out, "w", encoding="utf8"), ensure_ascii=False)
+print(f"✅ {args.out}: " + ", ".join(f"{k}={len(v['modules'])}" for k, v in versions.items()))

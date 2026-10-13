@@ -22,6 +22,8 @@ sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 
 from generators.config_loader import (
     load_config,
+    enforce_cron_dbfilter_isolation,
+    cron_dbfilter_isolation_warning,
     resolve_instance_config,
     resolve_db_config,
     get_db_host,
@@ -34,6 +36,12 @@ from generators.compose_generator import generate_compose
 from generators.nginx_generator import generate_nginx_config
 
 COMPOSE_FILE = "docker-compose.generated.yml"
+
+# Comandos que dejan un servidor Odoo corriendo (con hilos de cron) contra el
+# servicio de Postgres compartido, y que por eso exigen aislamiento real por
+# instancia antes de ejecutarse. 'build' entra porque genera el compose y las
+# configs con las que despues arranca todo.
+ACTIONS_REQUIRING_DB_ISOLATION = {"build", "start", "restart"}
 
 
 def _docker_compose(*args):
@@ -147,7 +155,7 @@ def audit_db_filter_drift(config):
             expected_user = inst_conf.get("db_user")
 
             if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
-                continue  # ya lo reporta _validate_cron_dbfilter_isolation, no duplicar
+                continue  # ya lo reporta enforce_cron_dbfilter_isolation, no duplicar
 
             try:
                 matched = [r for r in rows if re.match(db_filter, r["datname"])]
@@ -1499,6 +1507,20 @@ def main():
     test_p.add_argument("--tags", default="all", help="Ver ./scripts/odoo-test -h")
     test_p.add_argument("--recursive", action="store_true", help="Calcula el arbol completo de dependencias")
     test_p.add_argument("--exclude", default="", help="Modulos a omitir del arbol (con --recursive)")
+    test_p.add_argument(
+        "--db-template", default=None, metavar="BASE",
+        help="Clona la base de test desde esta plantilla (createdb -T) en vez "
+             "de instalarla desde cero. Ver ./scripts/odoo-test -h."
+    )
+    test_p.add_argument(
+        "--timeout", type=int, default=None, metavar="SEGUNDOS",
+        help="Corta la corrida si excede SEGUNDOS (exit code 124). Ver "
+             "./scripts/odoo-test -h."
+    )
+    test_p.add_argument(
+        "--no-confirm", action="store_true",
+        help="Salta las confirmaciones interactivas de --recursive (para automatizacion/CI)"
+    )
     test_p.add_argument("--no-rm-db", action="store_true", help="No borra la base de datos al terminar")
     test_p.add_argument("--dry-run", action="store_true", help="Solo muestra el comando sin ejecutarlo")
     test_p.add_argument(
@@ -1544,6 +1566,19 @@ def main():
     # Load config for all commands
     config = load_config(BASE_PATH)
 
+    # El aislamiento cron/db_filter se exige solo en los comandos que dejan un
+    # servidor Odoo corriendo con cron sobre el Postgres compartido -- son los
+    # unicos que crean el riesgo. 'update' no entra: corre por docker exec en
+    # un contenedor que ya paso por 'start', y con --workers=0 --stop-after-init
+    # no levanta cron. El resto ('list', 'logs', 'psql', 'stop', 'remove',
+    # backups...) solo recibe el aviso: bloquearlos dejaba el CLI entero
+    # inutilizable por una config que no estaban por usar. El bloqueo va mas
+    # abajo, despues de resolver la instancia, para poder acotarlo a ella.
+    if args.action not in ACTIONS_REQUIRING_DB_ISOLATION:
+        warning = cron_dbfilter_isolation_warning(config)
+        if warning:
+            print(warning, file=sys.stderr)
+
     actions_with_instance = {
         "start", "stop", "restart", "logs", "remove",
         "fix-files", "init", "bash", "psql", "pw", "update", "test"
@@ -1551,6 +1586,18 @@ def main():
     
     if args.action in actions_with_instance and getattr(args, "instance", None) is None:
         args.instance = prompt_for_instance(config, args.action)
+
+    if args.action in ACTIONS_REQUIRING_DB_ISOLATION:
+        # Con instancia concreta el chequeo se acota a ella, para que migrar el
+        # grupo pueda ser incremental en vez de todo-o-nada. Sin instancia
+        # (build, o start/restart sobre todas) se exige al grupo completo.
+        scope = [args.instance] if getattr(args, "instance", None) else None
+        try:
+            enforce_cron_dbfilter_isolation(config, scope)
+        except ValueError as exc:
+            print("\n\033[1;31m=== ❌ AISLAMIENTO DE BASE DE DATOS ===\033[0m\n")
+            print(exc)
+            sys.exit(1)
 
     # Dispatch
     if args.action == "build":
@@ -1656,6 +1703,12 @@ def main():
             cmd.append("--recursive")
         if args.exclude:
             cmd += ["--exclude", args.exclude]
+        if args.db_template:
+            cmd += ["--db-template", args.db_template]
+        if args.timeout:
+            cmd += ["--timeout", str(args.timeout)]
+        if args.no_confirm:
+            cmd.append("--no-confirm")
         if args.no_rm_db:
             cmd.append("--no-rm-db")
         if args.out_coverage_json:

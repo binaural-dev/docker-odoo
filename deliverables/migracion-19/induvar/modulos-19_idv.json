@@ -1,0 +1,74 @@
+{
+ "base_de_datos": "19_idv",
+ "auditado_en": "2026-09-29T16:43:24+00:00",
+ "hallazgos": {
+  "pendientes": [
+   [
+    "to upgrade",
+    "binaural_simplify_access_management"
+   ],
+   [
+    "to upgrade",
+    "ind_budget_report"
+   ],
+   [
+    "to upgrade",
+    "induvar_foreing_crossovered_budget"
+   ],
+   [
+    "to upgrade",
+    "Induvar_group_extra_accounts"
+   ],
+   [
+    "to upgrade",
+    "induvar_invoice"
+   ],
+   [
+    "to upgrade",
+    "induvar_mrp"
+   ],
+   [
+    "to upgrade",
+    "induvar_mrp_reports"
+   ],
+   [
+    "to upgrade",
+    "induvar_product"
+   ],
+   [
+    "to upgrade",
+    "induvar_product_expiry"
+   ],
+   [
+    "to upgrade",
+    "induvar_quality"
+   ],
+   [
+    "to upgrade",
+    "induvar_quality_mrp_reports"
+   ],
+   [
+    "to upgrade",
+    "induvar_quality_stock"
+   ],
+   [
+    "to upgrade",
+    "induvar_sale"
+   ],
+   [
+    "to upgrade",
+    "induvar_stock"
+   ],
+   [
+    "to upgrade",
+    "induvar_stock_lot"
+   ],
+   [
+    "to upgrade",
+    "induvar_stock_reports"
+   ]
+  ],
+  "sin_migrar": [],
+  "dependencias_rotas": []
+ }
+}

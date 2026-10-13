@@ -1,0 +1,651 @@
+<title>Rehacer el barrido de cobertura</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    color-scheme: light dark;
+    --paper: #F6F8F8;
+    --card: #FFFFFF;
+    --sunk: #EDF1F2;
+    --term: #14201F;
+    --term-ink: #DCE6E4;
+    --ink: #111A1C;
+    --ink-2: #3D4A4D;
+    --ink-3: #6D7A7D;
+    --line: #DCE3E4;
+    --line-strong: #C0CCCE;
+    --acc: #1F5C6B;
+    --acc-soft: #E2EEF0;
+    --warn: #8A5A0B;
+    --warn-soft: #F8EFDC;
+    --crit: #9C3428;
+    --crit-soft: #F8E7E4;
+    --ok: #2C6B52;
+    --ok-soft: #E3F0E9;
+    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0D1315;
+      --card: #141D1F;
+      --sunk: #1A2426;
+      --term: #0A1112;
+      --term-ink: #CFDCDA;
+      --ink: #E6EDEE;
+      --ink-2: #B2C0C2;
+      --ink-3: #829093;
+      --line: #232F31;
+      --line-strong: #354548;
+      --acc: #5FA8B8;
+      --acc-soft: #102A31;
+      --warn: #CFA155;
+      --warn-soft: #2A2213;
+      --crit: #DD8478;
+      --crit-soft: #2C1A17;
+      --ok: #6FBF95;
+      --ok-soft: #16291F;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0D1315;
+    --card: #141D1F;
+    --sunk: #1A2426;
+    --term: #0A1112;
+    --term-ink: #CFDCDA;
+    --ink: #E6EDEE;
+    --ink-2: #B2C0C2;
+    --ink-3: #829093;
+    --line: #232F31;
+    --line-strong: #354548;
+    --acc: #5FA8B8;
+    --acc-soft: #102A31;
+    --warn: #CFA155;
+    --warn-soft: #2A2213;
+    --crit: #DD8478;
+    --crit-soft: #2C1A17;
+    --ok: #6FBF95;
+    --ok-soft: #16291F;
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 0 24px 100px; }
+  .num { font-variant-numeric: tabular-nums; }
+  p { max-width: 68ch; }
+
+  /* ---------- cabecera ---------- */
+  header.top { padding: 52px 0 0; }
+  .kicker {
+    font-family: var(--mono); font-size: 11px; font-weight: 500; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--acc); margin: 0 0 14px;
+  }
+  h1 {
+    font-size: clamp(30px, 4.2vw, 42px); font-weight: 600; line-height: 1.1;
+    letter-spacing: -.02em; margin: 0 0 14px; text-wrap: balance;
+  }
+  .standfirst { color: var(--ink-2); font-size: 17px; margin: 0 0 30px; max-width: 62ch; }
+
+  .facts {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px; background: var(--line); border: 1px solid var(--line);
+    margin: 0 0 14px;
+  }
+  .facts > div { background: var(--card); padding: 14px 16px; }
+  .facts dt {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0 0 6px;
+  }
+  .facts dd { margin: 0; font-size: 22px; font-weight: 600; }
+  .facts dd small { display: block; font-size: 12px; font-weight: 400; color: var(--ink-3); letter-spacing: 0; }
+
+  /* ---------- secciones ---------- */
+  h2 {
+    font-size: 15px; font-weight: 600; font-family: var(--mono); letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-3);
+    margin: 56px 0 18px; padding-bottom: 10px; border-bottom: 1px solid var(--line-strong);
+  }
+  h3 { font-size: 19px; font-weight: 600; margin: 0 0 6px; letter-spacing: -.01em; }
+
+  /* ---------- pasos ---------- */
+  .step { display: grid; grid-template-columns: 42px 1fr; gap: 18px; margin: 0 0 40px; }
+  .step .n {
+    font-family: var(--mono); font-size: 15px; font-weight: 600; color: var(--acc);
+    background: var(--acc-soft); border-radius: 3px; height: 34px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .step .body > p:first-of-type { margin-top: 6px; }
+  .step .body > :last-child { margin-bottom: 0; }
+  .once {
+    display: inline-block; font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ok); background: var(--ok-soft);
+    padding: 2px 7px; border-radius: 2px; margin-left: 8px; vertical-align: 2px;
+  }
+
+  /* ---------- bloques de comando ---------- */
+  .cmd { position: relative; margin: 14px 0; }
+  .cmd pre {
+    margin: 0; background: var(--term); color: var(--term-ink);
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.65;
+    padding: 15px 58px 15px 16px; border-radius: 4px;
+    overflow-x: auto; white-space: pre;
+  }
+  .cmd pre .c { color: #7F9490; }
+  .cmd .copy {
+    position: absolute; top: 9px; right: 9px;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
+    background: rgba(255,255,255,.09); color: var(--term-ink);
+    border: 1px solid rgba(255,255,255,.16); border-radius: 3px;
+    padding: 4px 9px; cursor: pointer;
+  }
+  .cmd .copy:hover { background: rgba(255,255,255,.18); }
+  .cmd .copy:focus-visible { outline: 2px solid var(--acc); outline-offset: 2px; }
+  .cmd .copy.done { color: #8FD3AE; border-color: #8FD3AE; }
+
+  .out {
+    font-family: var(--mono); font-size: 12px; line-height: 1.6; color: var(--ink-2);
+    background: var(--sunk); border-left: 2px solid var(--line-strong);
+    padding: 11px 14px; margin: 10px 0 0; overflow-x: auto; white-space: pre;
+  }
+  .out b { color: var(--ink); font-weight: 600; }
+  .outlabel {
+    font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); margin: 14px 0 0;
+  }
+
+  /* ---------- tablas ---------- */
+  .tw { overflow-x: auto; border: 1px solid var(--line); background: var(--card); margin: 16px 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+  thead th {
+    background: var(--sunk); font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  td.r, th.r { text-align: right; }
+  code {
+    font-family: var(--mono); font-size: 12.5px;
+    background: var(--sunk); padding: 1px 5px; border-radius: 2px;
+  }
+  td code { background: none; padding: 0; }
+
+  /* ---------- avisos ---------- */
+  .note { border-left: 3px solid var(--acc); background: var(--card); padding: 14px 18px; margin: 16px 0; }
+  .note.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+  .note.warn strong { color: var(--warn); }
+  .note p { margin: 0; }
+  .note p + p { margin-top: 8px; }
+
+  .trap { border: 1px solid var(--line); background: var(--card); padding: 18px 20px; margin: 0 0 14px; }
+  .trap h3 { font-size: 16px; display: flex; align-items: baseline; gap: 10px; }
+  .trap h3 .sym {
+    font-family: var(--mono); font-size: 11px; color: var(--crit);
+    background: var(--crit-soft); padding: 2px 7px; border-radius: 2px; white-space: nowrap;
+  }
+  .trap p { margin: 8px 0 0; font-size: 14px; color: var(--ink-2); }
+  .trap .fix { color: var(--ink); }
+  .trap .fix strong { color: var(--ok); }
+
+  ul { max-width: 68ch; padding-left: 22px; }
+  li { margin-bottom: 7px; }
+  li::marker { color: var(--ink-3); }
+
+  footer {
+    margin-top: 64px; padding-top: 18px; border-top: 1px solid var(--line);
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <p class="kicker">Binaural · docker-odoo · runbook</p>
+    <h1>Rehacer el barrido de cobertura</h1>
+    <p class="standfirst">
+      Cómo volver a producir el informe de cobertura de <code>integra-addons</code> y
+      <code>odoo-venezuela</code>: 564 módulos, cada uno instalado en su propia base y con su
+      suite corrida aislada. Siete pasos, y las cuatro trampas que cuestan medio día si nadie
+      las avisó.
+    </p>
+
+    <dl class="facts">
+      <div><dt>Módulos</dt><dd class="num">564<small>en tres líneas</small></dd></div>
+      <div><dt>Reloj</dt><dd class="num">~2,5 h<small>3 barridos en paralelo</small></dd></div>
+      <div><dt>Máquina</dt><dd class="num">11,2 h<small>suma de las corridas</small></dd></div>
+      <div><dt>Preparación</dt><dd class="num">~25 min<small>solo la primera vez</small></dd></div>
+      <div><dt>Disco</dt><dd class="num">~15 GB<small>clones y volúmenes</small></dd></div>
+    </dl>
+    <p style="font-size:13px;color:var(--ink-3);margin:0">
+      Medido el 7 de septiembre de 2026 en <code>multi-docker-odoo</code> @ <code>31fa578</code>,
+      con 12 CPUs y 19 GB de RAM.
+    </p>
+  </header>
+
+  <h2>Qué se mide</h2>
+  <p>
+    Tres líneas de producto vivas, cada una sobre la cabeza de su rama base. Los módulos de
+    <code>third-party-addons</code> entran como fuente de dependencias pero <strong>no se
+    miden</strong>.
+  </p>
+  <div class="tw">
+    <table>
+      <thead><tr>
+        <th>Línea</th><th>integra-addons</th><th>odoo-venezuela</th><th>Odoo</th>
+        <th class="r">Medibles</th><th class="r">Excluidos</th><th class="r">Máquina</th>
+      </tr></thead>
+      <tbody>
+        <tr><td><code>17.0</code></td><td><code>17.0</code></td><td>—</td><td>17.0</td>
+            <td class="r num">166</td><td class="r num">0</td><td class="r num">3,1 h</td></tr>
+        <tr><td><code>l10nve_17.0</code></td><td><code>l10nve_17.0</code></td><td><code>17.0</code></td><td>17.0</td>
+            <td class="r num">196</td><td class="r num">1</td><td class="r num">4,7 h</td></tr>
+        <tr><td><code>19.0</code></td><td><code>19.0</code></td><td><code>19.0</code></td><td>19.0</td>
+            <td class="r num">202</td><td class="r num">14</td><td class="r num">3,4 h</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>
+    «Excluidos» son módulos cuya dependencia no existe en el <code>addons_path</code>: no pueden
+    instalarse, así que no hay nada que medir. El barrido los descarta <em>antes</em> de correr,
+    leyendo los manifests, en vez de gastarles el tiempo límite.
+  </p>
+
+  <h2>Antes de empezar</h2>
+  <ul>
+    <li><strong>RAM es el cuello de botella</strong>, no el disco. Cada corrida pica 1–2 GB.
+      Con ~8 GB libres entran 6 corridas concurrentes; con menos, bajá <code>--jobs</code>.</li>
+    <li>Docker tiene que estar en un disco con espacio. Acá vive en
+      <code>/home/binaural80/docker-data-root</code>; <code>/var</code> está casi lleno pero
+      Docker no lo usa.</li>
+    <li>Las tres líneas comparten un solo Postgres (<code>db-pg16</code>), y eso condiciona
+      varias decisiones más abajo.</li>
+    <li>Se necesita acceso SSH a los repos de <code>binaural-dev</code> para el
+      <code>fetch</code> del paso 1.</li>
+  </ul>
+
+  <h2>Los siete pasos</h2>
+
+  <div class="step">
+    <div class="n">1</div>
+    <div class="body">
+      <h3>Checkouts pineados<span class="once">una sola vez</span></h3>
+      <p>
+        El barrido no debe correr sobre la instancia de trabajo de nadie: los submódulos de una
+        instancia están en la rama que su dueño necesita, y una corrida de horas la dejaría con
+        otro código. Se clonan aparte, con <code>--local</code> para no bajar objetos por red
+        (usa hardlinks: las tres líneas ocupan 2,7 GB en total).
+      </p>
+      <p>
+        El <code>fetch</code> sí es necesario: los clones de origen suelen tener el fetch viejo y
+        te llevarías una rama desactualizada sin enterarte.
+      </p>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre><span class="c"># &lt;origen&gt; puede ser cualquier clon que ya tengas en disco, ej. src/custom/thk/integra-addons</span>
+clone_pin() {
+  local src="$1" dest="$2" branch="$3"
+  local url; url=$(git -C "$src" remote get-url origin)
+  git clone --quiet --local --no-checkout "$src" "$dest"
+  git -C "$dest" remote set-url origin "$url"
+  git -C "$dest" fetch --quiet origin "$branch" --tags
+  git -C "$dest" checkout --quiet -B "$branch" FETCH_HEAD
+}
+
+mkdir -p src/_sweep
+
+<span class="c"># línea 17.0 — integra sin la localización</span>
+clone_pin src/custom/thk/integra-addons     src/_sweep/17.0/integra-addons        17.0
+clone_pin src/third-party-addons            src/_sweep/17.0/third-party-addons    17.0
+
+<span class="c"># línea l10nve_17.0 — la localización venezolana sobre 17</span>
+clone_pin src/custom/thk/integra-addons     src/_sweep/l10nve_17.0/integra-addons      l10nve_17.0
+clone_pin src/custom/thk/odoo-venezuela     src/_sweep/l10nve_17.0/odoo-venezuela      17.0
+clone_pin src/third-party-addons            src/_sweep/l10nve_17.0/third-party-addons  17.0
+
+<span class="c"># línea 19.0</span>
+clone_pin src/custom/thk/integra-addons     src/_sweep/19.0/integra-addons        19.0
+clone_pin src/custom/thk/odoo-venezuela     src/_sweep/19.0/odoo-venezuela        19.0
+clone_pin src/third-party-addons            src/_sweep/19.0/third-party-addons    19.0</pre></div>
+      <p style="font-size:13.5px;color:var(--ink-3)">
+        <code>src/</code> está en <code>.gitignore</code>, así que nada de esto aparece en
+        <code>git status</code>.
+      </p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">2</div>
+    <div class="body">
+      <h3>Tres instancias dedicadas<span class="once">una sola vez</span></h3>
+      <p>
+        A mano en <code>instances.json</code>. <strong>No sirve <code>./odoo new</code></strong>:
+        exige URL SSH de un repo de proyecto con <code>.gitmodules</code>, pide el puerto por
+        <code>input()</code>, no escribe <code>max_cron_threads</code> — y al final corre
+        <code>stop all → build → start all</code>, que reiniciaría las instancias de todos.
+      </p>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre><span class="c">// instances.json → "instances". Repetir para cov_17 (8101) y cov_l10nve_17 (8102).</span>
+"cov_19": {
+  "odoo_version": "19.0",
+  "external_port": 8103,
+  "database": "pg16",
+  "odoo_config": "default",
+  "overwrite_odoo_config": {
+    "addons": [
+      "src/enterprise-19",
+      "src/_sweep/19.0/integra-addons",
+      "src/_sweep/19.0/odoo-venezuela",
+      "src/_sweep/19.0/third-party-addons"
+    ],
+    "max_cron_threads": 0,
+    "workers": 0,
+    "mem_limit": "8g",
+    "list_db": false,
+    "db_filter": "^covs_19_"
+  }
+}</pre></div>
+      <p>Cada campo está por una razón:</p>
+      <ul>
+        <li><code>max_cron_threads: 0</code> — <strong>obligatorio</strong>. Sin esto la
+          validación de aislamiento hace fallar el <code>build</code>, porque varias instancias
+          comparten Postgres y el cron no respeta el <code>db_filter</code>.</li>
+        <li><code>mem_limit: "8g"</code> — el default son 4 g, y un OOM dentro del contenedor
+          puede matar el PID 1. Con 8 g entran 3 corridas.</li>
+        <li><code>list_db: false</code> + <code>db_filter</code> — mantienen las bases del
+          barrido fuera del selector de todo el mundo.</li>
+      </ul>
+      <div class="note warn">
+        <p><strong>La clave es <code>db_filter</code>, no <code>dbfilter</code>.</strong>
+        El generador lee <code>db_filter</code> (<code>compose_generator.py:240</code>); un
+        <code>dbfilter</code> se ignora en silencio. Hay una instancia en producción con ese
+        error hoy.</p>
+      </div>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre><span class="c"># build regenera compose y nginx pero NO recrea los contenedores que están corriendo.</span>
+<span class="c"># --no-confirm ademas SALTEA la corrección automática de ownership: no toca nada de nadie.</span>
+./odoo build --no-confirm
+
+<span class="c"># levantar solo los tres nuevos</span>
+docker compose -f docker-compose.generated.yml up -d --no-deps \
+    odoo-cov_17 odoo-cov_l10nve_17 odoo-cov_19
+
+<span class="c"># coverage está para root en la imagen 17.0 pero NO en la 19.0, y el comando de</span>
+<span class="c"># medición empieza con `pip3 install && ...`: si pip falla, TODOS los módulos</span>
+<span class="c"># quedan marcados como fallidos. Pre-calentarlo una vez.</span>
+docker exec -u root odoo-cov_19 pip3 install --quiet coverage</pre></div>
+      <p class="outlabel">verificar sin tocar Docker ni la base</p>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre>./odoo test cov_19 binaural_brand --dry-run</pre></div>
+      <p class="out">Debe imprimir el comando con el contenedor <b>odoo-cov_19</b> y el
+<b>--source</b> apuntando a src/_sweep/19.0/…</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">3</div>
+    <div class="body">
+      <h3>Hornear las plantillas<span class="once">una sola vez</span></h3>
+      <p>
+        Sin plantilla, cada módulo arranca instalando <code>base</code>, <code>web</code>,
+        <code>account</code>… desde cero. Con plantilla, ese arranque son segundos. Medido sobre
+        un módulo chico: <strong>73 s sin plantilla contra 25 s con plantilla</strong>, y la
+        diferencia crece con el peso del árbol de dependencias.
+      </p>
+      <p>
+        Una por versión de Odoo — el esquema no es compatible entre versiones. Las dos líneas de
+        17 comparten <code>tpl_cov_17</code>, porque la plantilla solo trae módulos del core.
+      </p>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre>./scripts/coverage-sweep template --instance cov_17 --db tpl_cov_17
+./scripts/coverage-sweep template --instance cov_19 --db tpl_cov_19</pre></div>
+      <p class="out">✅ Plantilla 'tpl_cov_19' lista en 91s: <b>111 módulos instalados</b>, 65 MB, blindada.</p>
+      <p>
+        «Blindada» significa <code>IS_TEMPLATE true</code> + <code>ALLOW_CONNECTIONS false</code>.
+        Con <code>datallowconn=false</code> sigue sirviendo como origen de
+        <code>CREATE DATABASE</code> —es el estado de <code>template0</code>— pero deja de poder
+        abrirse, así que nadie la modifica por accidente y el error <em>«is being accessed by
+        other users»</em> se vuelve inalcanzable. Para rehornearla,
+        <code>--force</code> revierte las dos banderas antes de borrarla.
+      </p>
+      <p>
+        Los 9 módulos de la plantilla (<code>base, web, mail, contacts, account, product, stock,
+        sale, purchase</code>) son parte del método: cambiarlos cambia el estado de la base que
+        ven los tests <code>at_install</code>, y rompe la comparabilidad con las mediciones
+        anteriores.
+      </p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">4</div>
+    <div class="body">
+      <h3>Los tres barridos</h3>
+      <p>
+        Se pueden correr en paralelo, en terminales distintas o con
+        <code>&amp;</code>. Reparte <code>--jobs</code> según la RAM libre: la suma de los tres es
+        la concurrencia real.
+      </p>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre>./scripts/coverage-sweep run --instance cov_17 --line 17.0 --slug 17 \
+    --repos integra-addons \
+    --out logs/coverage-sweep/2026-09-07_17.0 \
+    --db-template tpl_cov_17 --jobs 2 --timeout 2400
+
+./scripts/coverage-sweep run --instance cov_l10nve_17 --line l10nve_17.0 --slug l10nve17 \
+    --repos integra-addons,odoo-venezuela \
+    --out logs/coverage-sweep/2026-09-07_l10nve_17.0 \
+    --db-template tpl_cov_17 --jobs 2 --timeout 2400
+
+./scripts/coverage-sweep run --instance cov_19 --line 19.0 --slug 19 \
+    --repos integra-addons,odoo-venezuela \
+    --out logs/coverage-sweep/2026-09-07_19.0 \
+    --db-template tpl_cov_19 --jobs 3 --timeout 2400</pre></div>
+      <p class="out">→ Escaneando manifests en odoo-cov_19...
+   216 módulos en los repos medidos · <b>202 medibles</b> · 14 descartados por dependencias
+   0 ya medidos (se saltean) · 202 por medir
+  [1/202] · binaural_account_asset    53% sin_tests   25s | ETA 1h02m</p>
+      <ul>
+        <li><strong><code>--slug</code> tiene que casar con el <code>db_filter</code></strong> de
+          la instancia (<code>19</code> ↔ <code>^covs_19_</code>), o las bases del barrido le
+          aparecen a todos en el selector.</li>
+        <li><strong><code>--timeout 2400</code> es detector de colgadas, no presupuesto.</strong>
+          Ningún módulo lo alcanzó; el más lento tardó 850 s.</li>
+        <li><strong>Es reanudable.</strong> Si se corta, el mismo comando retoma donde quedó. La
+          clave de caché es un fingerprint de módulo + commit del repo + plantilla + timeout, así
+          que si el código cambió el módulo se vuelve a medir en vez de devolver un número viejo.
+          Este barrido se corrió en tres tramos y sumó 564/564.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">5</div>
+    <div class="body">
+      <h3>Auditar y rehacer lo que salga marcado</h3>
+      <p>
+        <strong>Este paso no es opcional.</strong> La auditoría detecta mediciones que describen
+        archivos de otro módulo — datos falsos que se ven perfectamente válidos. En este barrido
+        marcó <strong>17 de 564</strong>.
+      </p>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre>for L in 17.0 l10nve_17.0 19.0; do
+  ./scripts/coverage-sweep status --out logs/coverage-sweep/2026-09-07_$L
+done</pre></div>
+      <p class="out">  medidos 202/202 · descartados por dependencias 14 · errores 0 · timeouts 0
+  ⚠️  6 medición(es) describen archivos de otro módulo y hay que rehacerlas: binaural_auth_sign_fix, …
+     Volvé a correr con: <b>--redo --only binaural_auth_sign_fix,…</b></p>
+      <p>
+        El propio mensaje trae el comando armado. Se le agregan <code>--redo --only …</code> al
+        <code>run</code> de esa línea y se vuelve a auditar hasta que quede limpio:
+      </p>
+      <p class="out">  auditoría: cada medición describe solo archivos de su módulo ✅</p>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">6</div>
+    <div class="body">
+      <h3>Dataset e informe</h3>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre>./scripts/coverage-sweep-aggregate \
+    --run 17.0=logs/coverage-sweep/2026-09-07_17.0 \
+    --run l10nve_17.0=logs/coverage-sweep/2026-09-07_l10nve_17.0 \
+    --run 19.0=logs/coverage-sweep/2026-09-07_19.0 \
+    --baseline deliverables/coverage-sweep/baseline-2026-08.json \
+    --baseline-map 17.0=17 --baseline-map l10nve_17.0=17 --baseline-map 19.0=19 \
+    --diverged l10nve_17.0:integra-addons \
+    --measured-at "7 de septiembre de 2026" \
+    --out deliverables/coverage-sweep/dataset-2026-09.json
+
+./scripts/coverage-sweep-report \
+    --dataset deliverables/coverage-sweep/dataset-2026-09.json \
+    --out deliverables/coverage-sweep/informe-2026-09.html \
+    --title "Cobertura de las tres líneas"</pre></div>
+      <p>
+        <code>--baseline-map</code> dice a qué versión de la línea base corresponde cada línea de
+        hoy, y <code>--diverged</code> marca los <code>(línea, repo)</code> cuya rama se bifurcó
+        de la que se midió antes: su delta existe pero no es like-for-like, y el informe lo
+        declara en vez de dejar que se lea como progreso.
+      </p>
+      <p class="outlabel">antes de publicar cualquier comparación</p>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre>./scripts/coverage-sweep-aggregate --selftest \
+    --baseline deliverables/coverage-sweep/baseline-2026-08.json</pre></div>
+      <p>
+        Recalcula los agregados de la línea base desde sus propios módulos y los compara contra
+        los guardados. Es la prueba de que la aritmética y la precedencia de la clasificación
+        dan los mismos números que el informe anterior. Debe salir todo ✅.
+      </p>
+      <div class="note">
+        <p>Si no hay línea base, <code>--baseline</code> se omite y el dataset sale solo con el
+        estado actual, sin sección de progreso. El resto funciona igual.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="step">
+    <div class="n">7</div>
+    <div class="body">
+      <h3>Publicar</h3>
+      <p>
+        El HTML es autocontenido: lleva el dataset embebido y arma las tablas del lado del
+        cliente. Se puede abrir suelto, mandar por correo, o publicar como artifact. Si no hay
+        navegador a mano para revisarlo, se puede <em>ejecutar</em> su JavaScript contra un DOM
+        simulado con <code>node</code> — detecta errores de runtime, que es lo que realmente
+        importa antes de que lo abra un gerente.
+      </p>
+      <div class="cmd"><button class="copy" type="button">copiar</button><pre>ls -la deliverables/coverage-sweep/informe-2026-09.html</pre></div>
+    </div>
+  </div>
+
+  <h2>Las cuatro trampas</h2>
+  <p>
+    Las cuatro produjeron datos incorrectos que se veían válidos. Todas están corregidas en la
+    herramienta; van acá porque explican por qué el código tiene las defensas que tiene, y
+    conviene no «simplificarlas» después.
+  </p>
+
+  <div class="trap">
+    <h3>El archivo de datos de coverage <span class="sym">17 mediciones falsas</span></h3>
+    <p>
+      <code>coverage</code> guarda sus datos en <code>.coverage</code> en el directorio de
+      trabajo, que dentro del contenedor es el mismo para todas las corridas. Dos módulos
+      midiéndose en paralelo compartían el archivo: uno hacía <code>erase</code> mientras el otro
+      escribía, y el reporte de uno terminaba describiendo los archivos del otro.
+    </p>
+    <p>
+      Se descubrió porque dos módulos distintos daban cifras idénticas: 939 sin cubrir de 1.188.
+    </p>
+    <p class="fix">
+      <strong>Corregido:</strong> <code>COVERAGE_FILE</code> por corrida. Y la auditoría del paso
+      5 existe justamente para detectar el residuo.
+    </p>
+  </div>
+
+  <div class="trap">
+    <h3>Nombres de base truncados <span class="sym">colisión garantizada</span></h3>
+    <p>
+      Postgres corta en 63 caracteres, así que el nombre del módulo hay que recortarlo. Pero
+      recortarlo a secas colisiona: hay 5–6 pares por línea que comparten los primeros 30
+      caracteres (<code>binaural_subsidiary_payment_advance</code> y
+      <code>…_advance_igtf</code>) y <strong>además quedan adyacentes en orden alfabético</strong>,
+      o sea que la cola los despacha juntos. Los dos apuntaban a la misma base.
+    </p>
+    <p class="fix">
+      <strong>Corregido:</strong> al recorte se le suma un hash del nombre completo, así la
+      unicidad no depende de cuánto se recortó.
+    </p>
+  </div>
+
+  <div class="trap">
+    <h3>Emparejar versiones al comparar <span class="sym">deltas de 70 puntos</span></h3>
+    <p>
+      La línea base tiene una fila por módulo <em>y por versión</em>. Indexarla solo por
+      <code>(repo, módulo)</code> hace que una versión sobrescriba la otra, y entonces se compara
+      la 17 de hoy contra la 19 de agosto. Eso produce «caídas» de 98 % a 26 % que no son caídas:
+      son dos versiones distintas del mismo módulo.
+    </p>
+    <p class="fix">
+      <strong>Corregido:</strong> la clave es <code>(versión, repo, módulo)</code> y
+      <code>--baseline-map</code> es obligatorio y explícito, para que nadie lo haga por
+      accidente.
+    </p>
+  </div>
+
+  <div class="trap">
+    <h3><code>--only</code> y la lista de trabajo <span class="sym">excluidos perdidos</span></h3>
+    <p>
+      Una corrida con <code>--only</code> calculaba una lista de trabajo de solo esos módulos y
+      sobrescribía la del barrido completo — que es de donde el informe saca los módulos que no
+      se pudieron medir por dependencias. En la línea 19.0 son 14.
+    </p>
+    <p class="fix">
+      <strong>Corregido:</strong> con <code>--only</code> la lista de trabajo se conserva.
+    </p>
+  </div>
+
+  <h2>Limitación conocida</h2>
+  <p>
+    El escaneo de módulos los identifica por el nombre de su carpeta. Cuando un mismo nombre
+    existe en los dos repositorios de una línea —hoy pasa solo con
+    <code>l10n_binaural</code>— se mide uno de los dos y el otro queda fuera. Son 2 módulos
+    sobre 564. Arreglarlo requiere cambiar el escaneo, que lo comparte
+    <code>scripts/odoo-test</code>.
+  </p>
+
+  <h2>Al terminar</h2>
+  <p>
+    Los tres contenedores <code>cov_*</code> y sus checkouts se pueden dejar: reusarlos hace que
+    el próximo informe arranque en el paso 4. Si hace falta el espacio:
+  </p>
+  <div class="cmd"><button class="copy" type="button">copiar</button><pre><span class="c"># bases de barrido que hayan quedado colgadas (acotado a una línea con --slug)</span>
+./scripts/coverage-sweep clean --instance cov_19 --slug 19 --yes
+
+<span class="c"># bajar los contenedores del barrido, sin tocar los demás</span>
+docker compose -f docker-compose.generated.yml stop odoo-cov_17 odoo-cov_l10nve_17 odoo-cov_19
+
+<span class="c"># y si además querés el disco</span>
+rm -rf src/_sweep</pre></div>
+
+  <footer>
+    <span>docker-odoo · scripts/coverage-sweep</span>
+    <span>Documento interno de Binaural — no distribuir fuera de la empresa</span>
+  </footer>
+</div>
+
+<script>
+  document.querySelectorAll('.cmd .copy').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const pre = btn.parentElement.querySelector('pre');
+      try {
+        await navigator.clipboard.writeText(pre.innerText);
+        btn.textContent = 'copiado';
+        btn.classList.add('done');
+      } catch {
+        // Sin permiso de portapapeles no hay nada que hacer salvo decirlo:
+        // fingir que copió sería peor que avisar.
+        btn.textContent = 'copialo a mano';
+      }
+      setTimeout(() => {
+        btn.textContent = 'copiar';
+        btn.classList.remove('done');
+      }, 1800);
+    });
+  });
+</script>

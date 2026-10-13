@@ -96,8 +96,8 @@ que matchean su `db_filter`.
 - **GIVEN** dos o más instancias con el mismo `database` y al menos una
   con `max_cron_threads != 0`
 - **WHEN** a alguna le falta `db_filter` específico o `db_user`/`db_password`
-- **THEN** `load_config()` DEBE fallar con un error detallado listando las
-  instancias afectadas y qué les falta
+- **THEN** `./odoo build`, `start` y `restart` DEBEN fallar con un error
+  detallado listando las instancias afectadas y qué les falta
 
 #### Scenario: Escape hatch explícito
 - **GIVEN** una instancia en un grupo compartido con `max_cron_threads: 0`
@@ -117,17 +117,42 @@ colisión de identidad de rol es un problema estructural, no ligado al cron.
 
 #### Scenario: `db_user` repetido entre dos instancias del grupo
 - **GIVEN** dos instancias del mismo grupo con el mismo valor de `db_user`
-- **WHEN** se corre `load_config()`
+- **WHEN** se corre `./odoo build`, `start` o `restart` sobre cualquiera de
+  las dos
 - **THEN** DEBE fallar con un error listando el `db_user` repetido y las
-  instancias que lo comparten
+  instancias que lo comparten — el par entero, no solo la instancia pedida
 
 #### Scenario: `db_user` igual al rol de servicio compartido
 - **GIVEN** una instancia de un grupo compartido cuyo `db_user` coincide
   con `databases.<nombre>.user`
-- **WHEN** se corre `load_config()`
+- **WHEN** se corre `./odoo build`, `start` o `restart` sobre ella
 - **THEN** DEBE fallar, porque esa instancia no tiene en realidad un rol
   dedicado — sigue usando el mismo rol que las instancias sin credenciales
   propias
+
+### Requirement: El aislamiento se exige al ejecutar, no al leer la configuración
+
+La validación de aislamiento es una política de ejecución: DEBE exigirse
+únicamente en los comandos que dejan un servidor Odoo corriendo con cron
+sobre el Postgres compartido (`build`, `start`, `restart`), no dentro de
+`load_config()`. Todo el resto del CLI y de `scripts/` (`list`, `logs`,
+`psql`, `stop`, `remove`, backups, restores, precommit) lee la misma
+configuración sin crear el riesgo, y NO debe quedar bloqueado por él.
+
+#### Scenario: Comando de solo lectura con instancias sin aislar
+- **GIVEN** un `instances.json` con instancias sin aislamiento
+- **WHEN** se corre `./odoo list` (o cualquier comando fuera de `build`,
+  `start`, `restart`)
+- **THEN** el comando DEBE ejecutarse normalmente, precedido de un aviso
+  compacto que diga cuántas instancias del servicio están sin aislar
+
+#### Scenario: Migración incremental del grupo
+- **GIVEN** un grupo compartido donde solo una instancia ya tiene rol
+  dedicado y `db_filter` propio
+- **WHEN** se corre `./odoo start <esa instancia>`
+- **THEN** DEBE arrancar, aunque el resto del grupo siga sin aislar — el
+  chequeo se acota a la instancia pedida
+- **AND** `./odoo start` sin instancia (todas) DEBE seguir fallando
 
 ### Requirement: El rol dedicado de una instancia debe ser el único con `CONNECT` sobre sus bases
 

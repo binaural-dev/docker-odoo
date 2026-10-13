@@ -1,0 +1,3112 @@
+{
+ "checks": {
+  "n01_conteo_nomina": {
+   "estado": "diferencias",
+   "faltan_en_v19": [],
+   "filas_v17": 25,
+   "filas_v19": 25,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Conteo por tabla de nómina",
+   "valores_distintos": [
+    {
+     "clave": [
+      "hr_salary_rule"
+     ],
+     "v17": [
+      "2846"
+     ],
+     "v19": [
+      "2864"
+     ]
+    }
+   ]
+  },
+  "n02_recibos_por_estado": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 15,
+   "filas_v19": 15,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Recibos por compañía, año y estado (17 normalizado)",
+   "valores_distintos": []
+  },
+  "n03_lineas_por_codigo": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 475,
+   "filas_v19": 475,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Líneas de recibo por compañía, código y año",
+   "valores_distintos": []
+  },
+  "n04_lotes_por_estado": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 12,
+   "filas_v19": 12,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Lotes de nómina por compañía y estado (17 normalizado)",
+   "valores_distintos": []
+  },
+  "n05_contratos": {
+   "estado": "diferencias",
+   "faltan_en_v19": [],
+   "filas_v17": 545,
+   "filas_v19": 778,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [
+    [
+     "1423"
+    ],
+    [
+     "1424"
+    ],
+    [
+     "1425"
+    ],
+    [
+     "1426"
+    ],
+    [
+     "1427"
+    ],
+    [
+     "1428"
+    ],
+    [
+     "1429"
+    ],
+    [
+     "1430"
+    ],
+    [
+     "1431"
+    ],
+    [
+     "1432"
+    ],
+    [
+     "1433"
+    ],
+    [
+     "1434"
+    ],
+    [
+     "1435"
+    ],
+    [
+     "1436"
+    ],
+    [
+     "1437"
+    ],
+    [
+     "1438"
+    ],
+    [
+     "1439"
+    ],
+    [
+     "1440"
+    ],
+    [
+     "1441"
+    ],
+    [
+     "1442"
+    ],
+    [
+     "1443"
+    ],
+    [
+     "1444"
+    ],
+    [
+     "1445"
+    ],
+    [
+     "1446"
+    ],
+    [
+     "1447"
+    ],
+    [
+     "1448"
+    ],
+    [
+     "1449"
+    ],
+    [
+     "1450"
+    ],
+    [
+     "1451"
+    ],
+    [
+     "1452"
+    ],
+    [
+     "1453"
+    ],
+    [
+     "1454"
+    ],
+    [
+     "1455"
+    ],
+    [
+     "1456"
+    ],
+    [
+     "1457"
+    ],
+    [
+     "1458"
+    ],
+    [
+     "1459"
+    ],
+    [
+     "1460"
+    ],
+    [
+     "1461"
+    ],
+    [
+     "1462"
+    ],
+    [
+     "1463"
+    ],
+    [
+     "1464"
+    ],
+    [
+     "1465"
+    ],
+    [
+     "1466"
+    ],
+    [
+     "1467"
+    ],
+    [
+     "1468"
+    ],
+    [
+     "1469"
+    ],
+    [
+     "1470"
+    ],
+    [
+     "1471"
+    ],
+    [
+     "1472"
+    ],
+    [
+     "1473"
+    ],
+    [
+     "1474"
+    ],
+    [
+     "1475"
+    ],
+    [
+     "1476"
+    ],
+    [
+     "1477"
+    ],
+    [
+     "1478"
+    ],
+    [
+     "1479"
+    ],
+    [
+     "1480"
+    ],
+    [
+     "1481"
+    ],
+    [
+     "1482"
+    ],
+    [
+     "1483"
+    ],
+    [
+     "1484"
+    ],
+    [
+     "1485"
+    ],
+    [
+     "1486"
+    ],
+    [
+     "1487"
+    ],
+    [
+     "1488"
+    ],
+    [
+     "1489"
+    ],
+    [
+     "1490"
+    ],
+    [
+     "1491"
+    ],
+    [
+     "1492"
+    ],
+    [
+     "1493"
+    ],
+    [
+     "1494"
+    ],
+    [
+     "1495"
+    ],
+    [
+     "1496"
+    ],
+    [
+     "1497"
+    ],
+    [
+     "1498"
+    ],
+    [
+     "1499"
+    ],
+    [
+     "1500"
+    ],
+    [
+     "1501"
+    ],
+    [
+     "1502"
+    ],
+    [
+     "1503"
+    ],
+    [
+     "1504"
+    ],
+    [
+     "1505"
+    ],
+    [
+     "1506"
+    ],
+    [
+     "1507"
+    ],
+    [
+     "1508"
+    ],
+    [
+     "1509"
+    ],
+    [
+     "1510"
+    ],
+    [
+     "1511"
+    ],
+    [
+     "1512"
+    ],
+    [
+     "1513"
+    ],
+    [
+     "1514"
+    ],
+    [
+     "1515"
+    ],
+    [
+     "1516"
+    ],
+    [
+     "1517"
+    ],
+    [
+     "1518"
+    ],
+    [
+     "1519"
+    ],
+    [
+     "1520"
+    ],
+    [
+     "1521"
+    ],
+    [
+     "1522"
+    ],
+    [
+     "1523"
+    ],
+    [
+     "1524"
+    ],
+    [
+     "1525"
+    ],
+    [
+     "1526"
+    ],
+    [
+     "1527"
+    ],
+    [
+     "1528"
+    ],
+    [
+     "1529"
+    ],
+    [
+     "1530"
+    ],
+    [
+     "1531"
+    ],
+    [
+     "1532"
+    ],
+    [
+     "1533"
+    ],
+    [
+     "1534"
+    ],
+    [
+     "1535"
+    ],
+    [
+     "1536"
+    ],
+    [
+     "1537"
+    ],
+    [
+     "1538"
+    ],
+    [
+     "1539"
+    ],
+    [
+     "1540"
+    ],
+    [
+     "1541"
+    ],
+    [
+     "1542"
+    ],
+    [
+     "1543"
+    ],
+    [
+     "1544"
+    ],
+    [
+     "1545"
+    ],
+    [
+     "1546"
+    ],
+    [
+     "1547"
+    ],
+    [
+     "1548"
+    ],
+    [
+     "1549"
+    ],
+    [
+     "1550"
+    ],
+    [
+     "1551"
+    ],
+    [
+     "1552"
+    ],
+    [
+     "1553"
+    ],
+    [
+     "1554"
+    ],
+    [
+     "1555"
+    ],
+    [
+     "1556"
+    ],
+    [
+     "1557"
+    ],
+    [
+     "1558"
+    ],
+    [
+     "1559"
+    ],
+    [
+     "1560"
+    ],
+    [
+     "1561"
+    ],
+    [
+     "1562"
+    ],
+    [
+     "1563"
+    ],
+    [
+     "1564"
+    ],
+    [
+     "1565"
+    ],
+    [
+     "1566"
+    ],
+    [
+     "1567"
+    ],
+    [
+     "1568"
+    ],
+    [
+     "1569"
+    ],
+    [
+     "1570"
+    ],
+    [
+     "1571"
+    ],
+    [
+     "1572"
+    ],
+    [
+     "1573"
+    ],
+    [
+     "1574"
+    ],
+    [
+     "1575"
+    ],
+    [
+     "1576"
+    ],
+    [
+     "1577"
+    ],
+    [
+     "1578"
+    ],
+    [
+     "1579"
+    ],
+    [
+     "1580"
+    ],
+    [
+     "1581"
+    ],
+    [
+     "1582"
+    ],
+    [
+     "1583"
+    ],
+    [
+     "1584"
+    ],
+    [
+     "1585"
+    ],
+    [
+     "1586"
+    ],
+    [
+     "1587"
+    ],
+    [
+     "1588"
+    ],
+    [
+     "1589"
+    ],
+    [
+     "1590"
+    ],
+    [
+     "1591"
+    ],
+    [
+     "1592"
+    ],
+    [
+     "1593"
+    ],
+    [
+     "1594"
+    ],
+    [
+     "1595"
+    ],
+    [
+     "1596"
+    ],
+    [
+     "1597"
+    ],
+    [
+     "1598"
+    ],
+    [
+     "1599"
+    ],
+    [
+     "1600"
+    ],
+    [
+     "1601"
+    ],
+    [
+     "1602"
+    ],
+    [
+     "1603"
+    ],
+    [
+     "1604"
+    ],
+    [
+     "1605"
+    ],
+    [
+     "1606"
+    ],
+    [
+     "1607"
+    ],
+    [
+     "1608"
+    ],
+    [
+     "1609"
+    ],
+    [
+     "1610"
+    ],
+    [
+     "1611"
+    ],
+    [
+     "1612"
+    ],
+    [
+     "1613"
+    ],
+    [
+     "1614"
+    ],
+    [
+     "1615"
+    ],
+    [
+     "1616"
+    ],
+    [
+     "1617"
+    ],
+    [
+     "1618"
+    ],
+    [
+     "1619"
+    ],
+    [
+     "1620"
+    ],
+    [
+     "1621"
+    ],
+    [
+     "1622"
+    ],
+    [
+     "1623"
+    ],
+    [
+     "1624"
+    ],
+    [
+     "1625"
+    ],
+    [
+     "1626"
+    ],
+    [
+     "1627"
+    ],
+    [
+     "1628"
+    ],
+    [
+     "1629"
+    ],
+    [
+     "1630"
+    ],
+    [
+     "1631"
+    ],
+    [
+     "1632"
+    ],
+    [
+     "1633"
+    ],
+    [
+     "1634"
+    ],
+    [
+     "1635"
+    ],
+    [
+     "1636"
+    ],
+    [
+     "1637"
+    ],
+    [
+     "1638"
+    ],
+    [
+     "1639"
+    ],
+    [
+     "1640"
+    ],
+    [
+     "1641"
+    ],
+    [
+     "1642"
+    ],
+    [
+     "1643"
+    ],
+    [
+     "1644"
+    ],
+    [
+     "1645"
+    ],
+    [
+     "1646"
+    ],
+    [
+     "1647"
+    ],
+    [
+     "1648"
+    ],
+    [
+     "1649"
+    ],
+    [
+     "1650"
+    ],
+    [
+     "1651"
+    ],
+    [
+     "1652"
+    ],
+    [
+     "1653"
+    ],
+    [
+     "1654"
+    ],
+    [
+     "1655"
+    ]
+   ],
+   "titulo": "Punto 11 · Contratos 17 = versiones 19 con el mismo id",
+   "valores_distintos": [
+    {
+     "clave": [
+      "1032"
+     ],
+     "v17": [
+      "497",
+      "0.00",
+      "2025-08-05",
+      "2026-01-30",
+      "0.00",
+      "fixed",
+      "(null)"
+     ],
+     "v19": [
+      "497",
+      "0.00",
+      "2025-08-05",
+      "2026-01-30",
+      "0.00",
+      "fixed",
+      "internal"
+     ]
+    },
+    {
+     "clave": [
+      "1042"
+     ],
+     "v17": [
+      "1851",
+      "0.00",
+      "2025-08-14",
+      "(null)",
+      "0.00",
+      "fixed",
+      "(null)"
+     ],
+     "v19": [
+      "1851",
+      "0.00",
+      "2025-08-14",
+      "(null)",
+      "0.00",
+      "fixed",
+      "internal"
+     ]
+    },
+    {
+     "clave": [
+      "1048"
+     ],
+     "v17": [
+      "486",
+      "0.00",
+      "2025-09-01",
+      "2025-12-12",
+      "27.39",
+      "fixed",
+      "(null)"
+     ],
+     "v19": [
+      "486",
+      "0.00",
+      "2025-09-01",
+      "2025-12-12",
+      "27.39",
+      "fixed",
+      "internal"
+     ]
+    }
+   ]
+  },
+  "n06_cambios_de_sueldo": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 514,
+   "filas_v19": 514,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Cambios de sueldo por contrato/versión",
+   "valores_distintos": []
+  },
+  "n10_hr_payroll_benefits_accumulated": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 410,
+   "filas_v19": 410,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_payroll_benefits_accumulated por employee_id",
+   "valores_distintos": []
+  },
+  "n10_hr_payroll_benefits_accumulated_detail": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 405,
+   "filas_v19": 405,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_payroll_benefits_accumulated_detail por employee_id",
+   "valores_distintos": []
+  },
+  "n10_hr_payroll_detail_utility": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 432,
+   "filas_v19": 432,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_payroll_detail_utility por employee_id",
+   "valores_distintos": []
+  },
+  "n10_hr_payroll_loan_line": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 0,
+   "filas_v19": 0,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_payroll_loan_line por loan_id",
+   "valores_distintos": []
+  },
+  "n10_hr_payroll_loans": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 0,
+   "filas_v19": 0,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_payroll_loans por id",
+   "valores_distintos": []
+  },
+  "n10_hr_payroll_move": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 436,
+   "filas_v19": 436,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_payroll_move por employee_id",
+   "valores_distintos": []
+  },
+  "n10_hr_payroll_provision": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 404,
+   "filas_v19": 404,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_payroll_provision por employee_id",
+   "valores_distintos": []
+  },
+  "n10_hr_salary_move": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 0,
+   "filas_v19": 0,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_salary_move por employee_id",
+   "valores_distintos": []
+  },
+  "n10_hr_savings_fund": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 72,
+   "filas_v19": 72,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_savings_fund por id",
+   "valores_distintos": []
+  },
+  "n10_hr_savings_fund_line": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 72,
+   "filas_v19": 72,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 11 · Sumas de hr_savings_fund_line por fund_id",
+   "valores_distintos": []
+  },
+  "p01_conteo_por_modelo": {
+   "estado": "diferencias",
+   "faltan_en_v19": [
+    [
+     "stock_valuation_layer"
+    ],
+    [
+     "stock_valuation_layer_revaluation"
+    ]
+   ],
+   "filas_v17": 28,
+   "filas_v19": 26,
+   "ignoradas_por_renombre": [
+    "stock_valuation_layer",
+    "stock_valuation_layer_revaluation"
+   ],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 1 · Conteo por modelo",
+   "valores_distintos": [
+    {
+     "clave": [
+      "account_journal"
+     ],
+     "v17": [
+      "297"
+     ],
+     "v19": [
+      "299"
+     ]
+    },
+    {
+     "clave": [
+      "ir_attachment"
+     ],
+     "v17": [
+      "105931"
+     ],
+     "v19": [
+      "106005"
+     ]
+    },
+    {
+     "clave": [
+      "ir_cron"
+     ],
+     "v17": [
+      "65"
+     ],
+     "v19": [
+      "76"
+     ]
+    },
+    {
+     "clave": [
+      "ir_mail_server"
+     ],
+     "v17": [
+      "1"
+     ],
+     "v19": [
+      "3"
+     ]
+    },
+    {
+     "clave": [
+      "ir_sequence"
+     ],
+     "v17": [
+      "1309"
+     ],
+     "v19": [
+      "1652"
+     ]
+    },
+    {
+     "clave": [
+      "res_partner"
+     ],
+     "v17": [
+      "2340"
+     ],
+     "v19": [
+      "2342"
+     ]
+    }
+   ]
+  },
+  "p02_sumas_por_diario": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 287,
+   "filas_v19": 287,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 2 · sum(debit/credit/balance) por compañía, diario y ejercicio",
+   "valores_distintos": []
+  },
+  "p03_balance_por_cuenta": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 1989,
+   "filas_v19": 1989,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 3 · Balance de comprobación por cuenta y ejercicio",
+   "valores_distintos": []
+  },
+  "p04_cuadre_global": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 4,
+   "filas_v19": 4,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 4 · sum(debit) = sum(credit) por asiento y global",
+   "valores_distintos": []
+  },
+  "p05_moneda_alterna": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 27,
+   "filas_v19": 27,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 5 · sum(foreign_debit/foreign_credit) por compañía y ejercicio",
+   "valores_distintos": []
+  },
+  "p06a_conciliacion_parcial": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 4,
+   "filas_v19": 4,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 6 · account.partial.reconcile: conteo y suma",
+   "valores_distintos": []
+  },
+  "p06b_estado_de_pago": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 15,
+   "filas_v19": 15,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 6 · facturas por payment_state",
+   "valores_distintos": []
+  },
+  "p07a_retenciones": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 12,
+   "filas_v19": 12,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 7 · Retenciones por tipo y ejercicio",
+   "valores_distintos": []
+  },
+  "p07b_retencion_lineas": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 5,
+   "filas_v19": 5,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 7 · Líneas de retención por tipo de factura",
+   "valores_distintos": []
+  },
+  "p08a_quants": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 9754,
+   "filas_v19": 9754,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 8 · stock.quant por compañía, ubicación y producto",
+   "valores_distintos": []
+  },
+  "p08b_valuation_layer": {
+   "estado": "ausente_en_destino",
+   "informativo": true
+  },
+  "p09a_secuencias": {
+   "estado": "diferencias",
+   "faltan_en_v19": [
+    [
+     "11",
+     "stock.quant.package",
+     "PACK"
+    ],
+    [
+     "1611",
+     "stock.quant.package",
+     "PACK"
+    ],
+    [
+     "8",
+     "procurement.group",
+     "PG/"
+    ]
+   ],
+   "filas_v17": 1309,
+   "filas_v19": 1652,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [
+    [
+     "11",
+     "stock.package",
+     "PACK"
+    ],
+    [
+     "1611",
+     "stock.package",
+     "PACK"
+    ],
+    [
+     "3063",
+     "account.payment",
+     "PAY"
+    ],
+    [
+     "3064",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "3065",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "3066",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "3067",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "3068",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "3069",
+     "purchase.requisition.purchase.template",
+     "PT"
+    ],
+    [
+     "3070",
+     "(null)",
+     "BERME/QC/"
+    ],
+    [
+     "3071",
+     "(null)",
+     "BERME/STOR/"
+    ],
+    [
+     "3072",
+     "(null)",
+     "BERME/XD/"
+    ],
+    [
+     "3073",
+     "(null)",
+     "APROB/QC/"
+    ],
+    [
+     "3074",
+     "(null)",
+     "APROB/STOR/"
+    ],
+    [
+     "3075",
+     "(null)",
+     "APROB/XD/"
+    ],
+    [
+     "3076",
+     "(null)",
+     "AGLJC/QC/"
+    ],
+    [
+     "3077",
+     "(null)",
+     "AGLJC/STOR/"
+    ],
+    [
+     "3078",
+     "(null)",
+     "AGLJC/XD/"
+    ],
+    [
+     "3079",
+     "(null)",
+     "AFARM/QC/"
+    ],
+    [
+     "3080",
+     "(null)",
+     "AFARM/STOR/"
+    ],
+    [
+     "3081",
+     "(null)",
+     "AFARM/XD/"
+    ],
+    [
+     "3082",
+     "(null)",
+     "ALPIN/QC/"
+    ],
+    [
+     "3083",
+     "(null)",
+     "ALPIN/STOR/"
+    ],
+    [
+     "3084",
+     "(null)",
+     "ALPIN/XD/"
+    ],
+    [
+     "3085",
+     "(null)",
+     "APSOL/QC/"
+    ],
+    [
+     "3086",
+     "(null)",
+     "APSOL/STOR/"
+    ],
+    [
+     "3087",
+     "(null)",
+     "APSOL/XD/"
+    ],
+    [
+     "3088",
+     "(null)",
+     "SUMI/QC/"
+    ],
+    [
+     "3089",
+     "(null)",
+     "SUMI/STOR/"
+    ],
+    [
+     "3090",
+     "(null)",
+     "SUMI/XD/"
+    ],
+    [
+     "3091",
+     "(null)",
+     "ALMC/QC/"
+    ],
+    [
+     "3092",
+     "(null)",
+     "ALMC/STOR/"
+    ],
+    [
+     "3093",
+     "(null)",
+     "ALMC/XD/"
+    ],
+    [
+     "3094",
+     "(null)",
+     "SUM/QC/"
+    ],
+    [
+     "3095",
+     "(null)",
+     "SUM/STOR/"
+    ],
+    [
+     "3096",
+     "(null)",
+     "SUM/XD/"
+    ],
+    [
+     "3097",
+     "(null)",
+     "CUARE/QC/"
+    ],
+    [
+     "3098",
+     "(null)",
+     "CUARE/STOR/"
+    ],
+    [
+     "3099",
+     "(null)",
+     "CUARE/XD/"
+    ],
+    [
+     "3100",
+     "(null)",
+     "UNIF/QC/"
+    ],
+    [
+     "3101",
+     "(null)",
+     "UNIF/STOR/"
+    ],
+    [
+     "3102",
+     "(null)",
+     "UNIF/XD/"
+    ],
+    [
+     "3103",
+     "(null)",
+     "ALMMP/QC/"
+    ],
+    [
+     "3104",
+     "(null)",
+     "ALMMP/STOR/"
+    ],
+    [
+     "3105",
+     "(null)",
+     "ALMMP/XD/"
+    ],
+    [
+     "3106",
+     "(null)",
+     "ALMME/QC/"
+    ],
+    [
+     "3107",
+     "(null)",
+     "ALMME/STOR/"
+    ],
+    [
+     "3108",
+     "(null)",
+     "ALMME/XD/"
+    ],
+    [
+     "3109",
+     "(null)",
+     "ALINV/QC/"
+    ],
+    [
+     "3110",
+     "(null)",
+     "ALINV/STOR/"
+    ],
+    [
+     "3111",
+     "(null)",
+     "ALINV/XD/"
+    ],
+    [
+     "3112",
+     "(null)",
+     "ALRMP/QC/"
+    ],
+    [
+     "3113",
+     "(null)",
+     "ALRMP/STOR/"
+    ],
+    [
+     "3114",
+     "(null)",
+     "ALRMP/XD/"
+    ],
+    [
+     "3115",
+     "(null)",
+     "ALSCR/QC/"
+    ],
+    [
+     "3116",
+     "(null)",
+     "ALSCR/STOR/"
+    ],
+    [
+     "3117",
+     "(null)",
+     "ALSCR/XD/"
+    ],
+    [
+     "3118",
+     "(null)",
+     "ALVCS/QC/"
+    ],
+    [
+     "3119",
+     "(null)",
+     "ALVCS/STOR/"
+    ],
+    [
+     "3120",
+     "(null)",
+     "ALVCS/XD/"
+    ],
+    [
+     "3121",
+     "(null)",
+     "ASEGU/QC/"
+    ],
+    [
+     "3122",
+     "(null)",
+     "ASEGU/STOR/"
+    ],
+    [
+     "3123",
+     "(null)",
+     "ASEGU/XD/"
+    ],
+    [
+     "3124",
+     "(null)",
+     "CENDI/QC/"
+    ],
+    [
+     "3125",
+     "(null)",
+     "CENDI/STOR/"
+    ],
+    [
+     "3126",
+     "(null)",
+     "CENDI/XD/"
+    ],
+    [
+     "3127",
+     "(null)",
+     "COBEC/QC/"
+    ],
+    [
+     "3128",
+     "(null)",
+     "COBEC/STOR/"
+    ],
+    [
+     "3129",
+     "(null)",
+     "COBEC/XD/"
+    ],
+    [
+     "3130",
+     "(null)",
+     "COBMA/QC/"
+    ],
+    [
+     "3131",
+     "(null)",
+     "COBMA/STOR/"
+    ],
+    [
+     "3132",
+     "(null)",
+     "COBMA/XD/"
+    ],
+    [
+     "3133",
+     "(null)",
+     "COBOC/QC/"
+    ],
+    [
+     "3134",
+     "(null)",
+     "COBOC/STOR/"
+    ],
+    [
+     "3135",
+     "(null)",
+     "COBOC/XD/"
+    ],
+    [
+     "3136",
+     "(null)",
+     "COBOR/QC/"
+    ],
+    [
+     "3137",
+     "(null)",
+     "COBOR/STOR/"
+    ],
+    [
+     "3138",
+     "(null)",
+     "COBOR/XD/"
+    ],
+    [
+     "3139",
+     "(null)",
+     "ACOMP/QC/"
+    ],
+    [
+     "3140",
+     "(null)",
+     "ACOMP/STOR/"
+    ],
+    [
+     "3141",
+     "(null)",
+     "ACOMP/XD/"
+    ],
+    [
+     "3142",
+     "(null)",
+     "AFVAR/QC/"
+    ],
+    [
+     "3143",
+     "(null)",
+     "AFVAR/STOR/"
+    ],
+    [
+     "3144",
+     "(null)",
+     "AFVAR/XD/"
+    ],
+    [
+     "3145",
+     "(null)",
+     "RAIND/QC/"
+    ],
+    [
+     "3146",
+     "(null)",
+     "RAIND/STOR/"
+    ],
+    [
+     "3147",
+     "(null)",
+     "RAIND/XD/"
+    ],
+    [
+     "3148",
+     "(null)",
+     "ARVAR/QC/"
+    ],
+    [
+     "3149",
+     "(null)",
+     "ARVAR/STOR/"
+    ],
+    [
+     "3150",
+     "(null)",
+     "ARVAR/XD/"
+    ],
+    [
+     "3151",
+     "(null)",
+     "ALMEI/QC/"
+    ],
+    [
+     "3152",
+     "(null)",
+     "ALMEI/STOR/"
+    ],
+    [
+     "3153",
+     "(null)",
+     "ALMEI/XD/"
+    ],
+    [
+     "3154",
+     "(null)",
+     "ALMPI/QC/"
+    ],
+    [
+     "3155",
+     "(null)",
+     "ALMPI/STOR/"
+    ],
+    [
+     "3156",
+     "(null)",
+     "ALMPI/XD/"
+    ],
+    [
+     "3157",
+     "(null)",
+     "ALREP/QC/"
+    ],
+    [
+     "3158",
+     "(null)",
+     "ALREP/STOR/"
+    ],
+    [
+     "3159",
+     "(null)",
+     "ALREP/XD/"
+    ],
+    [
+     "3160",
+     "(null)",
+     "APALM/QC/"
+    ],
+    [
+     "3161",
+     "(null)",
+     "APALM/STOR/"
+    ],
+    [
+     "3162",
+     "(null)",
+     "APALM/XD/"
+    ],
+    [
+     "3163",
+     "(null)",
+     "APAER/QC/"
+    ],
+    [
+     "3164",
+     "(null)",
+     "APAER/STOR/"
+    ],
+    [
+     "3165",
+     "(null)",
+     "APAER/XD/"
+    ],
+    [
+     "3166",
+     "(null)",
+     "COPIA/QC/"
+    ],
+    [
+     "3167",
+     "(null)",
+     "COPIA/STOR/"
+    ],
+    [
+     "3168",
+     "(null)",
+     "COPIA/XD/"
+    ],
+    [
+     "3169",
+     "(null)",
+     "ALMCC/QC/"
+    ],
+    [
+     "3170",
+     "(null)",
+     "ALMCC/STOR/"
+    ],
+    [
+     "3171",
+     "(null)",
+     "ALMCC/XD/"
+    ],
+    [
+     "3172",
+     "(null)",
+     "ALMSA/QC/"
+    ],
+    [
+     "3173",
+     "(null)",
+     "ALMSA/STOR/"
+    ],
+    [
+     "3174",
+     "(null)",
+     "ALMSA/XD/"
+    ],
+    [
+     "3175",
+     "(null)",
+     "SAVON/QC/"
+    ],
+    [
+     "3176",
+     "(null)",
+     "SAVON/STOR/"
+    ],
+    [
+     "3177",
+     "(null)",
+     "SAVON/XD/"
+    ],
+    [
+     "3178",
+     "(null)",
+     "APT01/QC/"
+    ],
+    [
+     "3179",
+     "(null)",
+     "APT01/STOR/"
+    ],
+    [
+     "3180",
+     "(null)",
+     "APT01/XD/"
+    ],
+    [
+     "3181",
+     "(null)",
+     "ALMC/QC/"
+    ],
+    [
+     "3182",
+     "(null)",
+     "ALMC/STOR/"
+    ],
+    [
+     "3183",
+     "(null)",
+     "ALMC/XD/"
+    ],
+    [
+     "3184",
+     "(null)",
+     "ALMER/QC/"
+    ],
+    [
+     "3185",
+     "(null)",
+     "ALMER/STOR/"
+    ],
+    [
+     "3186",
+     "(null)",
+     "ALMER/XD/"
+    ],
+    [
+     "3187",
+     "(null)",
+     "AMP05/QC/"
+    ],
+    [
+     "3188",
+     "(null)",
+     "AMP05/STOR/"
+    ],
+    [
+     "3189",
+     "(null)",
+     "AMP05/XD/"
+    ],
+    [
+     "3190",
+     "(null)",
+     "AMP06/QC/"
+    ],
+    [
+     "3191",
+     "(null)",
+     "AMP06/STOR/"
+    ],
+    [
+     "3192",
+     "(null)",
+     "AMP06/XD/"
+    ],
+    [
+     "3193",
+     "(null)",
+     "AMP07/QC/"
+    ],
+    [
+     "3194",
+     "(null)",
+     "AMP07/STOR/"
+    ],
+    [
+     "3195",
+     "(null)",
+     "AMP07/XD/"
+    ],
+    [
+     "3196",
+     "(null)",
+     "AMP08/QC/"
+    ],
+    [
+     "3197",
+     "(null)",
+     "AMP08/STOR/"
+    ],
+    [
+     "3198",
+     "(null)",
+     "AMP08/XD/"
+    ],
+    [
+     "3199",
+     "(null)",
+     "APTRM/QC/"
+    ],
+    [
+     "3200",
+     "(null)",
+     "APTRM/STOR/"
+    ],
+    [
+     "3201",
+     "(null)",
+     "APTRM/XD/"
+    ],
+    [
+     "3202",
+     "(null)",
+     "APIND/QC/"
+    ],
+    [
+     "3203",
+     "(null)",
+     "APIND/STOR/"
+    ],
+    [
+     "3204",
+     "(null)",
+     "APIND/XD/"
+    ],
+    [
+     "3205",
+     "(null)",
+     "ALTEC/QC/"
+    ],
+    [
+     "3206",
+     "(null)",
+     "ALTEC/STOR/"
+    ],
+    [
+     "3207",
+     "(null)",
+     "ALTEC/XD/"
+    ],
+    [
+     "3208",
+     "(null)",
+     "ALVAR/QC/"
+    ],
+    [
+     "3209",
+     "(null)",
+     "ALVAR/STOR/"
+    ],
+    [
+     "3210",
+     "(null)",
+     "ALVAR/XD/"
+    ],
+    [
+     "3211",
+     "(null)",
+     "COBCE/QC/"
+    ],
+    [
+     "3212",
+     "(null)",
+     "COBCE/STOR/"
+    ],
+    [
+     "3213",
+     "(null)",
+     "COBCE/XD/"
+    ],
+    [
+     "3214",
+     "(null)",
+     "APROD/QC/"
+    ],
+    [
+     "3215",
+     "(null)",
+     "APROD/STOR/"
+    ],
+    [
+     "3216",
+     "(null)",
+     "APROD/XD/"
+    ],
+    [
+     "3217",
+     "(null)",
+     "ALMCU/QC/"
+    ],
+    [
+     "3218",
+     "(null)",
+     "ALMCU/STOR/"
+    ],
+    [
+     "3219",
+     "(null)",
+     "ALMCU/XD/"
+    ],
+    [
+     "3220",
+     "(null)",
+     "PSI/QC/"
+    ],
+    [
+     "3221",
+     "(null)",
+     "PSI/STOR/"
+    ],
+    [
+     "3222",
+     "(null)",
+     "PSI/XD/"
+    ],
+    [
+     "3223",
+     "(null)",
+     "ALMAR/QC/"
+    ],
+    [
+     "3224",
+     "(null)",
+     "ALMAR/STOR/"
+    ],
+    [
+     "3225",
+     "(null)",
+     "ALMAR/XD/"
+    ],
+    [
+     "3226",
+     "(null)",
+     "AMPPB/QC/"
+    ],
+    [
+     "3227",
+     "(null)",
+     "AMPPB/STOR/"
+    ],
+    [
+     "3228",
+     "(null)",
+     "AMPPB/XD/"
+    ],
+    [
+     "3229",
+     "(null)",
+     "AMP01/QC/"
+    ],
+    [
+     "3230",
+     "(null)",
+     "AMP01/STOR/"
+    ],
+    [
+     "3231",
+     "(null)",
+     "AMP01/XD/"
+    ],
+    [
+     "3232",
+     "(null)",
+     "ALMCC/QC/"
+    ],
+    [
+     "3233",
+     "(null)",
+     "ALMCC/STOR/"
+    ],
+    [
+     "3234",
+     "(null)",
+     "ALMCC/XD/"
+    ],
+    [
+     "3235",
+     "(null)",
+     "ALMCU/QC/"
+    ],
+    [
+     "3236",
+     "(null)",
+     "ALMCU/STOR/"
+    ],
+    [
+     "3237",
+     "(null)",
+     "ALMCU/XD/"
+    ],
+    [
+     "3238",
+     "(null)",
+     "ALSPT/QC/"
+    ],
+    [
+     "3239",
+     "(null)",
+     "ALSPT/STOR/"
+    ],
+    [
+     "3240",
+     "(null)",
+     "ALSPT/XD/"
+    ],
+    [
+     "3241",
+     "(null)",
+     "ALMPT/QC/"
+    ],
+    [
+     "3242",
+     "(null)",
+     "ALMPT/STOR/"
+    ],
+    [
+     "3243",
+     "(null)",
+     "ALMPT/XD/"
+    ],
+    [
+     "3244",
+     "(null)",
+     "ALCON/QC/"
+    ],
+    [
+     "3245",
+     "(null)",
+     "ALCON/STOR/"
+    ],
+    [
+     "3246",
+     "(null)",
+     "ALCON/XD/"
+    ],
+    [
+     "3247",
+     "(null)",
+     "ALSMA/QC/"
+    ],
+    [
+     "3248",
+     "(null)",
+     "ALSMA/STOR/"
+    ],
+    [
+     "3249",
+     "(null)",
+     "ALSMA/XD/"
+    ],
+    [
+     "3250",
+     "(null)",
+     "JABON/QC/"
+    ],
+    [
+     "3251",
+     "(null)",
+     "JABON/STOR/"
+    ],
+    [
+     "3252",
+     "(null)",
+     "JABON/XD/"
+    ],
+    [
+     "3253",
+     "(null)",
+     "PIMP/QC/"
+    ],
+    [
+     "3254",
+     "(null)",
+     "PIMP/STOR/"
+    ],
+    [
+     "3255",
+     "(null)",
+     "PIMP/XD/"
+    ],
+    [
+     "3256",
+     "(null)",
+     "ALPT/QC/"
+    ],
+    [
+     "3257",
+     "(null)",
+     "ALPT/STOR/"
+    ],
+    [
+     "3258",
+     "(null)",
+     "ALPT/XD/"
+    ],
+    [
+     "3259",
+     "(null)",
+     "ALMCC/QC/"
+    ],
+    [
+     "3260",
+     "(null)",
+     "ALMCC/STOR/"
+    ],
+    [
+     "3261",
+     "(null)",
+     "ALMCC/XD/"
+    ],
+    [
+     "3262",
+     "(null)",
+     "ALINV/QC/"
+    ],
+    [
+     "3263",
+     "(null)",
+     "ALINV/STOR/"
+    ],
+    [
+     "3264",
+     "(null)",
+     "ALINV/XD/"
+    ],
+    [
+     "3265",
+     "(null)",
+     "ALSCR/QC/"
+    ],
+    [
+     "3266",
+     "(null)",
+     "ALSCR/STOR/"
+    ],
+    [
+     "3267",
+     "(null)",
+     "ALSCR/XD/"
+    ],
+    [
+     "3268",
+     "(null)",
+     "ALVAR/QC/"
+    ],
+    [
+     "3269",
+     "(null)",
+     "ALVAR/STOR/"
+    ],
+    [
+     "3270",
+     "(null)",
+     "ALVAR/XD/"
+    ],
+    [
+     "3271",
+     "(null)",
+     "ASEGU/QC/"
+    ],
+    [
+     "3272",
+     "(null)",
+     "ASEGU/STOR/"
+    ],
+    [
+     "3273",
+     "(null)",
+     "ASEGU/XD/"
+    ],
+    [
+     "3274",
+     "(null)",
+     "CENDI/QC/"
+    ],
+    [
+     "3275",
+     "(null)",
+     "CENDI/STOR/"
+    ],
+    [
+     "3276",
+     "(null)",
+     "CENDI/XD/"
+    ],
+    [
+     "3277",
+     "(null)",
+     "APCYL/QC/"
+    ],
+    [
+     "3278",
+     "(null)",
+     "APCYL/STOR/"
+    ],
+    [
+     "3279",
+     "(null)",
+     "APCYL/XD/"
+    ],
+    [
+     "3280",
+     "(null)",
+     "ARVAR/QC/"
+    ],
+    [
+     "3281",
+     "(null)",
+     "ARVAR/STOR/"
+    ],
+    [
+     "3282",
+     "(null)",
+     "ARVAR/XD/"
+    ],
+    [
+     "3283",
+     "(null)",
+     "ALST/QC/"
+    ],
+    [
+     "3284",
+     "(null)",
+     "ALST/STOR/"
+    ],
+    [
+     "3285",
+     "(null)",
+     "ALST/XD/"
+    ],
+    [
+     "3286",
+     "(null)",
+     "AMP/QC/"
+    ],
+    [
+     "3287",
+     "(null)",
+     "AMP/STOR/"
+    ],
+    [
+     "3288",
+     "(null)",
+     "AMP/XD/"
+    ],
+    [
+     "3289",
+     "(null)",
+     "AME/QC/"
+    ],
+    [
+     "3290",
+     "(null)",
+     "AME/STOR/"
+    ],
+    [
+     "3291",
+     "(null)",
+     "AME/XD/"
+    ],
+    [
+     "3292",
+     "(null)",
+     "CONSI/QC/"
+    ],
+    [
+     "3293",
+     "(null)",
+     "CONSI/STOR/"
+    ],
+    [
+     "3294",
+     "(null)",
+     "CONSI/XD/"
+    ],
+    [
+     "3295",
+     "(null)",
+     "INDCO/QC/"
+    ],
+    [
+     "3296",
+     "(null)",
+     "INDCO/STOR/"
+    ],
+    [
+     "3297",
+     "(null)",
+     "INDCO/XD/"
+    ],
+    [
+     "3298",
+     "(null)",
+     "TERCO/QC/"
+    ],
+    [
+     "3299",
+     "(null)",
+     "TERCO/STOR/"
+    ],
+    [
+     "3300",
+     "(null)",
+     "TERCO/XD/"
+    ],
+    [
+     "3301",
+     "(null)",
+     "VARCO/QC/"
+    ],
+    [
+     "3302",
+     "(null)",
+     "VARCO/STOR/"
+    ],
+    [
+     "3303",
+     "(null)",
+     "VARCO/XD/"
+    ],
+    [
+     "3304",
+     "(null)",
+     "D/QC/"
+    ],
+    [
+     "3305",
+     "(null)",
+     "D/STOR/"
+    ],
+    [
+     "3306",
+     "(null)",
+     "D/XD/"
+    ],
+    [
+     "3307",
+     "(null)",
+     "ALMPT/QC/"
+    ],
+    [
+     "3308",
+     "(null)",
+     "ALMPT/STOR/"
+    ],
+    [
+     "3309",
+     "(null)",
+     "ALMPT/XD/"
+    ],
+    [
+     "3310",
+     "(null)",
+     "ALRPT/QC/"
+    ],
+    [
+     "3311",
+     "(null)",
+     "ALRPT/STOR/"
+    ],
+    [
+     "3312",
+     "(null)",
+     "ALRPT/XD/"
+    ],
+    [
+     "3313",
+     "(null)",
+     "BERSA/QC/"
+    ],
+    [
+     "3314",
+     "(null)",
+     "BERSA/STOR/"
+    ],
+    [
+     "3315",
+     "(null)",
+     "BERSA/XD/"
+    ],
+    [
+     "3316",
+     "(null)",
+     "APT02/QC/"
+    ],
+    [
+     "3317",
+     "(null)",
+     "APT02/STOR/"
+    ],
+    [
+     "3318",
+     "(null)",
+     "APT02/XD/"
+    ],
+    [
+     "3319",
+     "(null)",
+     "CENDI/QC/"
+    ],
+    [
+     "3320",
+     "(null)",
+     "CENDI/STOR/"
+    ],
+    [
+     "3321",
+     "(null)",
+     "CENDI/XD/"
+    ],
+    [
+     "3322",
+     "(null)",
+     "APTVA/QC/"
+    ],
+    [
+     "3323",
+     "(null)",
+     "APTVA/STOR/"
+    ],
+    [
+     "3324",
+     "(null)",
+     "APTVA/XD/"
+    ],
+    [
+     "3325",
+     "(null)",
+     "APTMI/QC/"
+    ],
+    [
+     "3326",
+     "(null)",
+     "APTMI/STOR/"
+    ],
+    [
+     "3327",
+     "(null)",
+     "APTMI/XD/"
+    ],
+    [
+     "3328",
+     "(null)",
+     "AMP01/QC/"
+    ],
+    [
+     "3329",
+     "(null)",
+     "AMP01/STOR/"
+    ],
+    [
+     "3330",
+     "(null)",
+     "AMP01/XD/"
+    ],
+    [
+     "3331",
+     "(null)",
+     "AMP04/QC/"
+    ],
+    [
+     "3332",
+     "(null)",
+     "AMP04/STOR/"
+    ],
+    [
+     "3333",
+     "(null)",
+     "AMP04/XD/"
+    ],
+    [
+     "3334",
+     "(null)",
+     "ALSPT/QC/"
+    ],
+    [
+     "3335",
+     "(null)",
+     "ALSPT/STOR/"
+    ],
+    [
+     "3336",
+     "(null)",
+     "ALSPT/XD/"
+    ],
+    [
+     "3337",
+     "(null)",
+     "APTPA/QC/"
+    ],
+    [
+     "3338",
+     "(null)",
+     "APTPA/STOR/"
+    ],
+    [
+     "3339",
+     "(null)",
+     "APTPA/XD/"
+    ],
+    [
+     "3340",
+     "(null)",
+     "APTGU/QC/"
+    ],
+    [
+     "3341",
+     "(null)",
+     "APTGU/STOR/"
+    ],
+    [
+     "3342",
+     "(null)",
+     "APTGU/XD/"
+    ],
+    [
+     "3343",
+     "(null)",
+     "APTDR/QC/"
+    ],
+    [
+     "3344",
+     "(null)",
+     "APTDR/STOR/"
+    ],
+    [
+     "3345",
+     "(null)",
+     "APTDR/XD/"
+    ],
+    [
+     "3346",
+     "(null)",
+     "APTLA/QC/"
+    ],
+    [
+     "3347",
+     "(null)",
+     "APTLA/STOR/"
+    ],
+    [
+     "3348",
+     "(null)",
+     "APTLA/XD/"
+    ],
+    [
+     "3349",
+     "(null)",
+     "APTJC/QC/"
+    ],
+    [
+     "3350",
+     "(null)",
+     "APTJC/STOR/"
+    ],
+    [
+     "3351",
+     "(null)",
+     "APTJC/XD/"
+    ],
+    [
+     "3352",
+     "(null)",
+     "ALMGJ/QC/"
+    ],
+    [
+     "3353",
+     "(null)",
+     "ALMGJ/STOR/"
+    ],
+    [
+     "3354",
+     "(null)",
+     "ALMGJ/XD/"
+    ],
+    [
+     "3355",
+     "(null)",
+     "ALMRJ/QC/"
+    ],
+    [
+     "3356",
+     "(null)",
+     "ALMRJ/STOR/"
+    ],
+    [
+     "3357",
+     "(null)",
+     "ALMRJ/XD/"
+    ],
+    [
+     "3358",
+     "(null)",
+     "APTLD/QC/"
+    ],
+    [
+     "3359",
+     "(null)",
+     "APTLD/STOR/"
+    ],
+    [
+     "3360",
+     "(null)",
+     "APTLD/XD/"
+    ],
+    [
+     "3361",
+     "(null)",
+     "APTLL/QC/"
+    ],
+    [
+     "3362",
+     "(null)",
+     "APTLL/STOR/"
+    ],
+    [
+     "3363",
+     "(null)",
+     "APTLL/XD/"
+    ],
+    [
+     "3364",
+     "(null)",
+     "APTLP/QC/"
+    ],
+    [
+     "3365",
+     "(null)",
+     "APTLP/STOR/"
+    ],
+    [
+     "3366",
+     "(null)",
+     "APTLP/XD/"
+    ],
+    [
+     "3367",
+     "(null)",
+     "APTLT/QC/"
+    ],
+    [
+     "3368",
+     "(null)",
+     "APTLT/STOR/"
+    ],
+    [
+     "3369",
+     "(null)",
+     "APTLT/XD/"
+    ],
+    [
+     "3370",
+     "(null)",
+     "APTLS/QC/"
+    ],
+    [
+     "3371",
+     "(null)",
+     "APTLS/STOR/"
+    ],
+    [
+     "3372",
+     "(null)",
+     "APTLS/XD/"
+    ],
+    [
+     "3373",
+     "(null)",
+     "APTLU/QC/"
+    ],
+    [
+     "3374",
+     "(null)",
+     "APTLU/STOR/"
+    ],
+    [
+     "3375",
+     "(null)",
+     "APTLU/XD/"
+    ],
+    [
+     "3376",
+     "(null)",
+     "APTVE/QC/"
+    ],
+    [
+     "3377",
+     "(null)",
+     "APTVE/STOR/"
+    ],
+    [
+     "3378",
+     "(null)",
+     "APTVE/XD/"
+    ],
+    [
+     "3379",
+     "(null)",
+     "APTBA/QC/"
+    ],
+    [
+     "3380",
+     "(null)",
+     "APTBA/STOR/"
+    ],
+    [
+     "3381",
+     "(null)",
+     "APTBA/XD/"
+    ],
+    [
+     "3382",
+     "(null)",
+     "APTEM/QC/"
+    ],
+    [
+     "3383",
+     "(null)",
+     "APTEM/STOR/"
+    ],
+    [
+     "3384",
+     "(null)",
+     "APTEM/XD/"
+    ],
+    [
+     "3385",
+     "(null)",
+     "AMP09/QC/"
+    ],
+    [
+     "3386",
+     "(null)",
+     "AMP09/STOR/"
+    ],
+    [
+     "3387",
+     "(null)",
+     "AMP09/XD/"
+    ],
+    [
+     "3388",
+     "(null)",
+     "APTCV/QC/"
+    ],
+    [
+     "3389",
+     "(null)",
+     "APTCV/STOR/"
+    ],
+    [
+     "3390",
+     "(null)",
+     "APTCV/XD/"
+    ],
+    [
+     "3391",
+     "(null)",
+     "APTCO/QC/"
+    ],
+    [
+     "3392",
+     "(null)",
+     "APTCO/STOR/"
+    ],
+    [
+     "3393",
+     "(null)",
+     "APTCO/XD/"
+    ],
+    [
+     "3394",
+     "(null)",
+     "APTPR/QC/"
+    ],
+    [
+     "3395",
+     "(null)",
+     "APTPR/STOR/"
+    ],
+    [
+     "3396",
+     "(null)",
+     "APTPR/XD/"
+    ],
+    [
+     "3397",
+     "(null)",
+     "APTHD/QC/"
+    ],
+    [
+     "3398",
+     "(null)",
+     "APTHD/STOR/"
+    ],
+    [
+     "3399",
+     "(null)",
+     "APTHD/XD/"
+    ],
+    [
+     "3400",
+     "(null)",
+     "APTRV/QC/"
+    ],
+    [
+     "3401",
+     "(null)",
+     "APTRV/STOR/"
+    ],
+    [
+     "3402",
+     "(null)",
+     "APTRV/XD/"
+    ],
+    [
+     "3403",
+     "(null)",
+     "APCYL/QC/"
+    ],
+    [
+     "3404",
+     "(null)",
+     "APCYL/STOR/"
+    ],
+    [
+     "3405",
+     "(null)",
+     "APCYL/XD/"
+    ],
+    [
+     "3406",
+     "stock_barcode.epc.serial",
+     "(null)"
+    ]
+   ],
+   "titulo": "Punto 9 · ir.sequence: number_next por secuencia",
+   "valores_distintos": [
+    {
+     "clave": [
+      "1890",
+      "retention.islr.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "804"
+     ],
+     "v19": [
+      "844"
+     ]
+    },
+    {
+     "clave": [
+      "1891",
+      "retention.iva.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "2175"
+     ],
+     "v19": [
+      "2217"
+     ]
+    },
+    {
+     "clave": [
+      "1892",
+      "retention.islr.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "6706"
+     ],
+     "v19": [
+      "6730"
+     ]
+    },
+    {
+     "clave": [
+      "1894",
+      "retention.municipal.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "10591"
+     ],
+     "v19": [
+      "10594"
+     ]
+    },
+    {
+     "clave": [
+      "1895",
+      "retention.islr.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "941"
+     ],
+     "v19": [
+      "945"
+     ]
+    },
+    {
+     "clave": [
+      "1896",
+      "retention.iva.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "6824"
+     ],
+     "v19": [
+      "6828"
+     ]
+    },
+    {
+     "clave": [
+      "2851",
+      "retention.islr.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "62"
+     ],
+     "v19": [
+      "79"
+     ]
+    },
+    {
+     "clave": [
+      "2852",
+      "retention.iva.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "770"
+     ],
+     "v19": [
+      "792"
+     ]
+    },
+    {
+     "clave": [
+      "3019",
+      "retention.municipal.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "32"
+     ],
+     "v19": [
+      "50"
+     ]
+    },
+    {
+     "clave": [
+      "709",
+      "retention.iva.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "59334"
+     ],
+     "v19": [
+      "59337"
+     ]
+    },
+    {
+     "clave": [
+      "710",
+      "retention.islr.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "27753"
+     ],
+     "v19": [
+      "27754"
+     ]
+    },
+    {
+     "clave": [
+      "711",
+      "retention.municipal.control.number",
+      "(null)"
+     ],
+     "v17": [
+      "38147"
+     ],
+     "v19": [
+      "38948"
+     ]
+    }
+   ]
+  },
+  "p09b_numeracion_diarios": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 243,
+   "filas_v19": 243,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 9 · Último número por diario y ejercicio (asientos posteados)",
+   "valores_distintos": []
+  },
+  "p10_adjuntos": {
+   "estado": "diferencias",
+   "faltan_en_v19": [],
+   "filas_v17": 4,
+   "filas_v19": 4,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 10 · ir.attachment: conteo, bytes y almacenamiento",
+   "valores_distintos": [
+    {
+     "clave": [
+      "adjuntos"
+     ],
+     "v17": [
+      "105931"
+     ],
+     "v19": [
+      "106005"
+     ]
+    },
+    {
+     "clave": [
+      "bytes"
+     ],
+     "v17": [
+      "10500194996"
+     ],
+     "v19": [
+      "10492433744"
+     ]
+    },
+    {
+     "clave": [
+      "en_filestore"
+     ],
+     "v17": [
+      "105822"
+     ],
+     "v19": [
+      "105919"
+     ]
+    }
+   ]
+  }
+ },
+ "comparado_en": "2026-09-29T16:43:50+00:00",
+ "destino": {
+  "base_de_datos": "19_idv",
+  "filestore": null,
+  "modulos_instalados": 330,
+  "modulos_pendientes": 16,
+  "tomado_en": "2026-09-29T16:43:25+00:00",
+  "version_base": "19.0.1.3"
+ },
+ "origen": {
+  "base_de_datos": "17_idv_src",
+  "filestore": null,
+  "modulos_instalados": 318,
+  "modulos_pendientes": 0,
+  "tomado_en": "2026-09-28T21:27:58+00:00",
+  "version_base": "17.0.1.3"
+ }
+}

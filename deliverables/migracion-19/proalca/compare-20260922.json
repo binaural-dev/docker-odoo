@@ -1,0 +1,619 @@
+{
+ "checks": {
+  "p01_conteo_por_modelo": {
+   "estado": "diferencias",
+   "faltan_en_v19": [
+    [
+     "stock_valuation_layer"
+    ],
+    [
+     "stock_valuation_layer_revaluation"
+    ]
+   ],
+   "filas_v17": 28,
+   "filas_v19": 26,
+   "ignoradas_por_renombre": [
+    "stock_valuation_layer",
+    "stock_valuation_layer_revaluation"
+   ],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 1 · Conteo por modelo",
+   "valores_distintos": [
+    {
+     "clave": [
+      "account_move"
+     ],
+     "v17": [
+      "151106"
+     ],
+     "v19": [
+      "151104"
+     ]
+    },
+    {
+     "clave": [
+      "ir_attachment"
+     ],
+     "v17": [
+      "9243"
+     ],
+     "v19": [
+      "9490"
+     ]
+    },
+    {
+     "clave": [
+      "ir_cron"
+     ],
+     "v17": [
+      "40"
+     ],
+     "v19": [
+      "52"
+     ]
+    },
+    {
+     "clave": [
+      "ir_mail_server"
+     ],
+     "v17": [
+      "0"
+     ],
+     "v19": [
+      "2"
+     ]
+    },
+    {
+     "clave": [
+      "ir_sequence"
+     ],
+     "v17": [
+      "511"
+     ],
+     "v19": [
+      "576"
+     ]
+    },
+    {
+     "clave": [
+      "res_partner"
+     ],
+     "v17": [
+      "3357"
+     ],
+     "v19": [
+      "3360"
+     ]
+    }
+   ]
+  },
+  "p02_sumas_por_diario": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 92,
+   "filas_v19": 92,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 2 · sum(debit/credit/balance) por compañía, diario y ejercicio",
+   "valores_distintos": []
+  },
+  "p03_balance_por_cuenta": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 875,
+   "filas_v19": 875,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 3 · Balance de comprobación por cuenta y ejercicio",
+   "valores_distintos": []
+  },
+  "p04_cuadre_global": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 4,
+   "filas_v19": 4,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 4 · sum(debit) = sum(credit) por asiento y global",
+   "valores_distintos": []
+  },
+  "p05_moneda_alterna": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 4,
+   "filas_v19": 4,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 5 · sum(foreign_debit/foreign_credit) por compañía y ejercicio",
+   "valores_distintos": []
+  },
+  "p06a_conciliacion_parcial": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 4,
+   "filas_v19": 4,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 6 · account.partial.reconcile: conteo y suma",
+   "valores_distintos": []
+  },
+  "p06b_estado_de_pago": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 14,
+   "filas_v19": 14,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 6 · facturas por payment_state",
+   "valores_distintos": []
+  },
+  "p07a_retenciones": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 5,
+   "filas_v19": 5,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 7 · Retenciones por tipo y ejercicio",
+   "valores_distintos": []
+  },
+  "p07b_retencion_lineas": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 4,
+   "filas_v19": 4,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 7 · Líneas de retención por tipo de factura",
+   "valores_distintos": []
+  },
+  "p08a_quants": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 617,
+   "filas_v19": 617,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 8 · stock.quant por compañía, ubicación y producto",
+   "valores_distintos": []
+  },
+  "p08b_valuation_layer": {
+   "estado": "ausente_en_destino",
+   "informativo": true
+  },
+  "p09a_secuencias": {
+   "estado": "diferencias",
+   "faltan_en_v19": [
+    [
+     "11",
+     "stock.quant.package",
+     "PACK"
+    ],
+    [
+     "8",
+     "procurement.group",
+     "PG/"
+    ]
+   ],
+   "filas_v17": 511,
+   "filas_v19": 576,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [
+    [
+     "11",
+     "stock.package",
+     "PACK"
+    ],
+    [
+     "2730",
+     "account.payment",
+     "PAY"
+    ],
+    [
+     "2731",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "2732",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "2733",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "2734",
+     "(null)",
+     "GROUP/%(range_year)s/"
+    ],
+    [
+     "2735",
+     "purchase.requisition.purchase.template",
+     "PT"
+    ],
+    [
+     "2736",
+     "(null)",
+     "WH/QC/"
+    ],
+    [
+     "2737",
+     "(null)",
+     "WH/STOR/"
+    ],
+    [
+     "2738",
+     "(null)",
+     "WH/XD/"
+    ],
+    [
+     "2739",
+     "(null)",
+     "A001/QC/"
+    ],
+    [
+     "2740",
+     "(null)",
+     "A001/STOR/"
+    ],
+    [
+     "2741",
+     "(null)",
+     "A001/XD/"
+    ],
+    [
+     "2742",
+     "(null)",
+     "A004/QC/"
+    ],
+    [
+     "2743",
+     "(null)",
+     "A004/STOR/"
+    ],
+    [
+     "2744",
+     "(null)",
+     "A004/XD/"
+    ],
+    [
+     "2745",
+     "(null)",
+     "A002/QC/"
+    ],
+    [
+     "2746",
+     "(null)",
+     "A002/STOR/"
+    ],
+    [
+     "2747",
+     "(null)",
+     "A002/XD/"
+    ],
+    [
+     "2748",
+     "(null)",
+     "A005/QC/"
+    ],
+    [
+     "2749",
+     "(null)",
+     "A005/STOR/"
+    ],
+    [
+     "2750",
+     "(null)",
+     "A005/XD/"
+    ],
+    [
+     "2751",
+     "(null)",
+     "A010/QC/"
+    ],
+    [
+     "2752",
+     "(null)",
+     "A010/STOR/"
+    ],
+    [
+     "2753",
+     "(null)",
+     "A010/XD/"
+    ],
+    [
+     "2754",
+     "(null)",
+     "A001/QC/"
+    ],
+    [
+     "2755",
+     "(null)",
+     "A001/STOR/"
+    ],
+    [
+     "2756",
+     "(null)",
+     "A001/XD/"
+    ],
+    [
+     "2757",
+     "(null)",
+     "A011/QC/"
+    ],
+    [
+     "2758",
+     "(null)",
+     "A011/STOR/"
+    ],
+    [
+     "2759",
+     "(null)",
+     "A011/XD/"
+    ],
+    [
+     "2760",
+     "(null)",
+     "A003/QC/"
+    ],
+    [
+     "2761",
+     "(null)",
+     "A003/STOR/"
+    ],
+    [
+     "2762",
+     "(null)",
+     "A003/XD/"
+    ],
+    [
+     "2763",
+     "(null)",
+     "A001/QC/"
+    ],
+    [
+     "2764",
+     "(null)",
+     "A001/STOR/"
+    ],
+    [
+     "2765",
+     "(null)",
+     "A001/XD/"
+    ],
+    [
+     "2766",
+     "(null)",
+     "A002/QC/"
+    ],
+    [
+     "2767",
+     "(null)",
+     "A002/STOR/"
+    ],
+    [
+     "2768",
+     "(null)",
+     "A002/XD/"
+    ],
+    [
+     "2769",
+     "(null)",
+     "A003/QC/"
+    ],
+    [
+     "2770",
+     "(null)",
+     "A003/STOR/"
+    ],
+    [
+     "2771",
+     "(null)",
+     "A003/XD/"
+    ],
+    [
+     "2772",
+     "(null)",
+     "A004/QC/"
+    ],
+    [
+     "2773",
+     "(null)",
+     "A004/STOR/"
+    ],
+    [
+     "2774",
+     "(null)",
+     "A004/XD/"
+    ],
+    [
+     "2775",
+     "(null)",
+     "A002/QC/"
+    ],
+    [
+     "2776",
+     "(null)",
+     "A002/STOR/"
+    ],
+    [
+     "2777",
+     "(null)",
+     "A002/XD/"
+    ],
+    [
+     "2778",
+     "(null)",
+     "A003/QC/"
+    ],
+    [
+     "2779",
+     "(null)",
+     "A003/STOR/"
+    ],
+    [
+     "2780",
+     "(null)",
+     "A003/XD/"
+    ],
+    [
+     "2781",
+     "(null)",
+     "A004/QC/"
+    ],
+    [
+     "2782",
+     "(null)",
+     "A004/STOR/"
+    ],
+    [
+     "2783",
+     "(null)",
+     "A004/XD/"
+    ],
+    [
+     "2784",
+     "(null)",
+     "A005/QC/"
+    ],
+    [
+     "2785",
+     "(null)",
+     "A005/STOR/"
+    ],
+    [
+     "2786",
+     "(null)",
+     "A005/XD/"
+    ],
+    [
+     "2787",
+     "(null)",
+     "A005/QC/"
+    ],
+    [
+     "2788",
+     "(null)",
+     "A005/STOR/"
+    ],
+    [
+     "2789",
+     "(null)",
+     "A005/XD/"
+    ],
+    [
+     "2790",
+     "(null)",
+     "AGROT/QC/"
+    ],
+    [
+     "2791",
+     "(null)",
+     "AGROT/STOR/"
+    ],
+    [
+     "2792",
+     "(null)",
+     "AGROT/XD/"
+    ],
+    [
+     "2793",
+     "(null)",
+     "a/QC/"
+    ],
+    [
+     "2794",
+     "(null)",
+     "a/STOR/"
+    ],
+    [
+     "2795",
+     "(null)",
+     "a/XD/"
+    ]
+   ],
+   "titulo": "Punto 9 · ir.sequence: number_next por secuencia",
+   "valores_distintos": []
+  },
+  "p09b_numeracion_diarios": {
+   "estado": "ok",
+   "faltan_en_v19": [],
+   "filas_v17": 85,
+   "filas_v19": 85,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 9 · Último número por diario y ejercicio (asientos posteados)",
+   "valores_distintos": []
+  },
+  "p10_adjuntos": {
+   "estado": "diferencias",
+   "faltan_en_v19": [],
+   "filas_v17": 4,
+   "filas_v19": 4,
+   "ignoradas_por_renombre": [],
+   "nuevas_en_v19": [],
+   "titulo": "Punto 10 · ir.attachment: conteo, bytes y almacenamiento",
+   "valores_distintos": [
+    {
+     "clave": [
+      "adjuntos"
+     ],
+     "v17": [
+      "9243"
+     ],
+     "v19": [
+      "9490"
+     ]
+    },
+    {
+     "clave": [
+      "bytes"
+     ],
+     "v17": [
+      "1043324294"
+     ],
+     "v19": [
+      "1036849188"
+     ]
+    },
+    {
+     "clave": [
+      "en_filestore"
+     ],
+     "v17": [
+      "9070"
+     ],
+     "v19": [
+      "9170"
+     ]
+    }
+   ]
+  }
+ },
+ "comparado_en": "2026-09-22T14:13:02+00:00",
+ "destino": {
+  "base_de_datos": "19_proalca_run5",
+  "filestore": {
+   "archivos": 290,
+   "bytes": 343439
+  },
+  "modulos_instalados": 253,
+  "modulos_pendientes": 0,
+  "tomado_en": "2026-09-22T14:12:57+00:00",
+  "version_base": "19.0.1.3"
+ },
+ "origen": {
+  "base_de_datos": "17_proalca_bs",
+  "filestore": {
+   "archivos": 0,
+   "bytes": 0
+  },
+  "modulos_instalados": 231,
+  "modulos_pendientes": 0,
+  "tomado_en": "2026-09-22T14:12:54+00:00",
+  "version_base": "17.0.1.3"
+ }
+}

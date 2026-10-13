@@ -1,0 +1,1059 @@
+#!/usr/bin/env python3
+
+"""
+Genera el informe HTML de cobertura a partir del dataset de
+coverage-sweep-aggregate.
+
+  scripts/coverage-sweep-report \
+      --dataset deliverables/coverage-sweep/dataset-2026-09.json \
+      --out deliverables/coverage-sweep/informe-2026-09.html
+
+El HTML es autocontenido: lleva el dataset embebido como `const DATA` y arma
+las tablas del lado del cliente, asi que se puede abrir suelto o publicar tal
+cual. Mantiene el estilo editorial de la serie (misma tipografia, misma banda
+de procedencia, misma tabla filtrable) para que se lea como el mismo documento
+de siempre, con un color de acento por linea de producto.
+"""
+
+import argparse
+import json
+import os
+
+# Un acento por linea. Terracota / musgo / verde-azulado: tres tonos apagados y
+# claramente separados en tono, no en luminosidad, para que se distingan
+# tambien impresos en gris y en las dos variantes de tema.
+LINE_STYLE = {
+    "17.0": {
+        "slug": "a", "label": "17.0",
+        "tagline": "Núcleo del 17: el vertical sin la localización",
+        "light": "#B14A2E", "dark": "#D2764F",
+        "soft_light": "#F6E4DE", "soft_dark": "#362018",
+    },
+    "l10nve_17.0": {
+        "slug": "b", "label": "l10nve_17.0",
+        "tagline": "La línea de localización venezolana sobre 17",
+        "light": "#5F6B24", "dark": "#A3B25C",
+        "soft_light": "#EBEEDC", "soft_dark": "#242A12",
+    },
+    "19.0": {
+        "slug": "c", "label": "19.0",
+        "tagline": "La línea nueva: a dónde va el producto",
+        "light": "#00808F", "dark": "#2AA3AC",
+        "soft_light": "#DCEEF1", "soft_dark": "#123138",
+    },
+}
+
+CSS = """
+  :root {
+    color-scheme: light dark;
+    --paper: #FAFBFB;
+    --card: #FFFFFF;
+    --sunk: #F1F4F4;
+    --ink: #0F1719;
+    --ink-2: #3C4A4D;
+    --ink-3: #6B797C;
+    --line: #DFE6E7;
+    --line-strong: #C4D0D2;
+    --crit: #A3352A;
+    --warn: #8A6410;
+    --ok: #2C6B52;
+    --crit-bg: #F7E6E3;
+    --warn-bg: #F7EFDC;
+    --ok-bg: #E3F0E9;
+__ACCENTS_LIGHT__
+    --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --rule: 1px solid var(--line);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #0E1416; --card: #151D20; --sunk: #1A2428;
+      --ink: #E7EEEF; --ink-2: #B4C2C5; --ink-3: #849699;
+      --line: #253236; --line-strong: #35464B;
+      --crit: #E0857A; --warn: #D2AC55; --ok: #6FBF95;
+      --crit-bg: #2E1B18; --warn-bg: #2C2413; --ok-bg: #16291F;
+__ACCENTS_DARK__
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0E1416; --card: #151D20; --sunk: #1A2428;
+    --ink: #E7EEEF; --ink-2: #B4C2C5; --ink-3: #849699;
+    --line: #253236; --line-strong: #35464B;
+    --crit: #E0857A; --warn: #D2AC55; --ok: #6FBF95;
+    --crit-bg: #2E1B18; --warn-bg: #2C2413; --ok-bg: #16291F;
+__ACCENTS_DARK__
+  }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px 96px; }
+  .num { font-variant-numeric: tabular-nums; }
+  code, .mono { font-family: var(--mono); }
+
+  .masthead { border-bottom: 2px solid var(--ink); padding: 48px 0 20px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0 0 14px;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 600; font-size: clamp(30px, 4.4vw, 46px);
+    line-height: 1.08; letter-spacing: -.015em; margin: 0 0 10px; text-wrap: balance;
+  }
+  .standfirst { color: var(--ink-2); max-width: 62ch; margin: 0; font-size: 16px; }
+
+  .wip {
+    border: 1px solid var(--warn); background: var(--warn-bg); color: var(--warn);
+    padding: 13px 16px; margin: 28px 0 0; font-size: 14px;
+  }
+  .wip strong { color: var(--warn); }
+  .wip ul { margin: 8px 0 0; padding-left: 20px; }
+  .wip li { margin-bottom: 3px; font-family: var(--mono); font-size: 12.5px; }
+
+  .stamp {
+    display: grid; gap: 1px; background: var(--line);
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    border: var(--rule); margin: 28px 0 44px;
+  }
+  .stamp > div { background: var(--card); padding: 13px 16px; }
+  .stamp dt {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0 0 5px;
+  }
+  .stamp dd { margin: 0; font-family: var(--mono); font-size: 12.5px; line-height: 1.7; }
+  .stamp .repo { color: var(--ink); font-weight: 600; }
+  .stamp .meta { color: var(--ink-2); }
+
+  h2 {
+    font-family: var(--serif); font-size: 25px; font-weight: 600; letter-spacing: -.01em;
+    margin: 0 0 6px; text-wrap: balance;
+  }
+  .lede { color: var(--ink-2); margin: 0 0 22px; max-width: 68ch; }
+  section { margin-top: 56px; }
+  .sec-rule {
+    display: flex; align-items: baseline; gap: 14px; border-top: 2px solid var(--ink);
+    padding-top: 14px; margin-bottom: 4px;
+  }
+  .sec-rule .n { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .1em; }
+
+  .critbar {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    margin: 0 0 22px; padding-bottom: 18px; border-bottom: var(--rule);
+  }
+  .critlabel {
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 3px; overflow: hidden; }
+  .seg button {
+    font-family: var(--sans); font-size: 13px; padding: 7px 14px; cursor: pointer;
+    background: var(--card); color: var(--ink-2); border: 0; border-right: 1px solid var(--line-strong);
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button:hover { color: var(--ink); background: var(--sunk); }
+  .seg button[aria-pressed="true"] {
+    background: var(--ink); color: var(--paper); font-weight: 600;
+  }
+  .seg button:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+
+  .versus { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+  .vcard { border: var(--rule); background: var(--card); padding: 22px; border-top-width: 3px; }
+  .vcard h3 {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .1em; text-transform: uppercase;
+    margin: 0 0 2px; color: var(--ink-2);
+  }
+  .vcard .tagline { font-size: 13px; color: var(--ink-3); margin: 0 0 18px; min-height: 2.6em; }
+  .hero { display: flex; align-items: baseline; gap: 10px; }
+  .hero .figure {
+    font-family: var(--serif); font-size: 58px; line-height: .95; font-weight: 600;
+    letter-spacing: -.03em;
+  }
+  .hero .unit { font-size: 22px; color: var(--ink-3); font-family: var(--serif); }
+  .hero-label { font-size: 13px; color: var(--ink-2); margin: 6px 0 20px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); border: var(--rule); }
+  .stats div { background: var(--card); padding: 11px 13px; }
+  .stats .k {
+    font-size: 10.5px; font-family: var(--mono); letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-3); display: block; margin-bottom: 3px;
+  }
+  .stats .v { font-size: 19px; font-weight: 600; }
+  .stats .v .sub { font-size: 12px; font-weight: 400; color: var(--ink-3); }
+
+  .subh {
+    font-family: var(--serif); font-size: 19px; font-weight: 600;
+    margin: 34px 0 4px; letter-spacing: -.01em;
+  }
+  .bigdelta {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px 22px;
+    border: var(--rule); background: var(--card); padding: 20px 22px;
+  }
+  .bigdelta .pair { display: flex; align-items: baseline; gap: 10px; }
+  .bigdelta .from, .bigdelta .to {
+    font-family: var(--serif); font-size: 40px; font-weight: 600; letter-spacing: -.03em;
+  }
+  .bigdelta .from { color: var(--ink-3); }
+  .bigdelta .arrow { font-size: 22px; color: var(--ink-3); }
+  .bigdelta .d {
+    font-family: var(--mono); font-size: 17px; font-weight: 600;
+    padding: 3px 10px; border-radius: 3px;
+  }
+  .bigdelta .d.up { background: var(--ok-bg); color: var(--ok); }
+  .bigdelta .d.down { background: var(--crit-bg); color: var(--crit); }
+  .bigdelta .cap { font-size: 13px; color: var(--ink-2); max-width: 46ch; }
+  td.up, .d-up { color: var(--ok); }
+  td.down, .d-down { color: var(--crit); }
+  .forked { font-family: var(--mono); font-size: 10.5px; color: var(--warn); white-space: nowrap; }
+
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 26px; }
+  .chart { border: var(--rule); background: var(--card); padding: 20px; }
+  .chart h4 { margin: 0 0 2px; font-size: 14px; font-weight: 600; }
+  .chart .cap { margin: 0 0 18px; font-size: 12.5px; color: var(--ink-3); }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 150px; }
+  .bars .col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; position: relative; }
+  .bars .fill { border-radius: 4px 4px 0 0; transition: filter .12s; }
+  .bars .col:hover .fill { filter: brightness(1.25); }
+  .bars .col .tip {
+    position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%);
+    background: var(--ink); color: var(--paper); font-size: 11.5px; font-family: var(--mono);
+    padding: 5px 8px; border-radius: 3px; white-space: nowrap; opacity: 0; pointer-events: none;
+    transition: opacity .1s; margin-bottom: 6px; z-index: 5;
+  }
+  .bars .col:hover .tip { opacity: 1; }
+  .axis {
+    display: flex; justify-content: space-between; border-top: 1px solid var(--line-strong);
+    padding-top: 6px; margin-top: 4px; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+  }
+
+  .tblwrap { overflow-x: auto; border: var(--rule); background: var(--card); }
+  .tblwrap.tall { max-height: 74vh; overflow-y: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+  thead th {
+    position: sticky; top: 0; background: var(--sunk); z-index: 2;
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--ink-2); font-weight: 600; border-bottom: 1px solid var(--line-strong); white-space: nowrap;
+  }
+  thead th.sortable { cursor: pointer; user-select: none; }
+  thead th.sortable:hover { color: var(--ink); }
+  thead th .arr { opacity: .35; }
+  thead th.act .arr { opacity: 1; }
+  td.r, th.r { text-align: right; }
+  tbody tr:hover { background: var(--sunk); }
+  tbody tr:last-child td { border-bottom: none; }
+  .mod { font-family: var(--mono); font-size: 12.5px; }
+  .repotag {
+    font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; border: 1px solid var(--line-strong);
+    color: var(--ink-2); white-space: nowrap;
+  }
+  .ltag { font-family: var(--mono); font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .pill {
+    display: inline-block; font-size: 10.5px; font-family: var(--mono); letter-spacing: .04em;
+    padding: 1px 7px; border-radius: 2px; white-space: nowrap;
+  }
+  .pill.crit { background: var(--crit-bg); color: var(--crit); }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); }
+  .pill.ok   { background: var(--ok-bg);   color: var(--ok); }
+  .meter { display: flex; align-items: center; gap: 9px; min-width: 132px; }
+  .meter .track { flex: 1; height: 7px; background: var(--sunk); border-radius: 4px; overflow: hidden; }
+  .meter .lvl { height: 100%; border-radius: 4px; }
+  .meter .pct { width: 46px; text-align: right; font-family: var(--mono); font-size: 12.5px; white-space: nowrap; }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 14px; }
+  .controls input[type="search"], .controls select {
+    font-family: var(--sans); font-size: 13px; padding: 7px 10px; background: var(--card);
+    color: var(--ink); border: 1px solid var(--line-strong); border-radius: 3px;
+  }
+  .controls input[type="search"] { min-width: 230px; }
+  .controls input:focus-visible, .controls select:focus-visible, th.sortable:focus-visible {
+    outline: 2px solid var(--ink); outline-offset: 2px;
+  }
+  .count { font-family: var(--mono); font-size: 12px; color: var(--ink-3); margin-left: auto; }
+
+  .prog { display: grid; gap: 3px; }
+  .prog .row { display: grid; grid-template-columns: minmax(200px, 340px) 1fr; gap: 14px; align-items: center; padding: 4px 0; }
+  .prog .name { font-family: var(--mono); font-size: 12px; line-height: 1.4; }
+  .prog .lane { position: relative; height: 18px; }
+  .prog .lane::before {
+    content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--line);
+  }
+  .prog .conn { position: absolute; top: 50%; height: 2px; transform: translateY(-50%); background: var(--line-strong); }
+  .prog .dot {
+    position: absolute; top: 50%; width: 11px; height: 11px; border-radius: 50%;
+    transform: translate(-50%, -50%); border: 2px solid var(--card);
+  }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; font-size: 12.5px; color: var(--ink-2); margin-bottom: 14px; }
+  .legend span { display: flex; align-items: center; gap: 6px; }
+  .swatch { width: 11px; height: 11px; border-radius: 50%; }
+
+  .notes { border: var(--rule); background: var(--card); padding: 24px 26px; }
+  .notes h3 { font-family: var(--serif); font-size: 17px; margin: 0 0 8px; }
+  .notes h3:not(:first-child) { margin-top: 24px; }
+  .notes p, .notes li { color: var(--ink-2); font-size: 14px; }
+  .notes p { margin: 0 0 10px; max-width: 74ch; }
+  .notes ul { margin: 0; padding-left: 20px; }
+  .notes li { margin-bottom: 7px; max-width: 74ch; }
+  .notes code { font-size: 12.5px; background: var(--sunk); padding: 1px 5px; border-radius: 2px; color: var(--ink); }
+  .finding { border-left: 3px solid var(--ink-3); padding-left: 16px; margin: 0 0 20px; }
+  .finding p { margin: 0; }
+  .finding strong { color: var(--ink); }
+  footer {
+    margin-top: 64px; padding-top: 18px; border-top: var(--rule);
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+"""
+
+
+def build_css(lines):
+    light, dark, extra = [], [], []
+    for label in lines:
+        st = LINE_STYLE.get(label)
+        if not st:
+            continue
+        s = st["slug"]
+        light.append(f"    --acc-{s}: {st['light']};")
+        light.append(f"    --acc-{s}-soft: {st['soft_light']};")
+        dark.append(f"      --acc-{s}: {st['dark']};")
+        dark.append(f"      --acc-{s}-soft: {st['soft_dark']};")
+        extra.append(
+            f"  .acc-{s} {{ color: var(--acc-{s}); }}\n"
+            f"  .bg-{s} {{ background: var(--acc-{s}); }}\n"
+            f"  .bt-{s} {{ border-top-color: var(--acc-{s}); }}\n"
+        )
+    css = CSS.replace("__ACCENTS_LIGHT__", "\n".join(light))
+    css = css.replace("__ACCENTS_DARK__", "\n".join(dark))
+    return css + "\n" + "".join(extra)
+
+
+BODY = """<div class="wrap">
+  <header class="masthead">
+    <p class="eyebrow">Binaural · Medición de calidad de código</p>
+    <h1>Cobertura de tests por línea de producto</h1>
+    <p class="standfirst">
+      Instalación y ejecución aislada de la suite de cada módulo de
+      <code>odoo-venezuela</code> e <code>integra-addons</code>, en las tres líneas
+      que hoy están vivas: el núcleo de 17.0, la localización venezolana sobre 17
+      y la línea 19.0.
+    </p>
+  </header>
+
+  <div id="wip"></div>
+
+  <dl class="stamp" id="stamp"></dl>
+
+  <section id="resumen" style="margin-top:0">
+    <div class="sec-rule"><span class="n">01</span><h2>Las tres líneas, lado a lado</h2></div>
+    <p class="lede">
+      La cifra grande es la cobertura ponderada: líneas ejercitadas sobre el total de
+      líneas de código de todos los módulos de la línea. Es la que refleja el riesgo
+      real, porque un módulo de 2 000 líneas sin cubrir pesa más que uno de 20.
+    </p>
+    <div class="critbar">
+      <span class="critlabel">Qué entra en la cuenta</span>
+      <div class="seg" id="crit" role="group" aria-label="Qué archivos entran en la cuenta"></div>
+    </div>
+    <div class="versus" id="versus"></div>
+  </section>
+
+  <section id="progreso" hidden>
+    <div class="sec-rule"><span class="n">02</span><h2>Qué cambió desde la medición anterior</h2></div>
+    <p class="lede" id="prog-lede"></p>
+    <div class="bigdelta" id="bigdelta"></div>
+    <div class="tblwrap" style="margin-top:20px">
+      <table id="progtbl">
+        <thead><tr>
+          <th>Línea</th><th>Repositorio</th><th class="r">Módulos</th>
+          <th class="r">Antes</th><th class="r">Hoy</th><th class="r">Δ</th>
+          <th class="r">Mejoraron</th><th class="r">Cayeron</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="lede" id="prog-nota-linaje" style="margin-top:16px"></p>
+
+    <h3 class="subh">Dónde se hizo el trabajo</h3>
+    <p class="lede">Los módulos que más subieron. Es donde alguien escribió pruebas.</p>
+    <div class="tblwrap">
+      <table id="mejorastbl">
+        <thead><tr><th>Módulo</th><th>Línea</th><th class="r">Antes</th><th class="r">Hoy</th><th class="r">Δ</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h3 class="subh">Lo que se está perdiendo por módulos rotos</h3>
+    <p class="lede" id="rotos-lede"></p>
+    <div class="tblwrap">
+      <table id="rotostbl">
+        <thead><tr><th>Módulo</th><th>Línea</th><th class="r">Antes</th><th class="r">Hoy</th><th>Por qué</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="distribucion">
+    <div class="sec-rule"><span class="n">03</span><h2>Cómo se reparten los módulos</h2></div>
+    <p class="lede">
+      Cuántos módulos caen en cada tramo de cobertura. La primera barra —el tramo
+      0–10 %— es la que manda: son los módulos que se cargan pero cuya lógica nadie
+      ejerce.
+    </p>
+    <div class="charts" id="charts"></div>
+  </section>
+
+  <section id="repos">
+    <div class="sec-rule"><span class="n">04</span><h2>Por repositorio</h2></div>
+    <p class="lede">
+      <code>odoo-venezuela</code> concentra la localización fiscal;
+      <code>integra-addons</code>, la funcionalidad transversal. Conviene mirarlos por
+      separado: el costo de un fallo no es el mismo en uno que en otro.
+    </p>
+    <div class="tblwrap">
+      <table id="repotbl">
+        <thead><tr>
+          <th>Repositorio</th><th>Línea</th><th class="r">Módulos</th>
+          <th class="r">Con tests</th><th class="r">En 0 %</th>
+          <th class="r">Líneas</th><th class="r">Sin cubrir</th><th>Cobertura ponderada</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="deuda">
+    <div class="sec-rule"><span class="n">05</span><h2>Dónde está la deuda</h2></div>
+    <p class="lede">
+      Módulos ordenados por líneas sin cubrir, no por porcentaje. Este es el orden en
+      que conviene atacarlos: cada fila de arriba compra más cobertura real que diez
+      de abajo.
+    </p>
+    <div class="tblwrap">
+      <table id="deudatbl">
+        <thead><tr>
+          <th>Módulo</th><th>Repo</th><th>Línea</th>
+          <th class="r">Sin cubrir</th><th class="r">Líneas</th><th>Cobertura</th><th class="r">Tests</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="noinstala">
+    <div class="sec-rule"><span class="n">06</span><h2>Los que ni siquiera llegan a instalarse</h2></div>
+    <p class="lede">
+      Buena parte de los módulos que marcan 0 % no es que no tengan pruebas: es que la
+      instalación falla, así que su código nunca llega a cargarse. Se distinguen
+      consultando <code>ir_module_module</code> después de cada corrida. Esto no es
+      deuda de tests — es un módulo roto, y se arregla de otra forma.
+    </p>
+    <div class="tblwrap">
+      <table id="noinsttbl">
+        <thead><tr><th>Módulo</th><th>Línea</th><th>Estado</th><th>Causa</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="lede" style="margin-top:18px" id="excluidos-nota"></p>
+    <div class="tblwrap" id="excluidos-wrap" hidden>
+      <table id="exctbl">
+        <thead><tr><th>Módulo</th><th>Línea</th><th>Por qué no se pudo medir</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="entrelineas">
+    <div class="sec-rule"><span class="n">07</span><h2>Qué cambia de una línea a otra</h2></div>
+    <p class="lede">
+      Módulos que viven en más de una línea, con la mayor variación entre la primera y
+      la última en la que aparecen. Sirve para ver qué se quedó atrás al migrar y qué
+      llegó mejor probado del otro lado.
+    </p>
+    <div class="legend" id="legend"></div>
+    <div class="prog" id="prog"></div>
+    <p class="lede" style="margin-top:18px" id="prognota"></p>
+  </section>
+
+  <section id="tabla">
+    <div class="sec-rule"><span class="n">08</span><h2>Todos los módulos</h2></div>
+    <p class="lede">Tabla completa y filtrable. Se ordena haciendo clic en cualquier encabezado.</p>
+    <div class="controls">
+      <input type="search" id="q" placeholder="Buscar módulo…" aria-label="Buscar módulo">
+      <select id="fl" aria-label="Filtrar por línea"></select>
+      <select id="fr" aria-label="Filtrar por repositorio"></select>
+      <select id="fs" aria-label="Filtrar por estado">
+        <option value="">Todos los estados</option>
+        <option value="crit">Sin cobertura (0 %)</option>
+        <option value="noinst">No se pudo instalar</option>
+        <option value="notest">Sin archivos de test</option>
+        <option value="test">Con archivos de test</option>
+        <option value="nocode">Sin código medible</option>
+        <option value="err">Con error de medición</option>
+      </select>
+      <span class="count" id="cnt"></span>
+    </div>
+    <div class="tblwrap tall">
+      <table id="alltbl">
+        <thead><tr>
+          <th class="sortable" data-k="module" tabindex="0">Módulo <span class="arr">↕</span></th>
+          <th class="sortable" data-k="repo" tabindex="0">Repo <span class="arr">↕</span></th>
+          <th class="sortable" data-k="line" tabindex="0">Línea <span class="arr">↕</span></th>
+          <th class="sortable r" data-k="pct" tabindex="0">Cobertura <span class="arr">↕</span></th>
+          <th class="sortable r" data-k="stmts" tabindex="0">Líneas <span class="arr">↕</span></th>
+          <th class="sortable r" data-k="miss" tabindex="0">Sin cubrir <span class="arr">↕</span></th>
+          <th class="sortable r" data-k="n_test_files" tabindex="0">Tests <span class="arr">↕</span></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="notas">
+    <div class="sec-rule"><span class="n">09</span><h2>Hallazgos y método</h2></div>
+    <div class="notes" id="notas-body"></div>
+  </section>
+
+  <footer>
+    <span id="foot-date"></span>
+    <span>Documento interno de Binaural — no distribuir fuera de la empresa</span>
+  </footer>
+</div>
+"""
+
+
+SCRIPT = r"""
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = (n) => (n === null || n === undefined) ? '—' : n.toLocaleString('es-VE');
+
+const LINES = Object.keys(DATA.lines);
+const STYLE = DATA.line_style;
+const acc = (l) => `acc-${STYLE[l].slug}`;
+const bg = (l) => `bg-${STYLE[l].slug}`;
+
+/* Las dos formas de contar la misma medición. "all" cuenta también los
+   archivos de test y el andamiaje; "prod", solo el código de producción.
+   Salen de la misma corrida, así que el interruptor no re-mide nada: solo
+   cambia qué se suma. */
+const CRITERIA = {
+  all:  { label: 'Incluyendo archivos de test', k: { p: 'pct_all', s: 'stmts_all', m: 'miss_all', kl: 'klass_all' }, sum: 'summary_all', byRepo: 'by_repo_all' },
+  prod: { label: 'Solo código de producción',   k: { p: 'pct', s: 'stmts', m: 'miss', kl: 'klass' },                 sum: 'summary',     byRepo: 'by_repo' },
+};
+const CRIT_MODE = DATA.criterion || 'both';
+let CRIT = CRIT_MODE === 'prod' ? 'prod' : 'all';
+const K = () => CRITERIA[CRIT].k;
+const SUM = (l) => DATA.lines[l][CRITERIA[CRIT].sum];
+const BYREPO = (l) => DATA.lines[l][CRITERIA[CRIT].byRepo];
+
+const ROWS = [];
+for (const l of LINES) for (const m of DATA.lines[l].modules) ROWS.push(m);
+
+/* ---------- aviso de barrido en curso ---------- */
+{
+  const partial = LINES.filter(l => DATA.lines[l].complete === false);
+  if (partial.length) {
+    $('#wip').innerHTML = `<div class="wip">
+      <strong>Medición en curso.</strong> Estas líneas todavía se están midiendo, así que
+      sus cifras van a cambiar y no conviene citarlas todavía:
+      <ul>${partial.map(l => {
+        const b = DATA.lines[l];
+        return `<li>${esc(STYLE[l].label)} — ${b.modules.length} de ${b.expected} módulos medidos</li>`;
+      }).join('')}</ul>
+    </div>`;
+  }
+}
+
+/* ---------- banda de procedencia (no depende del criterio) ---------- */
+{
+  const cells = [];
+  for (const l of LINES) {
+    for (const [repo, g] of Object.entries(DATA.lines[l].repos)) {
+      cells.push(`<div>
+        <dt>${esc(repo)} · ${esc(l)}</dt>
+        <dd><span class="repo">${esc(g.branch)} · ${esc(g.commit)}</span><br>
+        <span class="meta">${esc(g.tag || 'sin tag')} · ${esc(g.date)}</span></dd>
+      </div>`);
+    }
+  }
+  cells.push(`<div><dt>Medición</dt><dd><span class="repo">${esc(DATA.measured_at || '')}</span><br>
+    <span class="meta">${ROWS.length} módulos · cada uno en su propia base</span></dd></div>`);
+  $('#stamp').innerHTML = cells.join('');
+  $('#foot-date').textContent = `Medido el ${DATA.measured_at || ''} · ${ROWS.length} módulos`;
+}
+
+const meter = (pct, l) => `<div class="meter">
+  <div class="track"><div class="lvl ${bg(l)}" style="width:${Math.max(0, Math.min(100, pct))}%"></div></div>
+  <span class="pct">${pct} %</span>
+</div>`;
+
+/* ---------- 01 · las tres líneas ---------- */
+function renderVersus() {
+  $('#versus').innerHTML = LINES.map(l => {
+    const s = SUM(l), st = STYLE[l];
+    return `<div class="vcard bt-${st.slug}">
+      <h3>${esc(st.label)}</h3>
+      <p class="tagline">${esc(st.tagline)}</p>
+      <div class="hero"><span class="figure num ${acc(l)}">${s.weighted_pct}</span><span class="unit">%</span></div>
+      <p class="hero-label">cobertura ponderada — ${fmt(s.total_stmts - s.total_miss)} de ${fmt(s.total_stmts)} líneas ejercitadas</p>
+      <div class="stats">
+        <div><span class="k">Módulos medidos</span><span class="v num">${s.measured}<span class="sub"> / ${DATA.lines[l].expected || s.total}</span></span></div>
+        <div><span class="k">Promedio simple</span><span class="v num">${s.avg_pct} %</span></div>
+        <div><span class="k">Con archivos de test</span><span class="v num">${s.with_tests}<span class="sub"> / ${s.measured}</span></span></div>
+        <div><span class="k">Sin ningún test</span><span class="v num">${s.without_tests}</span></div>
+        <div><span class="k">Sobre 70 %</span><span class="v num">${s.high}</span></div>
+        <div><span class="k">En 0 %</span><span class="v num">${s.zero}</span></div>
+        <div><span class="k">No instalan</span><span class="v num">${s.no_instala}</span></div>
+        <div><span class="k">Sin código medible</span><span class="v num">${s.sin_codigo}</span></div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* ---------- 02 · qué cambió desde la medición anterior ---------- */
+function renderProgreso() {
+  const ps = DATA.progress_summary;
+  if (!ps) return;                          // sin línea base, la sección no va
+  document.querySelector('#progreso').hidden = false;
+
+  const t = ps.total;
+  const sign = (d) => (d > 0 ? '+' : '') + d.toFixed(1);
+  const cls = (d) => (d > 0 ? 'up' : d < 0 ? 'down' : '');
+
+  $('#prog-lede').innerHTML = `Comparación contra la medición de
+    ${esc(ps.baseline_measured_at || 'la medición anterior')}, sobre los módulos que existen en las dos
+    y cuya rama es continuación directa de la que se midió entonces. Se compara con el mismo
+    criterio de conteo en ambos lados, así que la diferencia es trabajo, no método.`;
+
+  $('#bigdelta').innerHTML = `
+    <div class="pair">
+      <span class="from num">${t.weighted_baseline.toFixed(1)}</span>
+      <span class="arrow">→</span>
+      <span class="to num">${t.weighted_now.toFixed(1)}</span>
+      <span class="unit" style="font-size:20px;color:var(--ink-3)">%</span>
+      <span class="d ${cls(t.delta)}">${sign(t.delta)}</span>
+    </div>
+    <p class="cap">cobertura ponderada sobre los ${t.modules} módulos comparables ·
+      <strong>${t.improved} mejoraron</strong>, ${t.regressed} cayeron,
+      ${t.unchanged} quedaron igual</p>`;
+
+  $('#progtbl tbody').innerHTML = ps.by_scope.map(r => `<tr>
+    <td><span class="ltag ${acc(r.line)}">${esc(STYLE[r.line].label)}</span></td>
+    <td><span class="repotag">${esc(r.repo)}</span>${
+      r.lineage_ok ? '' : ' <span class="forked">rama bifurcada</span>'}</td>
+    <td class="r num">${r.modules}</td>
+    <td class="r num">${r.weighted_baseline} %</td>
+    <td class="r num"><strong>${r.weighted_now} %</strong></td>
+    <td class="r num ${cls(r.delta)}"><strong>${sign(r.delta)}</strong></td>
+    <td class="r num">${r.improved}</td>
+    <td class="r num">${r.regressed}</td>
+  </tr>`).join('');
+
+  const forked = ps.by_scope.filter(r => !r.lineage_ok);
+  $('#prog-nota-linaje').innerHTML = forked.length
+    ? `La fila marcada <span class="forked">rama bifurcada</span> se muestra aparte y no entra en
+       el total: ${forked.map(r => `<code>${esc(r.repo)}</code> en ${esc(STYLE[r.line].label)}`).join(', ')}
+       no es continuación de la rama que se midió en la medición anterior, sino una línea que se separó de ella,
+       así que su diferencia mezcla trabajo de pruebas con la divergencia entre ramas.`
+    : '';
+
+  /* los que subieron */
+  const rows = (DATA.progress || []).filter(r => r.status === 'both' && r.lineage_ok);
+  const up = rows.filter(r => r.delta > 1).sort((a, b) => b.delta - a.delta).slice(0, 15);
+  $('#mejorastbl tbody').innerHTML = up.map(r => `<tr>
+    <td class="mod">${esc(r.module)}</td>
+    <td><span class="ltag ${acc(r.line)}">${esc(STYLE[r.line].label)}</span></td>
+    <td class="r num">${r.pct_baseline} %</td>
+    <td class="r num"><strong>${r.pct_now} %</strong></td>
+    <td class="r num up"><strong>+${r.delta.toFixed(0)}</strong></td>
+  </tr>`).join('') || '<tr><td colspan="5" style="padding:20px;color:var(--ink-3)">Ningún módulo subió más de un punto.</td></tr>';
+
+  /* los que cayeron porque se rompieron */
+  const roto = rows.filter(r => r.delta < -1 && r.klass_now === 'no_instala')
+    .sort((a, b) => a.delta - b.delta);
+  const perdido = roto.reduce((acc2, r) => acc2 + (r.pct_baseline - r.pct_now), 0);
+  $('#rotos-lede').innerHTML = roto.length
+    ? `${roto.length} módulos que en la medición anterior instalaban y se probaban hoy <strong>no llegan a
+       instalarse</strong>, así que su cobertura cayó a cero. No es deuda de pruebas: sus tests
+       siguen ahí. Es lo más rentable a atacar — recuperar estos módulos sube la cifra sin
+       escribir una sola prueba nueva.`
+    : 'Ningún módulo perdió cobertura por dejar de instalarse.';
+  $('#rotostbl tbody').innerHTML = roto.map(r => `<tr>
+    <td class="mod">${esc(r.module)}</td>
+    <td><span class="ltag ${acc(r.line)}">${esc(STYLE[r.line].label)}</span></td>
+    <td class="r num">${r.pct_baseline} %</td>
+    <td class="r num"><span class="pill crit">0 %</span></td>
+    <td>${esc(r.install_cause || 'no instala')}</td>
+  </tr>`).join('') || '';
+}
+
+/* ---------- 03 · histogramas ---------- */
+function renderCharts() {
+  const BINS = 10, kp = K().p;
+  $('#charts').innerHTML = LINES.map(l => {
+    const mods = DATA.lines[l].modules.filter(m => !m.error);
+    const bins = new Array(BINS).fill(0);
+    for (const m of mods) bins[Math.min(BINS - 1, Math.floor(m[kp] / 10))]++;
+    const max = Math.max(...bins, 1);
+    const cols = bins.map((n, i) => {
+      const lo = i * 10, hi = i === BINS - 1 ? 100 : lo + 9;
+      return `<div class="col">
+        <span class="tip">${lo}–${hi} % · ${n} módulo${n === 1 ? '' : 's'}</span>
+        <div class="fill ${bg(l)}" style="height:${n ? Math.max(3, n / max * 100).toFixed(1) : 0}%"></div>
+      </div>`;
+    }).join('');
+    return `<div class="chart">
+      <h4 class="${acc(l)}">${esc(STYLE[l].label)}</h4>
+      <p class="cap">${mods.length} módulos medidos · pico de ${max} en un solo tramo</p>
+      <div class="bars">${cols}</div>
+      <div class="axis"><span>0 %</span><span>50 %</span><span>100 %</span></div>
+    </div>`;
+  }).join('');
+}
+
+/* ---------- 03 · por repositorio ---------- */
+function renderRepos() {
+  const rows = [];
+  for (const l of LINES) {
+    for (const [repo, s] of Object.entries(BYREPO(l))) {
+      rows.push(`<tr>
+        <td><span class="repotag">${esc(repo)}</span></td>
+        <td><span class="ltag ${acc(l)}">${esc(STYLE[l].label)}</span></td>
+        <td class="r num">${s.measured}</td>
+        <td class="r num">${s.with_tests}</td>
+        <td class="r num">${s.zero}</td>
+        <td class="r num">${fmt(s.total_stmts)}</td>
+        <td class="r num">${fmt(s.total_miss)}</td>
+        <td>${meter(s.weighted_pct, l)}</td>
+      </tr>`);
+    }
+  }
+  $('#repotbl tbody').innerHTML = rows.join('');
+}
+
+/* ---------- 04 · deuda ---------- */
+function renderDeuda() {
+  const { p, s: ks, m: km } = K();
+  const top = ROWS.filter(m => !m.error && m[km] > 0)
+    .sort((a, b) => b[km] - a[km]).slice(0, 30);
+  $('#deudatbl tbody').innerHTML = top.map(m => `<tr>
+    <td class="mod">${esc(m.module)}</td>
+    <td><span class="repotag">${esc(m.repo)}</span></td>
+    <td><span class="ltag ${acc(m.line)}">${esc(STYLE[m.line].label)}</span></td>
+    <td class="r num"><strong>${fmt(m[km])}</strong></td>
+    <td class="r num">${fmt(m[ks])}</td>
+    <td>${meter(m[p], m.line)}</td>
+    <td class="r num">${m.n_test_files || '—'}</td>
+  </tr>`).join('');
+}
+
+/* ---------- 05 · no instalan + excluidos (no dependen del criterio) ---------- */
+{
+  const bad = ROWS.filter(m => m[K().kl] === 'no_instala')
+    .sort((a, b) => a.module.localeCompare(b.module));
+  $('#noinsttbl tbody').innerHTML = bad.length ? bad.map(m => `<tr>
+    <td class="mod">${esc(m.module)}</td>
+    <td><span class="ltag ${acc(m.line)}">${esc(STYLE[m.line].label)}</span></td>
+    <td><span class="pill crit">${esc(m.install_state || 'no instala')}</span></td>
+    <td>${esc(m.install_cause || '—')}</td>
+  </tr>`).join('') : '<tr><td colspan="4" style="padding:20px;color:var(--ink-3)">Ninguno: todos los módulos medidos llegaron a instalarse.</td></tr>';
+
+  const exc = [];
+  for (const l of LINES) for (const e of DATA.lines[l].excluded) exc.push({ ...e, line: l });
+  if (exc.length) {
+    $('#excluidos-nota').innerHTML = `Aparte de esos, <strong>${exc.length} módulos no se pudieron medir</strong>
+      porque una dependencia suya no existe en el <code>addons_path</code> de la instancia: sin
+      poder instalarse, no hay nada que medir. Se detectan antes de correr, leyendo los
+      manifests, en vez de gastarles el tiempo límite.`;
+    $('#excluidos-wrap').hidden = false;
+    $('#exctbl tbody').innerHTML = exc.map(e => `<tr>
+      <td class="mod">${esc(e.path.split('/').pop())}</td>
+      <td><span class="ltag ${acc(e.line)}">${esc(STYLE[e.line].label)}</span></td>
+      <td>${esc(e.reason)}</td>
+    </tr>`).join('');
+  } else {
+    $('#excluidos-nota').textContent = 'Ningún módulo quedó fuera por dependencias ausentes.';
+  }
+
+  $('#legend').innerHTML = LINES.map(l =>
+    `<span><i class="swatch ${bg(l)}"></i> ${esc(STYLE[l].label)}</span>`).join('');
+}
+
+/* ---------- 06 · entre líneas ---------- */
+function renderProg() {
+  const pre = CRIT === 'all' ? 'pct_all_' : 'pct_';
+  const rows = DATA.comparison.map(c => {
+    const pts = LINES.map(l => ({ l, pct: c[pre + l] })).filter(p => p.pct !== null && p.pct !== undefined);
+    if (pts.length < 2) return null;
+    return { c, pts, delta: pts[pts.length - 1].pct - pts[0].pct };
+  }).filter(Boolean);
+
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+  const show = rows.slice(0, 24);
+
+  $('#prog').innerHTML = show.map(({ c, pts }) => {
+    const xs = pts.map(p => p.pct);
+    const lo = Math.min(...xs), hi = Math.max(...xs);
+    const dots = pts.map(p =>
+      `<i class="dot ${bg(p.l)}" style="left:${p.pct}%" title="${esc(STYLE[p.l].label)}: ${p.pct} %"></i>`).join('');
+    return `<div class="row">
+      <span class="name">${esc(c.module)}${c.caveat ? ` <span class="pill warn">${esc(c.caveat)}</span>` : ''}</span>
+      <span class="lane"><i class="conn" style="left:${lo}%;width:${hi - lo}%"></i>${dots}</span>
+    </div>`;
+  }).join('') || '<p class="lede">Ningún módulo aparece medido en más de una línea.</p>';
+
+  $('#prognota').innerHTML = `Se muestran los ${show.length} módulos con mayor variación, de
+    ${rows.length} presentes en más de una línea. El eje va de 0 a 100 % de izquierda a derecha.`;
+}
+
+/* ---------- 07 · tabla completa ---------- */
+let renderTable;
+{
+  $('#fl').innerHTML = '<option value="">Todas las líneas</option>' +
+    LINES.map(l => `<option value="${esc(l)}">${esc(STYLE[l].label)}</option>`).join('');
+  const repos = [...new Set(ROWS.map(m => m.repo))].sort();
+  $('#fr').innerHTML = '<option value="">Todos los repositorios</option>' +
+    repos.map(r => `<option value="${esc(r)}">${esc(r)}</option>`).join('');
+
+  const state = (r) => {
+    const kl = r[K().kl];
+    if (r.error) return { c: 'crit', t: 'error' };
+    if (kl === 'no_instala') return { c: 'crit', t: 'no instala' };
+    if (kl === 'sin_codigo') return { c: 'warn', t: 'sin código' };
+    if (r[K().p] === 0) return { c: 'crit', t: '0 %' };
+    if (r.n_test_files === 0) return { c: 'warn', t: 'sin tests' };
+    return { c: 'ok', t: `${r.n_test_files} test${r.n_test_files === 1 ? '' : 's'}` };
+  };
+
+  let sortKey = 'miss', sortDir = -1;
+  const tbody = $('#alltbl tbody');
+
+  renderTable = function () {
+    const { p, s: ks, m: km } = K();
+    const q = $('#q').value.trim().toLowerCase();
+    const fl = $('#fl').value, fr = $('#fr').value, fs = $('#fs').value;
+    let rows = ROWS.filter(r => {
+      if (q && !r.module.toLowerCase().includes(q)) return false;
+      if (fl && r.line !== fl) return false;
+      if (fr && r.repo !== fr) return false;
+      if (fs === 'crit' && !(r[p] === 0 && !r.error)) return false;
+      if (fs === 'noinst' && r[K().kl] !== 'no_instala') return false;
+      if (fs === 'nocode' && r[K().kl] !== 'sin_codigo') return false;
+      if (fs === 'notest' && !(r.n_test_files === 0 && !r.error)) return false;
+      if (fs === 'test' && !(r.n_test_files > 0)) return false;
+      if (fs === 'err' && !r.error) return false;
+      return true;
+    });
+
+    /* las columnas numéricas siguen al criterio activo */
+    const realKey = { pct: p, stmts: ks, miss: km }[sortKey] || sortKey;
+    rows = rows.slice().sort((a, b) => {
+      const av = a[realKey], bv = b[realKey];
+      if (typeof av === 'string') return av.localeCompare(bv) * sortDir;
+      return ((av ?? 0) - (bv ?? 0)) * sortDir;
+    });
+
+    $('#cnt').textContent = `${rows.length} de ${ROWS.length} módulos`;
+    tbody.innerHTML = rows.map(r => {
+      const st = state(r);
+      return `<tr>
+        <td class="mod">${esc(r.module)} <span class="pill ${st.c}">${st.t}</span></td>
+        <td><span class="repotag">${esc(r.repo)}</span></td>
+        <td><span class="ltag ${acc(r.line)}">${esc(STYLE[r.line].label)}</span></td>
+        <td class="r">${r.error ? '<span class="pill crit">error</span>' : meter(r[p], r.line)}</td>
+        <td class="r num">${fmt(r[ks])}</td>
+        <td class="r num">${fmt(r[km])}</td>
+        <td class="r num">${r.n_test_files || '—'}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan="7" style="padding:24px;color:var(--ink-3)">Ningún módulo coincide con el filtro.</td></tr>';
+
+    document.querySelectorAll('#alltbl th.sortable').forEach(th => {
+      const on = th.dataset.k === sortKey;
+      th.classList.toggle('act', on);
+      th.querySelector('.arr').textContent = on ? (sortDir === 1 ? '↑' : '↓') : '↕';
+    });
+  };
+
+  const setSort = (k) => {
+    if (sortKey === k) sortDir = -sortDir;
+    else { sortKey = k; sortDir = (k === 'module' || k === 'repo' || k === 'line') ? 1 : -1; }
+    renderTable();
+  };
+  document.querySelectorAll('#alltbl th.sortable').forEach(th => {
+    th.addEventListener('click', () => setSort(th.dataset.k));
+    th.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSort(th.dataset.k); }
+    });
+  });
+  ['#q', '#fl', '#fr', '#fs'].forEach(s => $(s).addEventListener('input', renderTable));
+}
+
+/* ---------- 08 · hallazgos y método ---------- */
+function renderNotas() {
+  const noInit = DATA.findings.no_init || [];
+  const errs = ROWS.filter(r => r.error);
+  const noTests = ROWS.filter(r => !r.error && r.n_test_files === 0).length;
+  const tpl = DATA.method || {};
+
+  $('#notas-body').innerHTML = `
+    <h3>Hallazgos</h3>
+    <div class="finding"><p><strong>${noTests} módulos no tienen ningún archivo de test.</strong>
+      La cobertura que marcan viene solo de ejecutarse al instalarse —definiciones de campos,
+      importaciones— y no de que nadie verifique su comportamiento.</p></div>
+    ${noInit.length ? `<div class="finding"><p><strong>Código Python que nunca llega a cargarse.</strong>
+      ${noInit.length} módulo${noInit.length === 1 ? '' : 's'} tiene${noInit.length === 1 ? '' : 'n'}
+      archivos <code>.py</code> con lógica que Odoo jamás importa, porque el
+      <code>__init__.py</code> de la raíz falta o está vacío. Su 0 % no es deuda de pruebas:
+      es código muerto, y conviene decidir si se conecta o se borra.</p>
+      <ul>${noInit.map(m => `<li><code>${esc(m.path)}</code> — ${esc(m.reason)}</li>`).join('')}</ul></div>` : ''}
+
+    <h3>Cómo se midió</h3>
+    <p>Cada módulo se instaló <strong>en su propia base de datos</strong>, clonada de una
+    plantilla que ya trae los módulos base cargados
+    (<code>${esc((tpl.template_modules || '').replace(/,/g, ', '))}</code>), y se ejecutó su suite
+    con <code>--test-tags=/&lt;módulo&gt;</code>. Así el porcentaje refleja lo que ejercitan los
+    tests de ese módulo, sin que los de otros le inflen la cifra.</p>
+    <p>La medición se hizo con <code>coverage.py</code> limitando el <code>--source</code> al
+    directorio del módulo, sin datos de demostración y con un solo worker por corrida.</p>
+
+    <h3>Qué entra en la cuenta</h3>
+    ${CRIT_MODE === 'both' ? `
+    <p>El interruptor de arriba cambia qué archivos se suman, sobre la misma medición — no vuelve
+    a medir nada:</p>
+    <ul>
+      <li><strong>Incluyendo archivos de test</strong>: todo el Python del módulo, también los
+      <code>tests/</code>, los <code>__init__.py</code> y el <code>__manifest__.py</code>.</li>
+      <li><strong>Solo código de producción</strong>: deja fuera esos archivos.</li>
+    </ul>` : (CRIT === 'all' ? `
+    <p>El porcentaje se calcula sobre <strong>todo el código Python de cada módulo</strong>:
+    los modelos y wizards, y también los archivos de <code>tests/</code>, los
+    <code>__init__.py</code> y el <code>__manifest__.py</code>. Las columnas
+    <em>Líneas</em> y <em>Sin cubrir</em> siguen el mismo criterio.</p>
+    <p>Conviene tenerlo presente al leer las cifras, porque un archivo de test se ejecuta por
+    definición cuando la suite corre: en un módulo cuyos tests corren, esas líneas cuentan como
+    cubiertas y empujan el porcentaje hacia arriba; en uno cuya suite no llega a correr, quedan
+    sin cubrir y lo empujan hacia abajo. Es decir, el número mezcla cuánto código está
+    verificado con si la suite logró ejecutarse. Para ubicar dónde falta trabajo de pruebas
+    conviene mirar además las columnas de módulos <span class="pill warn">sin tests</span> y
+    <span class="pill crit">no instala</span>, que no dependen de eso.</p>` : `
+    <p>El porcentaje se calcula <strong>solo sobre el código de producción</strong>: quedan fuera
+    los archivos de <code>tests/</code>, los <code>__init__.py</code> y el
+    <code>__manifest__.py</code>, porque un archivo de test se ejecuta por definición al correr la
+    suite y contarlo como código cubierto no dice nada sobre si el código de producción está
+    probado.</p>`)}
+    <p>El porcentaje incluye cobertura de ramas: un <code>if</code> cuya condición nunca se evaluó
+    en los dos sentidos cuenta como parcialmente cubierto. Por eso no coincide con la división
+    directa de las columnas de líneas.</p>
+
+    <h3>Los 0 % están verificados uno por uno</h3>
+    <p>Después de cada corrida se consulta <code>ir_module_module.state</code> en la propia base,
+    antes de borrarla, para separar "no tiene pruebas" de "no llegó a instalarse". Los que no
+    instalan aparecen como <span class="pill crit">no instala</span> con su causa, y no como falta
+    de pruebas: son dos problemas distintos y se arreglan distinto.</p>
+    <p><strong>Promedio simple vs. ponderado.</strong> El promedio simple trata igual a un módulo
+    de 20 líneas y a uno de 2 000; el ponderado divide líneas cubiertas entre líneas totales del
+    conjunto. Para decidir dónde invertir, manda el ponderado.</p>
+
+    <h3>Qué se midió de cada línea</h3>
+    <ul>${LINES.map(l => `<li><strong>${esc(STYLE[l].label)}</strong> — ${
+      Object.entries(DATA.lines[l].repos).map(([r, g]) =>
+        `<code>${esc(r)}</code> en <code>${esc(g.branch)}</code> (${esc(g.commit)})`).join(' · ')
+    }, sobre Odoo ${esc(DATA.lines[l].odoo_version)}</li>`).join('')}</ul>
+
+    <h3>Limitación conocida</h3>
+    <p>El escaneo de módulos los identifica por el nombre de su carpeta. Cuando un mismo nombre
+    existe en los dos repositorios de una línea —hoy pasa solo con
+    <code>l10n_binaural</code>— se mide uno de los dos y el otro queda fuera. Son 2 módulos
+    sobre los ${ROWS.length} medidos.</p>
+
+    ${errs.length ? `<h3>Errores de medición</h3>
+      <p>${errs.length} módulo${errs.length === 1 ? '' : 's'} no produjo datos de cobertura
+      utilizables —la corrida se cortó por tiempo o falló antes de reportar:</p>
+      <ul>${errs.map(r => `<li><code>${esc(r.module)}</code> · ${esc(STYLE[r.line].label)}${
+        r.error_cause ? ` — ${esc(r.error_cause)}` : ''}</li>`).join('')}</ul>` : ''}
+  `;
+}
+
+/* ---------- interruptor de criterio ---------- */
+function renderAll() {
+  renderVersus();
+  renderProgreso();
+  renderCharts();
+  renderRepos();
+  renderDeuda();
+  renderProg();
+  renderTable();
+  renderNotas();
+  document.querySelectorAll('#crit button').forEach(b =>
+    b.setAttribute('aria-pressed', String(b.dataset.crit === CRIT)));
+
+}
+
+if (CRIT_MODE === 'both') {
+  $('#crit').innerHTML = Object.entries(CRITERIA).map(([k, c]) =>
+    `<button type="button" data-crit="${k}" aria-pressed="${k === CRIT}">${esc(c.label)}</button>`).join('');
+  $('#crit').addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b || b.dataset.crit === CRIT) return;
+    CRIT = b.dataset.crit;
+    renderAll();
+  });
+} else {
+  /* criterio fijo: no hay nada que elegir, así que la barra no va */
+  $('.critbar').remove();
+}
+
+renderAll();
+"""
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dataset", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument(
+        "--title", default="Cobertura de tests por línea de producto",
+        help="Titulo del documento (etiqueta <title>)."
+    )
+    parser.add_argument(
+        "--criterion", default="all", choices=("all", "prod", "both"),
+        help="Que se cuenta en el porcentaje. 'all': todo el Python del modulo, "
+             "archivos de test incluidos. 'prod': solo codigo de produccion. "
+             "'both': muestra las dos con un interruptor. En todos los casos el "
+             "metodo del informe declara explicitamente que entra en la cuenta."
+    )
+    args = parser.parse_args()
+
+    data = json.load(open(args.dataset, encoding="utf8"))
+    lines = list(data["lines"])
+    unknown = [l for l in lines if l not in LINE_STYLE]
+    if unknown:
+        raise SystemExit(
+            f"❌ Sin estilo definido para la(s) línea(s): {', '.join(unknown)}. "
+            f"Agregarla(s) a LINE_STYLE en {os.path.basename(__file__)}."
+        )
+    data["line_style"] = {l: LINE_STYLE[l] for l in lines}
+    data["criterion"] = args.criterion
+
+    html = (
+        f"<title>{args.title}</title>\n"
+        f"<style>\n{build_css(lines)}</style>\n"
+        f"{BODY}\n"
+        f"<script>\nconst DATA = {json.dumps(data, ensure_ascii=False)};\n{SCRIPT}</script>\n"
+    )
+    parent = os.path.dirname(args.out)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(args.out, "w", encoding="utf8") as f:
+        f.write(html)
+    size = os.path.getsize(args.out)
+    print(f"→ Informe escrito en {args.out} ({size / 1024:.0f} KB, {len(lines)} líneas)")
+
+
+if __name__ == "__main__":
+    main()

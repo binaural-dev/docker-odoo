@@ -1,0 +1,548 @@
+<title>Cruce de PRs y tareas</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
+<style>
+  :root {
+    --paper:      #f6f7f7;
+    --card:       #ffffff;
+    --ink:        #14191b;
+    --ink-soft:   #4a565a;
+    --ink-faint:  #78868b;
+    --rule:       #dfe4e4;
+    --rule-soft:  #ebefef;
+    --accent:     #1f5b5e;
+    --accent-dim: #e4eeee;
+    --critical:   #a32a1f;
+    --critical-bg:#fbe9e7;
+    --minor:      #7d5800;
+    --minor-bg:   #fbf1dc;
+    --ok:         #285f3c;
+    --ok-bg:      #e4f0e7;
+
+    --measure: 68ch;
+    --step--1: 0.815rem;
+    --step-0:  1rem;
+    --step-1:  1.22rem;
+    --step-2:  1.55rem;
+    --step-3:  2.1rem;
+    --step-4:  2.9rem;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #101415;
+      --card:       #171d1e;
+      --ink:        #e8edec;
+      --ink-soft:   #a5b2b3;
+      --ink-faint:  #7c8a8b;
+      --rule:       #2a3335;
+      --rule-soft:  #202829;
+      --accent:     #6fc3c0;
+      --accent-dim: #1b3536;
+      --critical:   #ef9a90;
+      --critical-bg:#33201d;
+      --minor:      #e0bb6a;
+      --minor-bg:   #2e2718;
+      --ok:         #8fcaa2;
+      --ok-bg:      #1b2d22;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper:      #101415;
+    --card:       #171d1e;
+    --ink:        #e8edec;
+    --ink-soft:   #a5b2b3;
+    --ink-faint:  #7c8a8b;
+    --rule:       #2a3335;
+    --rule-soft:  #202829;
+    --accent:     #6fc3c0;
+    --accent-dim: #1b3536;
+    --critical:   #ef9a90;
+    --critical-bg:#33201d;
+    --minor:      #e0bb6a;
+    --minor-bg:   #2e2718;
+    --ok:         #8fcaa2;
+    --ok-bg:      #1b2d22;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: var(--step-0);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 60rem;
+    margin: 0 auto;
+    padding: clamp(2rem, 5vw, 4.5rem) clamp(1.1rem, 4vw, 2.5rem) 6rem;
+    display: flex;
+    flex-direction: column;
+    gap: 3.25rem;
+  }
+
+  h1, h2, h3 {
+    font-family: Archivo, ui-sans-serif, system-ui, sans-serif;
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: -0.018em;
+  }
+  h1 { font-size: var(--step-4); font-weight: 700; line-height: 1.05; }
+  h2 { font-size: var(--step-2); font-weight: 600; line-height: 1.15; }
+  h3 { font-size: var(--step-1); font-weight: 600; line-height: 1.25; }
+
+  p { margin: 0; max-width: var(--measure); }
+
+  code, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.87em;
+  }
+  code {
+    background: var(--rule-soft);
+    padding: 0.12em 0.38em;
+    border-radius: 3px;
+    overflow-wrap: anywhere;
+  }
+
+  a { color: var(--accent); text-underline-offset: 0.18em; }
+  a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    border-radius: 2px;
+  }
+
+  /* ---- masthead ---- */
+  .masthead { display: flex; flex-direction: column; gap: 1rem; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: var(--step--1);
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: var(--ink-faint);
+  }
+  .lede { font-size: var(--step-1); color: var(--ink-soft); max-width: 54ch; }
+
+  /* ---- verdict strip: the two real problems ---- */
+  .verdicts { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
+  .verdict {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--flag, var(--accent));
+    border-radius: 4px;
+    padding: 1.1rem 1.25rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+  }
+  .verdict[data-kind="fix"]  { --flag: var(--critical); }
+  .verdict[data-kind="ok"]   { --flag: var(--ok); }
+  .verdict h3 { font-size: var(--step-0); }
+  .verdict p { font-size: var(--step--1); color: var(--ink-soft); }
+
+  /* ---- section ---- */
+  section { display: flex; flex-direction: column; gap: 1.35rem; }
+  .section-head { display: flex; flex-direction: column; gap: 0.5rem; border-top: 1px solid var(--rule); padding-top: 1.4rem; }
+
+  /* ---- table ---- */
+  .scroller { overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; background: var(--card); }
+  table { border-collapse: collapse; width: 100%; font-size: var(--step--1); min-width: 46rem; }
+  th, td { text-align: left; padding: 0.62rem 0.85rem; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+  thead th {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-weight: 500;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--ink-faint);
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  td.branch { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 0.76rem; color: var(--ink-soft); }
+  td.branch b { color: var(--critical); font-weight: 500; }
+  tr[data-flag="bad"] { background: var(--critical-bg); }
+  tr[data-flag="new"] { background: var(--accent-dim); }
+
+  /* ---- pills ---- */
+  .pill {
+    display: inline-block;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 0.15em 0.5em;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .pill[data-t="ok"]   { background: var(--ok-bg);       color: var(--ok); }
+  .pill[data-t="bad"]  { background: var(--critical-bg); color: var(--critical); }
+  .pill[data-t="warn"] { background: var(--minor-bg);    color: var(--minor); }
+  .pill[data-t="none"] { background: var(--rule-soft);   color: var(--ink-faint); }
+
+  /* ---- action list ---- */
+  ol.actions, ul.plain { margin: 0; padding: 0 0 0 1.35rem; display: flex; flex-direction: column; gap: 0.6rem; max-width: var(--measure); }
+  ol.actions li, ul.plain li { padding-left: 0.2rem; }
+  ul.plain { list-style: none; padding-left: 0; }
+  ul.plain > li { position: relative; padding-left: 1.1rem; }
+  ul.plain > li::before {
+    content: "";
+    position: absolute; left: 0; top: 0.62em;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--ink-faint);
+  }
+
+  /* ---- PR cards ---- */
+  .pr {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .pr > header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.55rem 0.85rem;
+    padding: 0.95rem 1.25rem;
+    border-bottom: 1px solid var(--rule-soft);
+    background: linear-gradient(var(--rule-soft), var(--rule-soft)) no-repeat;
+    background-size: 100% 0;
+  }
+  .pr > header h3 { margin-right: auto; }
+  .pr > header .task { font-size: var(--step--1); color: var(--ink-faint); font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  .pr .body { padding: 1.1rem 1.25rem 1.35rem; display: flex; flex-direction: column; gap: 0.9rem; }
+  .pr .body p { font-size: 0.95rem; }
+
+  .finding { display: flex; gap: 0.7rem; align-items: flex-start; }
+  .finding .pill { margin-top: 0.18em; flex: none; }
+  .finding p { font-size: 0.95rem; }
+  .finding strong { font-weight: 600; }
+
+  .note {
+    border-left: 2px solid var(--accent);
+    padding-left: 0.9rem;
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+  }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.3rem;
+    color: var(--ink-faint);
+    font-size: var(--step--1);
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Localización nómina Venezuela V19 · proyecto 847</div>
+    <h1>Cruce de PRs y tareas</h1>
+    <p class="lede">Verificado contra Odoo, GitHub y el código. De los siete PRs abiertos, la trazabilidad falla en dos sitios concretos — el resto ya está bien enlazado.</p>
+  </header>
+
+  <div class="verdicts">
+    <div class="verdict" data-kind="fix">
+      <h3>El PR #2577 lleva un ID ajeno</h3>
+      <p>Su rama, su commit y su cuerpo dicen <code>80052</code>, que es la tarea del PR #2580. Su tarea real es <b>80055</b> — y en Odoo está bien enlazado ahí. El desajuste está en git, no en la tarea.</p>
+    </div>
+    <div class="verdict" data-kind="fix">
+      <h3>El PR #2583 arrastra la tarea 80049</h3>
+      <p>Su rama tiene dos commits de la vista lista de periodos, que son el contenido del PR #2582. Se pusheó el cherry-pick hecho para el ambiente de pruebas.</p>
+    </div>
+    <div class="verdict" data-kind="ok">
+      <h3>El PR #2580 no hay que tocarlo</h3>
+      <p>Su revisión pide cambiar el número de tarea, pero <code>80052</code> <em>sí</em> es suya: «Cambiar nombre… Historial Salariales por Movimientos Salariales». El revisor no pudo entrar a Odoo para comprobarlo.</p>
+    </div>
+  </div>
+
+  <section>
+    <div class="section-head">
+      <h2>Correspondencia real</h2>
+      <p>Nombre de cada tarea tomado de Odoo. La columna final compara los tres sitios donde vive el número: la rama, el <code>References:</code> del commit y el enlace en la tarea.</p>
+    </div>
+    <div class="scroller">
+      <table>
+        <thead>
+          <tr>
+            <th>Tarea</th>
+            <th>Título en Odoo</th>
+            <th>PR</th>
+            <th>Rama</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="num">80049</td>
+            <td>Crear vista lista para los periodos de nómina</td>
+            <td class="num">#2582</td>
+            <td class="branch">19.0_feat-ta_80049_payslip_run_list_view</td>
+            <td><span class="pill" data-t="warn">Falta enlace</span></td>
+          </tr>
+          <tr>
+            <td class="num">80050</td>
+            <td>Crear un menú para deducción Salariales y Asignaciones Salariales</td>
+            <td class="num">#2578</td>
+            <td class="branch">1afb7a23d_feat-ta_80050_split_salary_adjustment_menu</td>
+            <td><span class="pill" data-t="ok">Correcto</span></td>
+          </tr>
+          <tr>
+            <td class="num">80051</td>
+            <td>Cambiar el Código a TA … en la columna Bruto</td>
+            <td class="num">#2579</td>
+            <td class="branch">19.0_fix-ta_80051_gross_wage_from_ta_rule</td>
+            <td><span class="pill" data-t="ok">Correcto</span></td>
+          </tr>
+          <tr>
+            <td class="num">80052</td>
+            <td>Cambiar nombre … Historial Salariales por Movimientos Salariales</td>
+            <td class="num">#2580</td>
+            <td class="branch">19.0_i18n-ta_80052_salary_history_tab_rename</td>
+            <td><span class="pill" data-t="ok">Correcto</span></td>
+          </tr>
+          <tr data-flag="bad">
+            <td class="num">80055</td>
+            <td>Condicionar el campo Prestaciones sociales para que aparezca en el periodo</td>
+            <td class="num">#2577</td>
+            <td class="branch">1afb7a23d_feat-ta_<b>80052</b>_fund_location_needs_benefits_rule</td>
+            <td><span class="pill" data-t="bad">ID ajeno</span></td>
+          </tr>
+          <tr>
+            <td class="num">80056</td>
+            <td>Cambiar el nombre de la sección de ISLR a Parafiscales … sección Contractual</td>
+            <td class="num">#2581</td>
+            <td class="branch">19.0_feat-ta_80056_payroll_tab_sections</td>
+            <td><span class="pill" data-t="warn">Falta enlace</span></td>
+          </tr>
+          <tr data-flag="bad">
+            <td class="num">80057</td>
+            <td>Crear grupo de permisos para las vistas de reportes en el módulo de empleado</td>
+            <td class="num">#2583</td>
+            <td class="branch">19.0_feat-ta_80057_payroll_report_groups</td>
+            <td><span class="pill" data-t="bad">Enlaza #2582</span></td>
+          </tr>
+          <tr data-flag="new">
+            <td class="num">80085</td>
+            <td>Quitar validaciones del periodo al validar nóminas mensuales y Quincenales</td>
+            <td class="num">—</td>
+            <td class="branch">19.0_feat-ta_80085_ve_30_day_payroll_period</td>
+            <td><span class="pill" data-t="none">Sin subir</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">La tarea <b>80085</b> es la del periodo de 30 días. Está commiteada en local con su <code>References:</code> correcto, a la espera de push y PR.</p>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Qué cambiar en cada rama</h2>
+      <p>Solo dos ramas necesitan tocarse por trazabilidad. Las demás ya tienen el número correcto en los tres sitios.</p>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2577 · fideicomiso condicionado</h3>
+        <span class="task">tarea 80055</span>
+        <span class="pill" data-t="bad">Renombrar</span>
+      </header>
+      <div class="body">
+        <ol class="actions">
+          <li>Renombrar la rama a <code>1afb7a23d_feat-ta_80055_fund_location_needs_benefits_rule</code> y volver a abrir el PR sobre ella (o repushear con el nombre nuevo).</li>
+          <li>Corregir el <code>References:</code> del commit — hoy apunta a <code>…/80052</code>, debe apuntar a <code>…/80055</code>.</li>
+          <li>Corregir el enlace de tarea en el cuerpo del PR.</li>
+          <li>De paso, en el cuerpo y en el docstring: donde dice <code>_filter_versions</code> el método real es <code>_get_valid_version_ids</code>.</li>
+        </ol>
+      </div>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2583 · grupos de reportes</h3>
+        <span class="task">tarea 80057</span>
+        <span class="pill" data-t="bad">Separar</span>
+      </header>
+      <div class="body">
+        <p>La rama tiene cuatro commits: dos de permisos (80057) y dos de la vista lista de periodos (80049), que ya viven en el PR #2582.</p>
+        <ol class="actions">
+          <li>Quitar de la rama los commits <code>65137856b</code> y <code>a57750692</code>, con un rebase que deje solo <code>f95bbddbb</code> y <code>6c90e74bd</code>.</li>
+          <li>Verificar después que el diff del PR ya no toca <code>models/hr_payslip_run.py</code>, <code>views/hr_payslip_run.xml</code> ni <code>tests/test_payslip_run_list_view.py</code>.</li>
+        </ol>
+        <p class="note">Esos dos commits los hice para dejar el ambiente de pruebas coherente, y no los subí por esto mismo; la rama se pusheó después. El contenido no se pierde: es exactamente el del PR #2582.</p>
+      </div>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2580 · renombre de la pestaña</h3>
+        <span class="task">tarea 80052</span>
+        <span class="pill" data-t="ok">Solo limpiar</span>
+      </header>
+      <div class="body">
+        <ol class="actions">
+          <li>No cambiar el número: <code>80052</code> es la tarea de este PR, confirmado contra Odoo.</li>
+          <li>Quitar del cuerpo el aviso «⚠️ Verificar el número de tarea», que ya está resuelto, y responder en la revisión que el duplicado se corrige en el #2577.</li>
+        </ol>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Qué cambiar en Odoo</h2>
+      <p>Los enlaces del chatter están casi todos bien; el problema es la etapa, que no existe en este proyecto.</p>
+    </div>
+    <ul class="plain">
+      <li><b>Enlaces.</b> En la tarea <b>80057</b> está enlazado el PR #2582, que es de la 80049: mover ese enlace a la <b>80049</b> y poner el #2583 en la 80057. Enlazar también el #2581 en la <b>80056</b>, que hoy no tiene ninguno.</li>
+      <li><b>Etapa.</b> El proyecto 847 solo tiene cuatro etapas: <em>Por Evaluar&nbsp;-&nbsp;BIN</em>, <em>backlog</em>, <em>Desarrollo.</em> y <em>Validación&nbsp;-&nbsp;BIN</em>. La etapa <em>Revisión de Código (PRs)</em> existe y ya se usa en otros 23 proyectos, pero no está añadida a éste. Hay que agregarla al proyecto y mover ahí las siete tareas.</li>
+      <li><b>Estado.</b> Las siete están en <em>En progreso</em> (gris). Según el flujo que pide el bot de revisión: mientras haya cambios solicitados van en <em>Cambios solicitados</em>, y al terminar de aplicarlos se pasan a <em>En progreso</em> dentro de la etapa de revisión, que es lo que permite al revisor filtrarlas.</li>
+      <li><b>80049 sigue en backlog</b>, mientras que las otras seis ya están en <em>Validación&nbsp;-&nbsp;BIN</em>.</li>
+    </ul>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>¿Son válidas las correcciones pedidas?</h2>
+      <p>Cinco PRs tienen revisión; dos no tienen ninguna. Comprobé cada hallazgo bloqueante contra el código y contra la base de pruebas.</p>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2577</h3>
+        <span class="task">5 hallazgos</span>
+        <span class="pill" data-t="bad">Válidos</span>
+      </header>
+      <div class="body">
+        <div class="finding">
+          <span class="pill" data-t="bad">Sí</span>
+          <p><strong>El reset solo cubre el formulario.</strong> Es correcto por definición del ORM: <code>@api.onchange</code> únicamente corre en el flujo de formulario, mientras que el compute <code>store=True</code> sí se recalcula en cualquier <code>create()</code>/<code>write()</code>. El escenario que describe es real: la estructura cambia por código, el campo se oculta y <code>target_fund_location</code> queda congelado en <code>bank</code> filtrando empleados sin que nada lo explique — justo el problema que el PR quería cerrar.</p>
+        </div>
+        <div class="finding">
+          <span class="pill" data-t="bad">Sí</span>
+          <p><strong>Los tests llaman al método, no al onchange.</strong> Invocar <code>_onchange_…()</code> a mano no prueba que el decorador esté registrado. Hace falta un test con <code>Form()</code>.</p>
+        </div>
+        <div class="finding">
+          <span class="pill" data-t="warn">Sí, menores</span>
+          <p>Documentar en el código el compromiso de <code>store=True, readonly=False</code>; alinear el nombre de la vista con la convención del módulo; y corregir <code>_filter_versions</code> → <code>_get_valid_version_ids</code>. Los tres son correctos y baratos.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2578</h3>
+        <span class="task">2 hallazgos</span>
+        <span class="pill" data-t="bad">Válido y confirmado</span>
+      </header>
+      <div class="body">
+        <div class="finding">
+          <span class="pill" data-t="bad">Sí</span>
+          <p><strong>El campo queda oculto también en la ficha del empleado.</strong> Lo verifiqué en base: en <code>hr_salary_attachment_employee_view_form</code> —que es <em>primary</em> y hereda de la misma raíz— <code>is_refund</code> sale con <code>invisible="1"</code>. Y como el campo no tiene valor por defecto, todo ajuste creado desde ahí nace como asignación, sin control en pantalla para corregirlo; el menú de Deducciones tampoco lo mostraría, porque su dominio lo excluye. Es exactamente el efecto secundario que dejé anotado como decisión pendiente en el cuerpo del PR: el revisor pide que se decida, y tiene razón.</p>
+        </div>
+        <div class="finding">
+          <span class="pill" data-t="warn">Sí, menor</span>
+          <p>Copiar el mensaje de estado vacío (<code>help</code>) de la acción del core a las dos acciones nuevas.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2579</h3>
+        <span class="task">3 hallazgos, ninguno bloqueante</span>
+        <span class="pill" data-t="warn">Válidos</span>
+      </header>
+      <div class="body">
+        <div class="finding">
+          <span class="pill" data-t="warn">Sí</span>
+          <p><strong>La migración toca recibos pagados sin dejar rastro.</strong> Es cierto y está bien visto: el compute solo recalcula borrador y validados, así que el <code>UPDATE</code> es necesario, pero conviene avisarlo en las notas de despliegue para que nómina no se sorprenda al reconciliar cerrados.</p>
+        </div>
+        <div class="finding">
+          <span class="pill" data-t="warn">Sí</span>
+          <p><strong>La nota de merge quedó desfasada.</strong> Confirmado: el cuerpo dice <code>19.0.2.2.0</code> pero la rama está en <code>19.0.2.3.0</code>. Corregir el texto.</p>
+        </div>
+        <div class="finding">
+          <span class="pill" data-t="warn">Sí</span>
+          <p>Doble línea en blanco antes de <code>amount_to_text</code>. Cosmético.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2580</h3>
+        <span class="task">1 hallazgo bloqueante</span>
+        <span class="pill" data-t="ok">Legítimo, pero no aquí</span>
+      </header>
+      <div class="body">
+        <p>El revisor detecta bien que dos PRs comparten el número 80052 y lo trata como bloqueante — es la conclusión correcta con la información que tenía. Dice explícitamente que no pudo autenticarse contra Odoo para leer el título de la tarea.</p>
+        <p>Esa consulta sí se puede hacer, y el resultado es que <b>80052 pertenece a este PR</b>. El número que hay que cambiar es el del #2577. Aquí no se toca nada más que quitar la advertencia del cuerpo.</p>
+      </div>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2583</h3>
+        <span class="task">4 hallazgos</span>
+        <span class="pill" data-t="bad">Válidos, con un matiz</span>
+      </header>
+      <div class="body">
+        <div class="finding">
+          <span class="pill" data-t="bad">Sí</span>
+          <p><strong>Los permisos reales de los reportes siguen abiertos.</strong> Confirmado en el CSV: <code>access_arc_receipt_wizard</code>, <code>access_faov_report_wizard</code> y <code>access_hr_employee_salary_change_manager</code> tienen el grupo vacío con permisos <code>1,1,1,1</code>. Ocultar el menú no protege el dato. Un matiz sobre la gravedad: los dos primeros son asistentes transitorios, mientras que <code>hr.employee.salary.change</code> sí guarda variaciones salariales — ése es el que urge.</p>
+        </div>
+        <div class="finding">
+          <span class="pill" data-t="warn">Sí</span>
+          <p><strong>Mezcla dos tareas.</strong> Correcto, y es el mismo punto de arriba. Un detalle del diagnóstico está mal: dice que son «dos implementaciones paralelas» porque los SHA difieren, pero es el mismo trabajo cherry-pickeado, que por eso cambia de SHA. La recomendación de separarlo sigue siendo la buena.</p>
+        </div>
+        <div class="finding">
+          <span class="pill" data-t="warn">Sí</span>
+          <p>Quitar <code>base.user_root</code> del grupo gerente y dejar solo <code>base.user_admin</code>; y coordinar el bump de versión con el #2579. Ambos correctos.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="pr">
+      <header>
+        <h3>#2581 y #2582</h3>
+        <span class="task">tareas 80056 y 80049</span>
+        <span class="pill" data-t="none">Sin revisión</span>
+      </header>
+      <div class="body">
+        <p>Ninguno de los dos tiene revisión humana todavía — solo los comentarios automáticos del bot, en verde. No hay correcciones que aplicar en ellos; lo que sí toca es enlazarlos en su tarea.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head">
+      <h2>Orden sugerido</h2>
+    </div>
+    <ol class="actions">
+      <li>Corregir la trazabilidad del <b>#2577</b> y sacar los dos commits de más del <b>#2583</b> — es lo que bloquea la lectura del tablero.</li>
+      <li>Arreglar los enlaces, la etapa y el estado en Odoo, para que el revisor pueda filtrar.</li>
+      <li>Aplicar los dos bloqueantes de fondo: el alcance del <code>invisible</code> en <b>#2578</b> y los permisos de modelo en <b>#2583</b>.</li>
+      <li>Los hallazgos menores del <b>#2577</b> y del <b>#2579</b>, que son de documentación y estilo.</li>
+      <li>Subir la rama de la tarea <b>80085</b> y abrir su PR.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <div>Datos verificados el 19 de agosto de 2026 contra el proyecto 847 de binaural.odoo.com, los PRs de binaural-dev/integra-addons y la base <span class="mono">19_nomina_units</span>.</div>
+    <div>Los títulos de tarea se citan tal como están escritos en Odoo.</div>
+  </footer>
+
+</div>

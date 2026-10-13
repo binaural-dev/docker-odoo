@@ -1,0 +1,947 @@
+#!/usr/bin/env python3
+
+"""
+Mide la cobertura de tests de TODOS los modulos de uno o varios repos, uno por
+uno y aislado, y deja un resultado por modulo listo para agregar.
+
+Es el orquestador del barrido: el que mide es scripts/odoo-test, que se invoca
+una vez por modulo. Aca esta lo que un barrido de cientos de modulos necesita y
+una corrida suelta no: la lista de trabajo, el descarte previo de lo que no
+puede instalar, la plantilla de base de datos, la concurrencia, el corte por
+tiempo y -- sobre todo -- poder retomar donde quedo.
+
+USO
+---
+  # 1. hornear la plantilla (una vez por version de Odoo)
+  scripts/coverage-sweep template --instance cov_19 --db tpl_cov_19
+
+  # 2. el barrido
+  scripts/coverage-sweep run --instance cov_19 --line 19.0 \
+      --repos integra-addons,odoo-venezuela \
+      --db-template tpl_cov_19 --jobs 2 --timeout 2400 \
+      --out logs/coverage-sweep/2026-09-07_19.0
+
+  # 3. como va / que falta
+  scripts/coverage-sweep status --out logs/coverage-sweep/2026-09-07_19.0
+
+  # 4. limpiar bases huerfanas de una corrida que se murio
+  scripts/coverage-sweep clean --instance cov_19
+
+POR QUE UNA PLANTILLA
+---------------------
+Sin --db-template, cada modulo arranca instalando base+web+mail+account+...
+desde cero: 10-30 min por modulo. Clonando una plantilla que ya los trae, el
+arranque son segundos. Es la diferencia entre un barrido de horas y uno de
+dias. La plantilla se hornea con los mismos 9 modulos que se uso en la
+medicion de agosto, para que las cifras sigan siendo comparables.
+
+REANUDAR
+--------
+Cada modulo escribe su propio result.json, que es la clave de cache. Si el
+barrido se corta (o lo cortas), volver a correr el MISMO comando retoma donde
+quedo: los modulos ya medidos se saltean. El fingerprint incluye el commit del
+repo, asi que si el codigo cambio, el modulo se vuelve a medir en vez de
+devolver un numero viejo.
+"""
+
+import argparse
+import concurrent.futures
+import fnmatch
+import datetime
+import hashlib
+import importlib.machinery
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+
+BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ODOO_TEST = os.path.join(BASE_PATH, "scripts", "odoo-test")
+CONTAINER_SRC_PREFIX = "/home/odoo/"
+CORE_ADDONS = "/usr/lib/python3/dist-packages/odoo/addons"
+SCHEMA_VERSION = 2
+
+# Los mismos 9 modulos que se horneaban en la medicion de agosto. Cambiar esta
+# lista cambia el estado de la base que ven los tests at_install de cada
+# modulo, asi que mover algo de aca rompe la comparabilidad con el historico.
+TEMPLATE_MODULES = "base,web,mail,contacts,account,product,stock,sale,purchase"
+
+_print_lock = threading.Lock()
+_template_lock = threading.Lock()
+
+
+def log(msg):
+    with _print_lock:
+        print(msg, flush=True)
+
+
+# --------------------------------------------------------------------------
+# helpers de odoo-test reutilizados
+# --------------------------------------------------------------------------
+
+_odoo_test_module = None
+
+
+def load_odoo_test():
+    """Importa scripts/odoo-test como modulo. No tiene extension .py, asi que
+    hay que cargarlo por ruta. Se reutiliza su escaneo de manifests en vez de
+    escribir un segundo escaneo que pueda divergir del que hace la medicion."""
+    global _odoo_test_module
+    if _odoo_test_module is None:
+        spec = importlib.util.spec_from_loader(
+            "odoo_test",
+            importlib.machinery.SourceFileLoader("odoo_test", ODOO_TEST),
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _odoo_test_module = mod
+    return _odoo_test_module
+
+
+def instance_container(instance):
+    return f"odoo-{instance}"
+
+
+def instance_addons(instance):
+    """Las rutas de addons de la instancia, dentro del contenedor -- mismo
+    criterio que './odoo test' (resolve_container_addon_paths)."""
+    config = json.load(open(os.path.join(BASE_PATH, "instances.json"), encoding="utf8"))
+    inst = config["instances"].get(instance)
+    if not inst:
+        sys.exit(f"❌ La instancia '{instance}' no existe en instances.json.")
+    defaults = config["odoo_configs"].get(inst.get("odoo_config", "default"), {})
+    addons = inst.get("overwrite_odoo_config", {}).get("addons") or defaults.get("addons", [])
+    resolved = [
+        CONTAINER_SRC_PREFIX + a
+        for a in addons
+        if os.path.isdir(os.path.join(BASE_PATH, a))
+    ]
+    return inst, resolved
+
+
+def host_path(container_path):
+    """Traduce una ruta del contenedor a la del host. Vale porque ./src se monta
+    1:1 en /home/odoo/src en todos los contenedores."""
+    if container_path.startswith(CONTAINER_SRC_PREFIX):
+        return os.path.join(BASE_PATH, container_path[len(CONTAINER_SRC_PREFIX):])
+    return container_path
+
+
+def docker_exec(container, *args, user=None, check=False):
+    cmd = ["docker", "exec"]
+    if user:
+        cmd += ["-u", user]
+    cmd += [container, *args]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if check and result.returncode != 0:
+        sys.exit(f"❌ Fallo: {' '.join(cmd)}\n{result.stderr.strip()}")
+    return result
+
+
+def psql(container, db, sql):
+    return docker_exec(container, "psql", "-d", db, "-tAc", sql)
+
+
+# --------------------------------------------------------------------------
+# plantilla
+# --------------------------------------------------------------------------
+
+def bake_template(instance, db_name, force=False):
+    container = instance_container(instance)
+    _, addons = instance_addons(instance)
+
+    exists = psql(container, "postgres",
+                  f"SELECT 1 FROM pg_database WHERE datname='{db_name}'").stdout.strip() == "1"
+    if exists and not force:
+        size = psql(container, "postgres",
+                    f"SELECT pg_size_pretty(pg_database_size('{db_name}'))").stdout.strip()
+        log(f"✅ La plantilla '{db_name}' ya existe ({size}). Usar --force para rehornearla.")
+        return
+    if exists and force:
+        log(f"→ Rehorneando: hay que revertir IS_TEMPLATE/ALLOW_CONNECTIONS antes de poder borrarla")
+        psql(container, "postgres",
+             f"ALTER DATABASE {db_name} IS_TEMPLATE false")
+        psql(container, "postgres",
+             f"ALTER DATABASE {db_name} ALLOW_CONNECTIONS true")
+        docker_exec(container, "dropdb", "--if-exists", "--force", db_name)
+
+    log(f"→ Horneando la plantilla '{db_name}' en {container} con: {TEMPLATE_MODULES}")
+    log("  (esto tarda unos minutos, pero es una sola vez por version)")
+    docker_exec(container, "createdb", db_name, check=True)
+
+    port = 20000 + int.from_bytes(os.urandom(2), "big") % 40000
+    inner = (
+        f"/usr/bin/odoo -d {db_name} -i {TEMPLATE_MODULES} "
+        f"--without-demo=True --stop-after-init --workers 0 --no-http "
+        f"--http-port={port} --gevent-port={port + 1} -c /home/odoo/.config/odoo.conf"
+    )
+    started = time.monotonic()
+    result = subprocess.run(
+        ["docker", "exec", "-u", "root", container, "bash", "-c", inner],
+        capture_output=True, text=True,
+    )
+    elapsed = int(time.monotonic() - started)
+    if result.returncode != 0:
+        log(result.stdout[-3000:])
+        log(result.stderr[-3000:])
+        docker_exec(container, "dropdb", "--if-exists", "--force", db_name)
+        sys.exit(f"❌ No se pudo hornear la plantilla (rc={result.returncode}). Se borró la base a medias.")
+
+    installed = psql(container, db_name,
+                     "SELECT count(*) FROM ir_module_module WHERE state='installed'").stdout.strip()
+
+    # Blindaje: con datallowconn=false la plantilla sigue sirviendo como origen
+    # de CREATE DATABASE (es el estado de template0) pero deja de poder
+    # abrirse, asi que nadie la modifica por accidente y el error "is being
+    # accessed by other users" de createdb -T se vuelve inalcanzable.
+    psql(container, "postgres", f"ALTER DATABASE {db_name} IS_TEMPLATE true")
+    psql(container, "postgres", f"ALTER DATABASE {db_name} ALLOW_CONNECTIONS false")
+
+    size = psql(container, "postgres",
+                f"SELECT pg_size_pretty(pg_database_size('{db_name}'))").stdout.strip()
+    log(f"✅ Plantilla '{db_name}' lista en {elapsed}s: {installed} módulos instalados, {size}, blindada.")
+    log(f"   addons de la instancia: {len(addons)} rutas")
+
+
+# --------------------------------------------------------------------------
+# lista de trabajo
+# --------------------------------------------------------------------------
+
+def scan_universe(container, addon_roots):
+    """Escanea manifests con el mismo snippet que usa odoo-test, pero sumando
+    los addons del core de Odoo: sin eso, cualquier modulo que dependa de
+    'base' o 'account' pareceria tener una dependencia ausente."""
+    ot = load_odoo_test()
+    roots = list(addon_roots)
+    if docker_exec(container, "test", "-d", CORE_ADDONS).returncode == 0:
+        roots.append(CORE_ADDONS)
+    else:
+        log(f"⚠️  No se encontró {CORE_ADDONS} en {container}: el descarte por "
+            "dependencias va a ser más pesimista de lo real.")
+
+    result = docker_exec(container, "python3", "-c", ot._SCAN_MODULES_SNIPPET, *roots)
+    if result.returncode != 0:
+        sys.exit(f"❌ Falló el escaneo de manifests en {container}:\n{result.stderr.strip()}")
+    return json.loads(result.stdout)
+
+
+def screen_dependencies(universe, candidates):
+    """Separa los modulos que se pueden intentar instalar de los que no.
+
+    Es lo mismo que hizo la medicion de agosto, y no es una optimizacion
+    cosmetica: un modulo cuya dependencia no existe en el addons_path se cuelga
+    instalando hasta el timeout y no produce ninguna cifra. Descartarlo antes,
+    con el motivo escrito, es informacion; quemarle media hora no."""
+    known = set(universe)
+
+    def missing_direct(name):
+        return sorted(d for d in universe[name]["depends"] if d not in known)
+
+    runnable, excluded = [], []
+    for name in candidates:
+        missing = missing_direct(name)
+        if missing:
+            excluded.append((name, "missing: " + ", ".join(missing)))
+            continue
+
+        # transitivas: si algo mas abajo del arbol le falta una dependencia, el
+        # modulo tampoco va a poder instalarse
+        seen, stack, broken = {name}, list(universe[name]["depends"]), None
+        while stack:
+            dep = stack.pop()
+            if dep in seen or dep not in known:
+                continue
+            seen.add(dep)
+            if missing_direct(dep):
+                broken = dep
+                break
+            stack.extend(universe[dep]["depends"])
+        if broken:
+            excluded.append((name, "transitive dep issue"))
+        else:
+            runnable.append(name)
+    return runnable, excluded
+
+
+def manifest_installable(manifest_path_host):
+    """Un modulo con installable=False NO se descarta: la medicion de agosto
+    los corrio y quedaron como 'no instala'. El flag sirve para poder escribir
+    la causa sin adivinar."""
+    try:
+        src = open(manifest_path_host, encoding="utf8").read()
+    except OSError:
+        return True
+    m = re.search(r"[\"']installable[\"']\s*:\s*(True|False)", src)
+    return m.group(1) == "True" if m else True
+
+
+def count_test_files(module_dir_host):
+    tests_dir = os.path.join(module_dir_host, "tests")
+    if not os.path.isdir(tests_dir):
+        return 0
+    return len([f for f in os.listdir(tests_dir)
+                if f.startswith("test_") and f.endswith(".py")])
+
+
+# --------------------------------------------------------------------------
+# lectura de resultados de una corrida
+# --------------------------------------------------------------------------
+
+# coverage no escribe reporte cuando no midio nada. Eso NO es un fallo de
+# medicion: son modulos que solo traen __init__.py y __manifest__.py -- los dos
+# omitidos por el .coveragerc -- o solo datos y assets. No hay nada que medir,
+# que es una respuesta valida y distinta de "la medicion se rompio".
+_NO_DATA_MARKERS = ("No data to report.", "No data was collected.")
+
+
+def had_no_measurable_code(log_path):
+    if not os.path.exists(log_path):
+        return False
+    try:
+        text = open(log_path, encoding="utf8", errors="replace").read()
+    except OSError:
+        return False
+    return any(marker in text for marker in _NO_DATA_MARKERS)
+
+
+# El mismo omit que declara .resources/.coveragerc. Se replica aca porque de un
+# solo JSON sin filtrar se derivan las dos formas de contar, y esta es la que
+# separa el codigo de produccion del de las pruebas.
+OMIT_PATTERNS = ("*/__init__.py", "*/__manifest__.py", "*/tests/*", "*/test/*")
+
+
+def _is_omitted(path):
+    candidate = path if path.startswith("/") else "/" + path
+    return any(fnmatch.fnmatch(candidate, pat) for pat in OMIT_PATTERNS)
+
+
+def _ratio(stmts, covered_lines, branches, covered_branches):
+    """La formula de coverage.py con branch=True:
+    (lineas ejecutadas + ramas ejecutadas) / (lineas + ramas). El porcentaje
+    incluye ramas mientras stmts/miss son solo de lineas -- no es un descuido,
+    es como lo calcula la herramienta."""
+    denom = stmts + branches
+    return round((covered_lines + covered_branches) / denom * 100) if denom else 0
+
+
+def foreign_files(path, module):
+    """Archivos del reporte que NO pertenecen al modulo medido.
+
+    Es una red de seguridad contra una falla que ya se vio: si dos corridas
+    comparten el archivo de datos de coverage, el reporte de una puede terminar
+    describiendo los archivos de la otra. Con COVERAGE_FILE por corrida eso no
+    deberia pasar, pero una medicion que describe otro modulo es un dato falso
+    que se ve perfectamente valido -- conviene detectarlo, no confiar.
+
+    Se compara por el fragmento '/<modulo>/' y no por la ruta completa: coverage
+    escribe las rutas relativas al directorio de trabajo, no absolutas. La barra
+    final tampoco es decorativa -- sin ella, 'binaural_account' daria por propio
+    un archivo de 'binaural_account_reports'."""
+    if not os.path.exists(path):
+        return []
+    try:
+        files = json.load(open(path, encoding="utf8"))["files"]
+    except (json.JSONDecodeError, KeyError, OSError):
+        return []
+    fragment = f"/{module}/"
+    return sorted({p for p in files if fragment not in p})
+
+
+def read_coverage(path):
+    """Devuelve las DOS formas de contar la misma medicion, derivadas del JSON
+    sin filtrar:
+
+      prod : solo codigo de produccion (aplica el omit del .coveragerc). Es lo
+             que mide cuanto del codigo que corre en produccion esta probado.
+      all  : contando tambien los archivos de test y el andamiaje
+             (__init__.py, __manifest__.py). Sube el porcentaje, porque un
+             archivo de test se ejecuta por definicion al correr la suite.
+
+    Que salgan de la MISMA corrida es lo que las hace comparables entre si.
+    Verificado: la derivacion de `prod` reproduce exacto el total que da
+    coverage aplicando el omit."""
+    if not os.path.exists(path):
+        return None
+    try:
+        report = json.load(open(path, encoding="utf8"))
+        files = report["files"]
+        totals = report["totals"]
+    except (json.JSONDecodeError, KeyError, OSError):
+        return None
+
+    st = cl = nb = cb = 0
+    for file_path, entry in files.items():
+        if _is_omitted(file_path):
+            continue
+        summary = entry["summary"]
+        st += summary["num_statements"]
+        cl += summary["covered_lines"]
+        nb += summary.get("num_branches", 0)
+        cb += summary.get("covered_branches", 0)
+
+    all_stmts = totals["num_statements"]
+    return {
+        "pct": _ratio(st, cl, nb, cb),
+        "stmts": st,
+        "miss": st - cl,
+        "pct_all": round(totals["percent_covered"]),
+        "stmts_all": all_stmts,
+        "miss_all": all_stmts - totals["covered_lines"],
+    }
+
+
+CAUSE_PATTERNS = [
+    (r"^odoo\.tools\.convert\.ParseError: while parsing [^\n]*", None),
+    (r"^odoo\.exceptions\.(?:UserError|ValidationError): [^\n]*", None),
+    (r"^(?:ImportError|ModuleNotFoundError|TypeError|AttributeError|KeyError): [^\n]*", None),
+    (r"Some modules have inconsistent states, some dependencies may be missing: \[[^\]]*\]", None),
+    (r"Error while parsing or validating view[^\n]*", None),
+]
+
+
+def scrape_cause(log_path, installable, state):
+    """Por que no quedo instalado, en una linea. Se busca de atras para
+    adelante: el ultimo error del log es el que corto la instalacion."""
+    if not installable:
+        return "marcado installable=False en el manifest"
+    text = ""
+    if os.path.exists(log_path):
+        try:
+            text = open(log_path, encoding="utf8", errors="replace").read()
+        except OSError:
+            text = ""
+    for pattern, _ in CAUSE_PATTERNS:
+        matches = re.findall(pattern, text, re.MULTILINE)
+        if matches:
+            cause = matches[-1].split(", somewhere inside")[0].strip()
+            return cause[:300]
+    if state == "to install":
+        return "quedó a medio instalar: dependencias en estado inconsistente"
+    return "causa no determinada"
+
+
+# --------------------------------------------------------------------------
+# ejecucion de un modulo
+# --------------------------------------------------------------------------
+
+def db_name_for(slug, module, run_id):
+    """Postgres corta en 63 caracteres, asi que el nombre del modulo hay que
+    recortarlo -- pero recortarlo a secas no sirve: hay pares de modulos que
+    comparten los primeros 30 caracteres (ej. binaural_subsidiary_payment_advance
+    y binaural_subsidiary_payment_advance_igtf) y ademas quedan adyacentes en
+    orden alfabetico, o sea que la cola los despacha juntos. Con el nombre
+    truncado los dos apuntarian a la MISMA base: uno la crea, el otro la
+    encuentra hecha y la reutiliza (midiendo sobre el modulo del vecino), y el
+    primero la borra mientras el segundo la sigue usando.
+
+    Por eso al recorte se le suma un hash del nombre completo: el prefijo sigue
+    siendo legible para saber que corrida es cual, y la unicidad no depende de
+    cuanto se recorto.
+
+    El prefijo 'covs_<slug>_' tiene que casar con el db_filter de la instancia,
+    para que estas bases no le aparezcan a nadie en el selector."""
+    digest = hashlib.sha1(module.encode()).hexdigest()[:6]
+    return f"covs_{slug}_{module[:24]}_{digest}_{run_id}"[:63]
+
+
+def fingerprint(module, repo_commit, template, timeout):
+    raw = f"{SCHEMA_VERSION}|{module}|{repo_commit}|{template}|{timeout}"
+    return hashlib.sha1(raw.encode()).hexdigest()[:16]
+
+
+def run_one(job, cfg):
+    module = job["module"]
+    out_dir = os.path.join(cfg["out"], "modules", module)
+    os.makedirs(out_dir, exist_ok=True)
+    cov_json = os.path.join(out_dir, "coverage_raw.json")
+    test_json = os.path.join(out_dir, "test_report.json")
+    run_log = os.path.join(out_dir, "run.log")
+    result_path = os.path.join(out_dir, "result.json")
+
+    db = db_name_for(cfg["slug"], module, cfg["run_id"])
+    cmd = [
+        sys.executable, ODOO_TEST, module,
+        "--container", cfg["container"],
+        "--addons", ",".join(cfg["addons"]),
+        "-d", db,
+        "--no-confirm",
+        "--out-coverage-json-raw", cov_json,
+        "--out-json", test_json,
+        "--out-logs", run_log,
+    ]
+    if cfg["timeout"]:
+        cmd += ["--timeout", str(cfg["timeout"])]
+
+    ot = load_odoo_test()
+    started = time.monotonic()
+
+    # La base clonada se crea aca, y no dentro de odoo-test, por una razon
+    # concreta: el clonado hay que serializarlo (dos createdb -T concurrentes
+    # desde la misma plantilla es territorio que preferimos no explorar), y
+    # haciendolo aca el lock cubre exactamente el clonado -- unos segundos --
+    # en vez de tener que adivinar cuando lo hace el subproceso. odoo-test la
+    # encuentra ya creada, la reutiliza, y la borra al terminar junto con su
+    # filestore, igual que si la hubiera creado el.
+    if cfg["template"]:
+        with _template_lock:
+            try:
+                ot.create_db(cfg["container"], db, template=cfg["template"])
+            except subprocess.CalledProcessError as exc:
+                log(f"  ⚠️  {module}: no se pudo clonar la base de la plantilla ({exc}); "
+                    "se deja que Odoo la instale desde cero")
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    proc.wait()
+    seconds = int(time.monotonic() - started)
+
+    cov = read_coverage(cov_json)
+
+    # Si el reporte describe archivos de otro modulo, la medicion no sirve: se
+    # marca como error en vez de guardar un numero que parece valido.
+    contaminated = foreign_files(cov_json, module) if cov else []
+    if contaminated:
+        log(f"  ⚠️  {module}: el reporte de cobertura incluye archivos ajenos "
+            f"({contaminated[0].split('/')[-1]} …) — se descarta la medición")
+        cov = None
+    report = {}
+    if os.path.exists(test_json):
+        try:
+            report = json.load(open(test_json, encoding="utf8"))
+        except (json.JSONDecodeError, OSError):
+            report = {}
+    exit_code = report.get("exit_code", proc.returncode)
+    states = report.get("module_states") or {}
+    state = states.get(module)
+    timed_out = exit_code == 124 or "timeout" in (report.get("verdict", {}).get("fail_reasons") or [])
+
+    # Una corrida cortada por timeout SI deja un coverage.json, pero con la
+    # cobertura parcial de hasta donde llego la suite. Ese numero no es una
+    # medicion: es mas bajo que el real por una razon que no tiene nada que ver
+    # con el codigo. Se marca como error (los agregados excluyen los errores)
+    # y el parcial queda aparte, solo para triage.
+    no_code = (cov is None and not timed_out and not contaminated
+               and had_no_measurable_code(run_log))
+    if no_code:
+        # 0 lineas medibles: cae en sin_codigo por la misma regla de stmts < 3
+        cov = {"pct": 0, "stmts": 0, "miss": 0,
+               "pct_all": 0, "stmts_all": 0, "miss_all": 0}
+
+    error = cov is None or timed_out
+    partial_pct = cov["pct"] if (cov and timed_out) else None
+    pct = 0 if error else cov["pct"]
+    stmts = 0 if error else cov["stmts"]
+    miss = 0 if error else cov["miss"]
+    n_test_files = job["n_test_files"]
+
+    klass = "error" if error else _derive_klass(stmts, pct, n_test_files > 0, state)
+    error_cause = None
+    if timed_out:
+        error_cause = f"timeout: la suite excedió {cfg['timeout']}s"
+    elif contaminated:
+        error_cause = "medición contaminada: el reporte incluía archivos de otro módulo"
+    elif error:
+        error_cause = "no se produjo reporte de cobertura"
+    if no_code:
+        install_cause_hint = "sin código Python medible (solo manifest/init, datos o assets)"
+    else:
+        install_cause_hint = None
+    install_state = install_cause = None
+    if klass in ("no_instala", "cero"):
+        install_state = "toinstall" if state == "to install" else state
+        install_cause = scrape_cause(run_log, job["installable"], state)
+
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "path": f"{job['repo']}-{cfg['line']}/{module}",
+        "module": module,
+        "repo": job["repo"],
+        "line": cfg["line"],
+        "error": error,
+        "pct": pct,
+        "stmts": stmts,
+        "miss": miss,
+        "pct_all": 0 if error else cov["pct_all"],
+        "stmts_all": 0 if error else cov["stmts_all"],
+        "miss_all": 0 if error else cov["miss_all"],
+        "has_tests": n_test_files > 0,
+        "n_test_files": n_test_files,
+        "seconds": seconds,
+        "install_state": install_state,
+        "install_cause": install_cause,
+        "klass": klass,
+        "timed_out": timed_out,
+        "partial_pct": partial_pct,
+        "error_cause": error_cause,
+        "no_measurable_code": no_code,
+        "note": install_cause_hint,
+        "exit_code": exit_code,
+        "host_dir": job["host_dir"],
+        "fingerprint": job["fingerprint"],
+    }
+
+    tmp = result_path + ".tmp"
+    with open(tmp, "w", encoding="utf8") as f:
+        json.dump(record, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, result_path)
+
+    event = {
+        "ts": datetime.datetime.now().isoformat(timespec="seconds"),
+        "module": module,
+        "event": "timeout" if timed_out else ("error" if error else "done"),
+        "seconds": seconds, "pct": pct, "klass": klass,
+    }
+    with _print_lock:
+        with open(os.path.join(cfg["out"], "events.ndjson"), "a", encoding="utf8") as f:
+            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+    return record
+
+
+def _derive_klass(stmts, pct, has_tests, install_state):
+    """Misma precedencia que coverage-sweep-aggregate: sin_codigo ANTES que
+    pct. Si cambia una, tiene que cambiar la otra."""
+    if stmts < 3:
+        return "sin_codigo"
+    if pct > 0:
+        return "con_tests" if has_tests else "sin_tests"
+    if install_state and install_state != "installed":
+        return "no_instala"
+    return "cero"
+
+
+# --------------------------------------------------------------------------
+# subcomando run
+# --------------------------------------------------------------------------
+
+def cmd_run(args):
+    container = instance_container(args.instance)
+    inst, addons = instance_addons(args.instance)
+    os.makedirs(args.out, exist_ok=True)
+
+    repos = [r.strip() for r in args.repos.split(",") if r.strip()]
+    repo_dirs = {}
+    for repo in repos:
+        rel = os.path.join("src", "_sweep", args.line, repo)
+        full = os.path.join(BASE_PATH, rel)
+        if not os.path.isdir(full):
+            sys.exit(f"❌ No existe {rel}: ¿está creado el checkout de la línea '{args.line}'?")
+        repo_dirs[repo] = full
+
+    log(f"→ Escaneando manifests en {container}...")
+    universe = scan_universe(container, addons)
+
+    # candidatos: modulos cuyo manifest vive dentro de uno de los repos medidos
+    candidates = {}
+    for name, info in universe.items():
+        host_dir = host_path(info["path"])
+        for repo, repo_dir in repo_dirs.items():
+            if host_dir.startswith(repo_dir + os.sep):
+                candidates[name] = (repo, host_dir)
+                break
+
+    if args.only:
+        wanted = {m.strip() for m in args.only.split(",") if m.strip()}
+        unknown = wanted - set(candidates)
+        if unknown:
+            log(f"⚠️  No están entre los módulos medibles y se ignoran: {', '.join(sorted(unknown))}")
+        candidates = {k: v for k, v in candidates.items() if k in wanted}
+
+    runnable, excluded = screen_dependencies(universe, sorted(candidates))
+    log(f"   {len(candidates)} módulos en los repos medidos · "
+        f"{len(runnable)} medibles · {len(excluded)} descartados por dependencias")
+
+    repo_commits = {
+        repo: subprocess.run(["git", "-C", d, "rev-parse", "HEAD"],
+                             capture_output=True, text=True).stdout.strip()[:12]
+        for repo, d in repo_dirs.items()
+    }
+
+    jobs = []
+    for module in runnable:
+        repo, host_dir = candidates[module]
+        jobs.append({
+            "module": module,
+            "repo": repo,
+            "host_dir": host_dir,
+            "container_dir": universe[module]["path"],
+            "n_test_files": count_test_files(host_dir),
+            "installable": manifest_installable(os.path.join(host_dir, "__manifest__.py")),
+            "fingerprint": fingerprint(module, repo_commits[repo], args.db_template, args.timeout),
+        })
+
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "line": args.line,
+        "instance": args.instance,
+        "container": container,
+        "odoo_version": inst.get("odoo_version"),
+        "addons": addons,
+        "repos": {
+            repo: {
+                "branch": subprocess.run(["git", "-C", d, "rev-parse", "--abbrev-ref", "HEAD"],
+                                         capture_output=True, text=True).stdout.strip(),
+                "tag": subprocess.run(["git", "-C", d, "describe", "--tags", "--abbrev=0"],
+                                      capture_output=True, text=True).stdout.strip() or None,
+                "commit": subprocess.run(["git", "-C", d, "rev-parse", "--short", "HEAD"],
+                                         capture_output=True, text=True).stdout.strip(),
+                "date": subprocess.run(["git", "-C", d, "log", "-1", "--format=%cs"],
+                                       capture_output=True, text=True).stdout.strip(),
+            }
+            for repo, d in repo_dirs.items()
+        },
+        "template": args.db_template,
+        "template_modules": TEMPLATE_MODULES if args.db_template else None,
+        "jobs": args.jobs,
+        "timeout": args.timeout,
+        "docker_odoo_head": subprocess.run(["git", "-C", BASE_PATH, "rev-parse", "--short", "HEAD"],
+                                           capture_output=True, text=True).stdout.strip(),
+        "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    with open(os.path.join(args.out, "manifest.json"), "w", encoding="utf8") as f:
+        json.dump(manifest, f, ensure_ascii=False, indent=1)
+
+    worklist = {
+        "candidates": [
+            {k: j[k] for k in ("module", "repo", "n_test_files", "installable", "fingerprint")}
+            for j in jobs
+        ],
+        "excluded": [
+            {"path": f"{candidates[m][0]}-{args.line}/{m}", "reason": r} for m, r in excluded
+        ],
+    }
+    # Con --only, la lista de trabajo calculada describe solo ese puñado de
+    # modulos. Sobrescribir la del barrido completo perderia la lista de
+    # excluidos por dependencias, que es justamente lo que el informe reporta
+    # como "no se pudo medir" -- y no se recupera sin volver a escanear todo.
+    worklist_path = os.path.join(args.out, "worklist.json")
+    if args.only and os.path.exists(worklist_path):
+        log("   (--only: se conserva la lista de trabajo del barrido completo)")
+    else:
+        with open(worklist_path, "w", encoding="utf8") as f:
+            json.dump(worklist, f, ensure_ascii=False, indent=1)
+
+    # reanudacion: se saltea lo ya medido con el mismo fingerprint
+    pending = []
+    for job in jobs:
+        result_path = os.path.join(args.out, "modules", job["module"], "result.json")
+        if os.path.exists(result_path):
+            try:
+                prev = json.load(open(result_path, encoding="utf8"))
+            except (json.JSONDecodeError, OSError):
+                prev = {}
+            same = prev.get("fingerprint") == job["fingerprint"]
+            failed = prev.get("error") or prev.get("timed_out")
+            if same and not (args.redo_failed and failed) and not args.redo:
+                continue
+        pending.append(job)
+
+    log(f"   {len(jobs) - len(pending)} ya medidos (se saltean) · {len(pending)} por medir")
+
+    # Una corrida que se murio a mitad deja bases sin borrar. Se limpian antes
+    # de arrancar -- acotadas a esta linea, para no tocar lo que las otras
+    # tengan en vuelo en el mismo Postgres.
+    if not args.dry_run:
+        stale_dbs = sweep_dbs(container, args.slug)
+        if stale_dbs:
+            log(f"   limpiando {len(stale_dbs)} base(s) de barrido que quedaron de una corrida anterior")
+            drop_sweep_dbs(container, stale_dbs)
+
+    if args.dry_run:
+        log("\n(--dry-run: no se ejecuta nada)")
+        for job in pending[:20]:
+            log(f"   {job['repo']:16} {job['module']}")
+        if len(pending) > 20:
+            log(f"   ... y {len(pending) - 20} más")
+        return
+
+    if not pending:
+        log("✅ Nada que hacer.")
+        return
+
+    cfg = {
+        "out": args.out, "line": args.line, "container": container, "addons": addons,
+        "template": args.db_template, "timeout": args.timeout, "slug": args.slug,
+        "run_id": hashlib.sha1(str(time.time()).encode()).hexdigest()[:6],
+    }
+
+    done = 0
+    total = len(pending)
+    started = time.monotonic()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        futures = {pool.submit(run_one, job, cfg): job for job in pending}
+        for future in concurrent.futures.as_completed(futures):
+            job = futures[future]
+            done += 1
+            try:
+                rec = future.result()
+            except Exception as exc:  # noqa: BLE001 - un modulo no tumba el barrido
+                log(f"  [{done}/{total}] {job['module']}: ❌ excepción del orquestador: {exc}")
+                continue
+            elapsed = time.monotonic() - started
+            eta = (elapsed / done) * (total - done)
+            mark = "⏱" if rec["timed_out"] else ("✗" if rec["error"] else "·")
+            log(f"  [{done}/{total}] {mark} {rec['module']:44} "
+                f"{rec['pct']:>3}% {rec['klass']:<11} {rec['seconds']:>5}s "
+                f"| ETA {int(eta // 3600)}h{int(eta % 3600 // 60):02d}m")
+
+    write_summary(args.out)
+    log(f"\n✅ Barrido de la línea '{args.line}' terminado en "
+        f"{int((time.monotonic() - started) // 60)} min.")
+
+
+def write_summary(out_dir):
+    records = []
+    modules_root = os.path.join(out_dir, "modules")
+    if os.path.isdir(modules_root):
+        for name in sorted(os.listdir(modules_root)):
+            p = os.path.join(modules_root, name, "result.json")
+            if os.path.exists(p):
+                records.append(json.load(open(p, encoding="utf8")))
+    summary = {
+        "measured": len(records),
+        "errors": sum(1 for r in records if r["error"]),
+        "timeouts": sum(1 for r in records if r["timed_out"]),
+        "by_klass": {
+            k: sum(1 for r in records if r["klass"] == k)
+            for k in ("con_tests", "sin_tests", "sin_codigo", "no_instala", "cero", "error")
+        },
+        "total_seconds": sum(r["seconds"] for r in records),
+        "finished_at": datetime.datetime.now().isoformat(timespec="seconds"),
+    }
+    with open(os.path.join(out_dir, "summary.json"), "w", encoding="utf8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=1)
+    return summary
+
+
+def cmd_status(args):
+    manifest_path = os.path.join(args.out, "manifest.json")
+    if not os.path.exists(manifest_path):
+        sys.exit(f"❌ No hay barrido en {args.out}.")
+    manifest = json.load(open(manifest_path, encoding="utf8"))
+    worklist = json.load(open(os.path.join(args.out, "worklist.json"), encoding="utf8"))
+    summary = write_summary(args.out)
+
+    total = len(worklist["candidates"])
+    log(f"Barrido de la línea '{manifest['line']}' ({manifest['instance']}, Odoo {manifest['odoo_version']})")
+    for repo, ref in manifest["repos"].items():
+        log(f"  {repo:16} {ref['branch']} @ {ref['commit']} ({ref['date']}) tag {ref['tag'] or '—'}")
+    log(f"\n  medidos {summary['measured']}/{total} · descartados por dependencias "
+        f"{len(worklist['excluded'])} · errores {summary['errors']} · timeouts {summary['timeouts']}")
+    for k, n in summary["by_klass"].items():
+        if n:
+            log(f"    {k:12} {n}")
+    horas = summary["total_seconds"] / 3600
+    log(f"\n  tiempo de máquina acumulado: {horas:.1f} h")
+
+    # auditoria: ningun reporte debe describir archivos de otro modulo
+    suspect = []
+    modules_root = os.path.join(args.out, "modules")
+    if os.path.isdir(modules_root):
+        for name in sorted(os.listdir(modules_root)):
+            raw = os.path.join(modules_root, name, "coverage_raw.json")
+            if not os.path.exists(raw):
+                continue
+            if foreign_files(raw, name):
+                suspect.append(name)
+    if suspect:
+        log(f"\n  ⚠️  {len(suspect)} medición(es) describen archivos de otro módulo "
+            f"y hay que rehacerlas: {', '.join(suspect[:6])}"
+            f"{' …' if len(suspect) > 6 else ''}")
+        log(f"     Volvé a correr con: --redo --only {','.join(suspect)}")
+    else:
+        log("  auditoría: cada medición describe solo archivos de su módulo ✅")
+    if summary["measured"] < total:
+        log(f"  faltan {total - summary['measured']} módulos: volver a correr el mismo "
+            "comando de 'run' para retomar.")
+
+
+def sweep_dbs(container, slug=None):
+    """Bases de barrido que hay ahora mismo. Con `slug`, solo las de esa linea.
+
+    El acotado importa: las tres lineas comparten el mismo servicio de
+    Postgres, asi que barrer todos los 'covs_%' desde una linea le borraria a
+    las otras las bases que tienen en vuelo."""
+    pattern = f"covs\\_{slug}\\_%" if slug else "covs\\_%"
+    return psql(
+        container, "postgres",
+        f"SELECT datname FROM pg_database WHERE datname LIKE '{pattern}'",
+    ).stdout.split()
+
+
+def drop_sweep_dbs(container, names):
+    """Borra la base y su filestore. Los dos: clonar una base copia su
+    filestore aparte (odoo-test lo hace al usar --db-template), asi que dejarlo
+    atras acumula directorios sueltos a lo largo de un barrido."""
+    for db in names:
+        docker_exec(container, "dropdb", "--if-exists", "--force", db)
+        docker_exec(container, "bash", "-c",
+                    f"rm -rf /home/odoo/data/filestore/{db}", user="root")
+
+
+def cmd_clean(args):
+    container = instance_container(args.instance)
+    rows = sweep_dbs(container, args.slug)
+    if not rows:
+        log("✅ No hay bases de barrido colgadas.")
+        return
+    log(f"→ {len(rows)} base(s) de barrido a borrar: {', '.join(rows[:8])}"
+        f"{' ...' if len(rows) > 8 else ''}")
+    if not args.yes:
+        log("   (agregar --yes para borrarlas)")
+        return
+    drop_sweep_dbs(container, rows)
+    log(f"✅ Borradas {len(rows)} bases y sus filestore.")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    sub = parser.add_subparsers(dest="action", required=True)
+
+    t = sub.add_parser("template", help="Hornea la plantilla de base de datos")
+    t.add_argument("--instance", required=True)
+    t.add_argument("--db", required=True, help="Nombre de la plantilla (ej: tpl_cov_19)")
+    t.add_argument("--force", action="store_true", help="Rehornear si ya existe")
+
+    r = sub.add_parser("run", help="Corre el barrido")
+    r.add_argument("--instance", required=True)
+    r.add_argument("--line", required=True, help="Etiqueta de la línea (ej: 19.0, l10nve_17.0)")
+    r.add_argument("--slug", required=True, help="Prefijo de las bases, debe casar con el db_filter de la instancia (ej: 19)")
+    r.add_argument("--repos", required=True, help="Repos a medir, separados por coma")
+    r.add_argument("--out", required=True, help="Directorio de salida del barrido")
+    r.add_argument("--db-template", default=None)
+    r.add_argument("--timeout", type=int, default=2400)
+    r.add_argument("--jobs", type=int, default=2)
+    r.add_argument("--only", default=None, help="Solo estos módulos, separados por coma")
+    r.add_argument("--redo", action="store_true", help="Vuelve a medir todo, ignorando la caché")
+    r.add_argument("--redo-failed", action="store_true", help="Reintenta solo errores y timeouts")
+    r.add_argument("--dry-run", action="store_true")
+
+    s = sub.add_parser("status", help="Estado de un barrido")
+    s.add_argument("--out", required=True)
+
+    c = sub.add_parser("clean", help="Borra bases de barrido colgadas")
+    c.add_argument("--instance", required=True)
+    c.add_argument("--slug", default=None,
+                   help="Acota el borrado a las bases de esa linea. Sin esto borra "
+                        "TODAS las 'covs_*' del servicio de Postgres, incluidas las "
+                        "que otra linea pueda tener en vuelo.")
+    c.add_argument("--yes", action="store_true")
+
+    args = parser.parse_args()
+    if args.action == "template":
+        bake_template(args.instance, args.db, args.force)
+    elif args.action == "run":
+        cmd_run(args)
+    elif args.action == "status":
+        cmd_status(args)
+    elif args.action == "clean":
+        cmd_clean(args)
+
+
+if __name__ == "__main__":
+    main()

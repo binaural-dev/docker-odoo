@@ -13,6 +13,24 @@ RUN python3 -m pip install --no-cache-dir \
     cairosvg \
     click-odoo-contrib
 
+# Odoo fija en http.py un tope de 10 MB para el parseo de formularios
+# (httprequest.max_form_memory_size). Con el parche de seguridad de werkzeug ese
+# tope pasa a contar tambien los bytes del archivo subido, asi que restaurar una
+# base desde /web/database/manager falla con cualquier dump mayor a 10 MB: la
+# subida se corta y Odoo responde 413 o, si el cuerpo llega truncado, el multipart
+# se descarta en silencio, el form queda vacio y revienta con
+#   TypeError: Database.restore() missing 3 required positional arguments
+# La ruta /web/database/restore ya declara max_content_length=None, de modo que
+# quitar este tope deja el comportamiento que Odoo pretendia para el restore.
+RUN ODOO_HTTP=/usr/lib/python3/dist-packages/odoo/http.py; \
+    if grep -q 'httprequest.max_form_memory_size' "$ODOO_HTTP"; then \
+        sed -i 's/^\( *\)httprequest\.max_form_memory_size = .*/\1httprequest.max_form_memory_size = None  # binaural: permite restaurar dumps grandes desde la web/' "$ODOO_HTTP" \
+        && grep -q 'httprequest.max_form_memory_size = None' "$ODOO_HTTP" \
+        && echo "OK: max_form_memory_size desactivado en $ODOO_HTTP"; \
+    else \
+        echo "AVISO: no se encontro httprequest.max_form_memory_size en $ODOO_HTTP, nada que parchear"; \
+    fi
+
 ENV SOURCES /home/odoo/src
 ENV RESOURCES /home/odoo/.resources
 ENV CONFIG_DIR /home/odoo/.config

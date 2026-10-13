@@ -20,6 +20,18 @@ ODOO_GEVENT_PORT = 8071
 
 NETWORK_NAME = "odoo-multi"
 
+# Odoo recycles a worker once it passes limit_memory_soft and kills it at
+# limit_memory_hard. Set these high enough and the watchdog never fires, so a
+# leaking worker grows until the host runs out of RAM and the kernel OOM
+# killer picks a victim outside Docker. These are Odoo's own defaults.
+DEFAULT_LIMIT_MEMORY_SOFT = 2147483648  # 2 GB per worker
+DEFAULT_LIMIT_MEMORY_HARD = 2684354560  # 2.5 GB per worker
+
+# Hard ceiling for the whole container (master + workers + cron), as a safety
+# net for whatever the Odoo-level limits miss. Keeps an OOM contained to the
+# container instead of taking the host down with it.
+DEFAULT_MEM_LIMIT = "4g"
+
 
 def generate_compose(base_path, config, dockerfile_map):
     """
@@ -170,7 +182,10 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     lines = [
         f"  {container_name}:",
         "    command: odoo --dev=all",
-        "    restart: always",
+        # unless-stopped, not always: an instance stopped on purpose must stay
+        # down across reboots instead of coming back with the Docker daemon.
+        "    restart: unless-stopped",
+        f"    mem_limit: {odoo_conf.get('mem_limit', DEFAULT_MEM_LIMIT)}",
         f"    container_name: {container_name}",
         "    build:",
         "      context: .",
@@ -233,8 +248,8 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
         f"      AEROO_DOCS_HOST: {odoo_conf.get('aeroo_docs_host', 'aeroo')}",
         f"      UNACCENT: {odoo_conf.get('unaccent', False)}",
         "      LOG_LEVEL: info",
-        f"      LIMIT_MEMORY_SOFT: {odoo_conf.get('limit_memory_soft', 16000000000)}",
-        f"      LIMIT_MEMORY_HARD: {odoo_conf.get('limit_memory_hard', 17000000000)}",
+        f"      LIMIT_MEMORY_SOFT: {odoo_conf.get('limit_memory_soft', DEFAULT_LIMIT_MEMORY_SOFT)}",
+        f"      LIMIT_MEMORY_HARD: {odoo_conf.get('limit_memory_hard', DEFAULT_LIMIT_MEMORY_HARD)}",
         f"      MAX_CRON_THREADS: {odoo_conf.get('max_cron_threads', 1)}",
         f"      LIMIT_TIME_REAL_CRON: {odoo_conf.get('limit_time_real_cron', 0)}",
         f"      LIMIT_TIME_REAL: {odoo_conf.get('limit_time_real', 3600)}",

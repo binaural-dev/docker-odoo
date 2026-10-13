@@ -1,0 +1,382 @@
+<title>Ronda de Merge Nómina VE</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --ground: #f4f6f7;
+    --surface: #ffffff;
+    --surface-sunk: #eaeef0;
+    --ink: #10181c;
+    --ink-soft: #45565e;
+    --ink-faint: #71858e;
+    --rule: #d3dbdf;
+    --rule-soft: #e4eaed;
+    --accent: #1f5673;
+    --accent-soft: #dce8ef;
+    --ok: #2f7d5b;
+    --ok-soft: #dcefe5;
+    --wait: #8a6212;
+    --wait-soft: #f5e9d2;
+    --stop: #a33a32;
+    --stop-soft: #f6e0de;
+    --done: #5b6b73;
+    --done-soft: #e3e9eb;
+
+    --sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --cond: "IBM Plex Sans Condensed", "IBM Plex Sans", ui-sans-serif, sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0e1418;
+      --surface: #161f24;
+      --surface-sunk: #111a1e;
+      --ink: #e8eef1;
+      --ink-soft: #a8bac2;
+      --ink-faint: #7a8d96;
+      --rule: #2a373e;
+      --rule-soft: #202b31;
+      --accent: #6fb3d4;
+      --accent-soft: #16303f;
+      --ok: #6cc79b;
+      --ok-soft: #143024;
+      --wait: #d9ab5a;
+      --wait-soft: #33280f;
+      --stop: #e08b83;
+      --stop-soft: #3a1f1d;
+      --done: #93a5ad;
+      --done-soft: #1e282d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e1418;
+    --surface: #161f24;
+    --surface-sunk: #111a1e;
+    --ink: #e8eef1;
+    --ink-soft: #a8bac2;
+    --ink-faint: #7a8d96;
+    --rule: #2a373e;
+    --rule-soft: #202b31;
+    --accent: #6fb3d4;
+    --accent-soft: #16303f;
+    --ok: #6cc79b;
+    --ok-soft: #143024;
+    --wait: #d9ab5a;
+    --wait-soft: #33280f;
+    --stop: #e08b83;
+    --stop-soft: #3a1f1d;
+    --done: #93a5ad;
+    --done-soft: #1e282d;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    margin: 0;
+    padding-inline: 20px;
+    padding-block: 40px 64px;
+  }
+  .wrap { max-width: 1020px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+
+  /* ---- cabecera ---- */
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--ink-faint);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-family: var(--cond); font-weight: 700; font-size: clamp(30px, 5.5vw, 44px);
+    line-height: 1.05; letter-spacing: -.015em; margin: 0 0 12px; text-wrap: balance;
+  }
+  .lede { margin: 0; max-width: 62ch; color: var(--ink-soft); font-size: 16px; }
+
+  /* ---- tira de conteos ---- */
+  .counts { display: flex; flex-wrap: wrap; gap: 10px; }
+  .count {
+    flex: 1 1 150px; background: var(--surface); border: 1px solid var(--rule-soft);
+    border-top: 3px solid var(--c, var(--accent)); border-radius: 3px;
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 2px;
+  }
+  .count b {
+    font-family: var(--cond); font-size: 30px; font-weight: 700; line-height: 1;
+    color: var(--c, var(--accent)); font-variant-numeric: tabular-nums;
+  }
+  .count span { font-size: 13px; color: var(--ink-soft); }
+
+  /* ---- secciones ---- */
+  section { display: flex; flex-direction: column; gap: 16px; }
+  h2 {
+    font-family: var(--cond); font-weight: 600; font-size: 21px; letter-spacing: -.01em;
+    margin: 0; padding-bottom: 8px; border-bottom: 1px solid var(--rule);
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  }
+  h2 em {
+    font-family: var(--mono); font-style: normal; font-size: 11px; font-weight: 500;
+    letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint);
+  }
+  .intro { margin: 0; color: var(--ink-soft); max-width: 68ch; }
+
+  /* ---- tabla ---- */
+  .tablewrap { overflow-x: auto; border: 1px solid var(--rule-soft); border-radius: 3px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 660px; }
+  th {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-faint); text-align: left;
+    padding: 11px 14px; border-bottom: 1px solid var(--rule); background: var(--surface-sunk);
+    white-space: nowrap;
+  }
+  td { padding: 12px 14px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; font-size: 14px; }
+  tr:last-child td { border-bottom: 0; }
+  td.pr a { font-family: var(--mono); font-weight: 600; color: var(--accent); text-decoration: none; white-space: nowrap; }
+  td.pr a:hover { text-decoration: underline; }
+  td.pr small { display: block; color: var(--ink-faint); font-size: 12px; margin-top: 2px; white-space: nowrap; }
+  td.when { font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink-soft); white-space: nowrap; }
+  td.when b { color: var(--ink); font-weight: 600; }
+  td.fix { color: var(--ink-soft); min-width: 230px; }
+  a.plain { color: var(--accent); text-decoration: none; font-family: var(--mono); font-weight: 600; }
+  a.plain:hover { text-decoration: underline; }
+  a:focus-visible, a.plain:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+  .pill {
+    display: inline-block; font-family: var(--mono); font-size: 11px; font-weight: 500;
+    padding: 2px 8px; border-radius: 2px; white-space: nowrap;
+  }
+  .pill.ok { background: var(--ok-soft); color: var(--ok); }
+  .pill.wait { background: var(--wait-soft); color: var(--wait); }
+  .pill.stop { background: var(--stop-soft); color: var(--stop); }
+  .pill.done { background: var(--done-soft); color: var(--done); }
+
+  /* ---- desajustes: fichas en lista ---- */
+  .gaps { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--rule-soft); border-radius: 3px; background: var(--surface); }
+  .gap {
+    display: grid; grid-template-columns: 200px 1fr; gap: 4px 18px;
+    padding: 14px 16px; border-left: 3px solid var(--c, var(--rule));
+  }
+  .gap + .gap { border-top: 1px solid var(--rule-soft); }
+  .gap .who { display: flex; flex-direction: column; gap: 3px; }
+  .gap .who b { font-family: var(--mono); font-size: 13px; font-weight: 600; color: var(--ink); }
+  .gap .who span { font-size: 12.5px; color: var(--ink-faint); }
+  .gap .says { font-size: 13.5px; color: var(--ink-soft); }
+  .gap .says b { color: var(--ink); font-weight: 600; }
+
+  /* ---- pares tarea/PR compactos ---- */
+  .pairs { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+  .pair {
+    background: var(--surface); border: 1px solid var(--rule-soft); border-radius: 3px;
+    padding: 11px 14px; display: flex; flex-direction: column; gap: 3px;
+  }
+  .pair b { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+  .pair span { font-size: 13px; color: var(--ink-soft); }
+  .pair small { font-size: 12px; color: var(--ink-faint); }
+
+  /* ---- notas ---- */
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+  .note {
+    background: var(--surface); border: 1px solid var(--rule-soft);
+    border-left: 3px solid var(--c, var(--rule)); border-radius: 3px; padding: 14px 16px;
+  }
+  .note h3 {
+    font-family: var(--cond); font-size: 15px; font-weight: 600; margin: 0 0 6px; color: var(--ink);
+  }
+  .note p { margin: 0; font-size: 13.5px; color: var(--ink-soft); }
+  .note p + p { margin-top: 8px; }
+  code {
+    font-family: var(--mono); font-size: .88em; background: var(--surface-sunk);
+    padding: 1px 5px; border-radius: 2px; color: var(--ink);
+  }
+  footer {
+    border-top: 1px solid var(--rule); padding-top: 16px;
+    font-size: 13px; color: var(--ink-faint);
+  }
+  footer b { color: var(--ink-soft); font-weight: 500; }
+  footer p { margin: 0; }
+  footer p + p { margin-top: 8px; }
+  @media (max-width: 560px) {
+    .gap { grid-template-columns: 1fr; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Vertical de nómina · integra-addons · verificado 16-sep-2026</p>
+    <h1>Ronda de Merge Nómina VE</h1>
+    <p class="lede">Cinco de los ocho que esperaban firma entraron el 15 de septiembre. Quedan tres abiertos, y dos de ellos volvieron a quedar en conflicto porque la base se movió con esos mismos merges. Al cruzar GitHub contra el Odoo central aparecen además cinco tareas cuyo estado no coincide con el de su PR.</p>
+  </header>
+
+  <div class="counts">
+    <div class="count" style="--c: var(--ok)"><b>12</b><span>mergeados de los 15 de la ronda</span></div>
+    <div class="count" style="--c: var(--accent)"><b>3</b><span>siguen abiertos</span></div>
+    <div class="count" style="--c: var(--stop)"><b>2</b><span>en conflicto con la base</span></div>
+    <div class="count" style="--c: var(--wait)"><b>5</b><span>desajustes tarea ↔ PR</span></div>
+  </div>
+
+  <section>
+    <h2>Entraron el 15 de septiembre <em>5 PRs · base 19.0</em></h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>PR</th><th>Mergeado</th><th>Qué entró</th><th>Estado de la tarea</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="pr"><a href="https://github.com/binaural-dev/integra-addons/pull/2581">#2581</a><small>T-80056</small></td>
+            <td class="when"><b>17:30</b></td>
+            <td class="fix">Reagrupar secciones de la pestaña Nómina.</td>
+            <td><span class="pill done">Cerrado</span></td>
+          </tr>
+          <tr>
+            <td class="pr"><a href="https://github.com/binaural-dev/integra-addons/pull/2578">#2578</a><small>T-80050</small></td>
+            <td class="when"><b>17:48</b></td>
+            <td class="fix">Dividir los ajustes salariales en dos menús. Entró con <code>CHANGES_REQUESTED</code> en pie.</td>
+            <td><span class="pill done">Cerrado</span></td>
+          </tr>
+          <tr>
+            <td class="pr"><a href="https://github.com/binaural-dev/integra-addons/pull/2654">#2654</a><small>T-80828</small></td>
+            <td class="when"><b>17:53</b></td>
+            <td class="fix">Quitar el RIF que Odoo 19 mete en la cabecera de los recibos. Entró con <code>CHANGES_REQUESTED</code> en pie.</td>
+            <td><span class="pill done">Cerrado</span></td>
+          </tr>
+          <tr>
+            <td class="pr"><a href="https://github.com/binaural-dev/integra-addons/pull/2739">#2739</a><small>T-80839</small></td>
+            <td class="when"><b>18:01</b></td>
+            <td class="fix">Columnas del libro de vacaciones, con el bump que faltaba para los 18 campos nuevos. Entró con <code>CHANGES_REQUESTED</code> en pie.</td>
+            <td><span class="pill done">Cerrado</span></td>
+          </tr>
+          <tr>
+            <td class="pr"><a href="https://github.com/binaural-dev/integra-addons/pull/2596">#2596</a><small>T-80085</small></td>
+            <td class="when"><b>18:56</b></td>
+            <td class="fix">Cerrar el periodo de nómina el día 30. Entró con <code>CHANGES_REQUESTED</code> en pie.</td>
+            <td><span class="pill done">Cerrado</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="intro">Cuatro de los cinco se mergearon por encima de la marca de cambios solicitados: la firma nunca llegó, el merge sí. Solo #2581 estaba sin marca al entrar.</p>
+  </section>
+
+  <section>
+    <h2>Siguen abiertos <em>3 PRs · cada uno frenado por algo distinto</em></h2>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr><th>PR</th><th>Base</th><th>Revisión</th><th>Qué lo frena hoy</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="pr"><a href="https://github.com/binaural-dev/integra-addons/pull/2595">#2595</a><small>T-80055</small></td>
+            <td class="when">19.0</td>
+            <td><span class="pill wait">re-firma</span></td>
+            <td class="fix"><b>Conflicto con la base.</b> El <code>CHANGES_REQUESTED</code> de christopherBinaural (21-ago) sigue contando: lo del 15-sep fue un comentario, no una firma. Los merges de ayer movieron 19.0, así que hay que rehacer el rebase antes de pedirla. Pre-commit y pruebas: en verde.</td>
+          </tr>
+          <tr>
+            <td class="pr"><a href="https://github.com/binaural-dev/integra-addons/pull/2648">#2648</a><small>T-80758</small></td>
+            <td class="when">19.0</td>
+            <td><span class="pill wait">sin revisar</span></td>
+            <td class="fix"><b>Conflicto con la base.</b> Nunca tuvo review humana — solo binauralbot, en verde. Rebase y primera firma.</td>
+          </tr>
+          <tr>
+            <td class="pr"><a href="https://github.com/binaural-dev/integra-addons/pull/2804">#2804</a><small>TI-15165</small></td>
+            <td class="when">l10nve_17.0</td>
+            <td><span class="pill ok">listo para firmar</span></td>
+            <td class="fix"><b>Solo falta la aprobación.</b> Mergeable y sin conflictos, con el bump ya reacomodado en …2.35. GitHub lo tiene en <code>BLOCKED</code> a la espera de la review requerida.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="intro">La escalera de versiones de la ronda anterior ya no aplica: la base 19.0 avanzó cinco merges. Para #2595 y #2648 hay que recalcular el bump contra la base nueva, no contra el plan viejo.</p>
+  </section>
+
+  <section>
+    <h2>Desajustes entre la tarea y su PR <em>Odoo central ↔ GitHub</em></h2>
+    <p class="intro">Cruce de las 12 tareas abiertas de nómina VE contra el estado real de cada PR. Aquí es donde se pierde trabajo: la tarea dice una cosa y el repositorio otra.</p>
+    <div class="gaps">
+
+      <div class="gap" style="--c: var(--stop)">
+        <div class="who">
+          <b>T-79392</b>
+          <span>Revisión de Código · V17</span>
+        </div>
+        <div class="says">Producto la mandó a revisar el 11-sep, pero <b>nunca se abrió el PR</b>. La rama <code>l10nve_17.0_feat-ta_79392_monthly_accrued_column</code> está pusheada con un commit y ya va 99 commits por detrás de <code>l10nve_17.0</code>. No hay nada que revisar: la columna de devengado mensual sigue fuera del repositorio.</div>
+      </div>
+
+      <div class="gap" style="--c: var(--wait)">
+        <div class="who">
+          <b>T-78760</b>
+          <span>Validación - BIN · V19</span>
+        </div>
+        <div class="says">Migración V19. Su PR original <a class="plain" href="https://github.com/binaural-dev/integra-addons/pull/2528">#2528</a> se cerró sin merge y lo reemplazó <a class="plain" href="https://github.com/binaural-dev/integra-addons/pull/2529">#2529</a>, mergeado el 17-ago. <b>Un mes parada en validación</b> con el código ya en la base.</div>
+      </div>
+
+      <div class="gap" style="--c: var(--done)">
+        <div class="who">
+          <b>T-75574</b>
+          <span>Cerrada el 01-sep · V17</span>
+        </div>
+        <div class="says">La tarea está cerrada, pero <a class="plain" href="https://github.com/binaural-dev/integra-addons/pull/2496">#2496</a> sigue abierto con <code>CHANGES_REQUESTED</code>. O el PR entra, o se cierra: hoy figura como trabajo vivo que nadie va a atender.</div>
+      </div>
+
+      <div class="gap" style="--c: var(--done)">
+        <div class="who">
+          <b>T-81290</b>
+          <span>Cerrada el 11-sep · V17</span>
+        </div>
+        <div class="says">Mismo caso: <a class="plain" href="https://github.com/binaural-dev/integra-addons/pull/2705">#2705</a> abierto con <code>CHANGES_REQUESTED</code> sobre una tarea ya cerrada.</div>
+      </div>
+
+      <div class="gap" style="--c: var(--wait)">
+        <div class="who">
+          <b>T-80086</b>
+          <span>Revisión de Código · V19</span>
+        </div>
+        <div class="says">Su PR <a class="plain" href="https://github.com/binaural-dev/integra-addons/pull/2604">#2604</a> existe pero está en conflicto y sin un solo movimiento desde el 21-ago. Es el más viejo de la cola de revisión.</div>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>En validación sin que el código haya entrado <em>5 registros</em></h2>
+    <p class="intro">Tareas y tickets movidos a validación cuyo PR todavía está abierto. Se está validando contra ambientes donde el cambio no llegó por merge.</p>
+    <div class="pairs">
+      <div class="pair"><b>T-79373</b><span>Traducciones de campos, V17</span><small>#2531 · CHANGES_REQUESTED, sin tocar desde el 13-ago</small></div>
+      <div class="pair"><b>T-80838</b><span>Reporte consolidado INCES</span><small>#2813 (19.0) y #2814 (l10nve_17.0, en conflicto)</small></div>
+      <div class="pair"><b>T-81441</b><span>Migración hikvisión</span><small>#2723 · sin revisar</small></div>
+      <div class="pair"><b>T-82448</b><span>Filtro de cuenta analítica</span><small>#2810 · sin revisar</small></div>
+      <div class="pair"><b>TI-14457</b><span>Reversión FA de anticipos y retiros</span><small>#2511 · CHANGES_REQUESTED</small></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Lo que hay que saber antes de la próxima firma</h2>
+    <div class="notes">
+
+      <div class="note" style="--c: var(--stop)">
+        <h3>Cada merge vuelve a romper a los que quedan</h3>
+        <p>Pasó otra vez: los cinco merges del 15-sep dejaron a #2595 y #2648 en conflicto. Mientras la cola se firme de a uno y con horas de diferencia, el último siempre paga el rebase.</p>
+        <p>Firmar la cola en bloque, o rebasar justo antes de cada merge, es lo único que corta el ciclo.</p>
+      </div>
+
+      <div class="note" style="--c: var(--accent)">
+        <h3>El bump que se pierde sin ruido</h3>
+        <p>Cuando la rama y la base suben al mismo número, git no ve nada que resolver: el merge pasa limpio y el bump queda en cero. Al re-revisar conviene comparar el manifest de la rama contra el de la base, no contra el punto de partida.</p>
+      </div>
+
+      <div class="note" style="--c: var(--done)">
+        <h3>Quedan dos onchange fuera de alcance</h3>
+        <p>En <code>test_liquidation_payslip_flows.py</code> siguen dos <code>_onchange_struct_id()</code> llamados por nombre. Ese archivo no lo toca #2595 y se dejaron fuera para no ensanchar el diff; si se quieren migrar a <code>Form</code>, va aparte.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <footer>
+    <p><b>Los 12 mergeados:</b> #2581 (T-80056), #2578 (T-80050), #2654 (T-80828), #2739 (T-80839) y #2596 (T-80085) el 15-sep; #2614 (T-80048), #2612 (T-80087), #2613 (T-80500), #2738 (T-80839), #2510 (TI-14460, que cierra también TI-13080) y #2503 (TI-13687) el 14-sep; #2638 (T-80757) el 11-sep. Todas sus tareas y tickets figuran cerrados en el Odoo central.</p>
+    <p><b>dismiss_stale_reviews_on_push está activo:</b> cada push desaprueba el PR, así que la firma tiene que venir después del último push — y después del rebase, en los dos que están en conflicto.</p>
+    <p>Estado verificado el 16-sep-2026 contra la API de GitHub y el Odoo central de Binaural.</p>
+  </footer>
+
+</div>

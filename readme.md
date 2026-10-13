@@ -40,8 +40,9 @@ Define configuraciones nombradas que luego se referencian desde las instancias. 
       "without_demo": true,
       "list_db": true,
       "proxy_mode": true,
-      "limit_memory_soft": 16000000000,
-      "limit_memory_hard": 17000000000,
+      "limit_memory_soft": 2147483648,
+      "limit_memory_hard": 2684354560,
+      "mem_limit": "4g",
       "max_cron_threads": 1,
       "limit_time_real_cron": 0,
       "limit_time_real": 3600,
@@ -54,6 +55,21 @@ Define configuraciones nombradas que luego se referencian desde las instancias. 
   }
 }
 ```
+
+**Sobre los techos de memoria.** Son tres niveles, y conviene no aflojarlos:
+
+| Clave | Alcance | Efecto al superarse |
+|---|---|---|
+| `limit_memory_soft` | por worker | Odoo recicla el worker al terminar el request en curso |
+| `limit_memory_hard` | por worker | Odoo mata el worker de inmediato |
+| `mem_limit` | contenedor completo | el cgroup dispara OOM dentro del contenedor |
+
+Los dos primeros son los defaults de Odoo (2 GB / 2.5 GB). Subirlos a valores
+cercanos a la RAM de la máquina desactiva en la práctica el watchdog de Odoo:
+un worker con fuga crece hasta agotar el host y entonces el que elige víctima
+es el OOM killer del kernel, que se lleva procesos de fuera de Docker
+(navegador, sesión de escritorio). `mem_limit` es la red de seguridad que
+mantiene ese OOM contenido en el contenedor.
 
 ### `databases` — Bases de datos (managed o externas)
 
@@ -159,7 +175,9 @@ Cuando **más de una** instancia usa el mismo `database` (mismo servicio de Post
 
 `db_user`/`db_password` van en la **raíz** de la instancia (hermano de `database`/`overwrite_odoo_config`), no dentro de `overwrite_odoo_config`. Son las credenciales de un rol de Postgres **dedicado a esa instancia**, dueño únicamente de sus propias bases — es la protección real contra el problema del cron descrito arriba: cada rol solo ve/puede tocar lo suyo (`list_dbs()` de Odoo ya filtra por `datdba = current_user`), y además se revoca `CONNECT` de `PUBLIC` sobre esas bases, así que ni siquiera una conexión directa con otro rol puede abrirlas.
 
-Si falta cualquiera de los dos requisitos (`db_filter` específico o `db_user`/`db_password`) en alguna instancia de un grupo así, **cualquier comando `./odoo` falla de entrada** con un error detallado listando qué instancia(s) y qué les falta. Escape hatch legítimo: poner `"max_cron_threads": 0` explícito en `overwrite_odoo_config` para una instancia que de verdad no necesita cron (por ejemplo, una copia de solo lectura) — deja constancia de que es intencional, no un olvido.
+Si falta cualquiera de los dos requisitos (`db_filter` específico o `db_user`/`db_password`), **`./odoo build`, `start` y `restart` fallan** con un error detallado listando qué instancia(s) y qué les falta. Son los únicos comandos que dejan un servidor Odoo corriendo con cron sobre el Postgres compartido, así que son los únicos que exigen el aislamiento; el resto del CLI (`list`, `logs`, `psql`, `stop`, backups, restores) se ejecuta normalmente, precedido de un aviso compacto.
+
+El chequeo se acota a la instancia que le pases: `./odoo start <instancia>` solo exige lo que depende de esa instancia, así podés migrar el grupo de a una en vez de todo junto. `./odoo start` sin instancia (todas) las exige a todas. Escape hatch legítimo: poner `"max_cron_threads": 0` explícito en `overwrite_odoo_config` para una instancia que de verdad no necesita cron (por ejemplo, una copia de solo lectura) — deja constancia de que es intencional, no un olvido.
 
 La validación también exige que `db_user` sea **realmente distinto** entre instancias del mismo grupo, y distinto del rol de servicio compartido (`databases.<nombre>.user`) — si dos instancias apuntan al mismo `db_user` (por ejemplo, copiando una instancia y olvidando cambiarlo), Postgres ve un solo rol dueño de la unión de bases de ambas, y el aislamiento no existe aunque cada una tenga su `db_filter` "propio". Este chequeo aplica siempre, incluso si una de las dos tiene `max_cron_threads: 0` — el problema es de identidad de rol, no de cron.
 

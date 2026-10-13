@@ -1,0 +1,594 @@
+#!/usr/bin/env python3
+
+"""
+Agrega los resultados de uno o varios barridos de coverage-sweep en un solo
+dataset, listo para alimentar el informe.
+
+USO
+---
+  scripts/coverage-sweep-aggregate \
+      --run 17.0=logs/coverage-sweep/2026-09-07_17.0 \
+      --run l10nve_17.0=logs/coverage-sweep/2026-09-07_l10nve_17.0 \
+      --run 19.0=logs/coverage-sweep/2026-09-07_19.0 \
+      --baseline deliverables/coverage-sweep/baseline-2026-08.json \
+      --measured-at "7-8 de septiembre de 2026" \
+      --out deliverables/coverage-sweep/dataset-2026-09.json
+
+  scripts/coverage-sweep-aggregate --selftest \
+      --baseline deliverables/coverage-sweep/baseline-2026-08.json
+
+POR QUE EL --selftest
+---------------------
+Las formulas de esta agregacion no son libres: tienen que dar los mismos
+numeros que el informe anterior, o las comparaciones "antes/despues" no
+significan nada. El --selftest recalcula los agregados de la linea base a
+partir de sus propios modulos y los compara contra los que quedaron guardados.
+Si algo no cuadra, el problema esta aca y no en la medicion nueva.
+
+Dos detalles que se re-derivaron contra la linea base y que NO hay que
+"corregir" por parecer raros:
+
+1. `pct` incluye ramas, `stmts`/`miss` no. El .coveragerc del repo tiene
+   `branch = True`, y coverage.py calcula el porcentaje como
+   (lineas_ejecutadas + ramas_ejecutadas) / (lineas + ramas). Con la formula
+   de solo lineas, 266 de las 377 filas de la linea base no cuadran.
+
+2. En la clasificacion, `sin_codigo` se evalua ANTES que `pct`. Un modulo de 2
+   sentencias con 50 % de cobertura es "sin codigo medible", no "con tests":
+   medir un modulo de 2 lineas no dice nada. Invertir el orden desplaza tres
+   modulos de la linea base.
+"""
+
+import argparse
+import ast
+import json
+import os
+import subprocess
+import sys
+from statistics import mean
+
+# Fallback para barridos cuyo manifest se escribio antes de registrar este dato.
+DEFAULT_TEMPLATE_MODULES = "base,web,mail,contacts,account,product,stock,sale,purchase"
+
+# Esquema de result.json que este agregador sabe leer. Si un barrido viejo trae
+# otro, se aborta con instrucciones en vez de reventar con un KeyError a mitad
+# de camino: un dataset armado con filas de dos esquemas distintos seria peor
+# que no tener dataset.
+EXPECTED_SCHEMA = 2
+
+
+# --------------------------------------------------------------------------
+# clasificacion y agregados
+# --------------------------------------------------------------------------
+
+def derive_klass(*, error, stmts, pct, has_tests, install_state):
+    """El orden de las ramas es la definicion, no un detalle: ver el docstring
+    del modulo, punto 2."""
+    if error:
+        return "error"
+    if stmts < 3:
+        return "sin_codigo"
+    if pct > 0:
+        return "con_tests" if has_tests else "sin_tests"
+    if install_state and install_state != "installed":
+        return "no_instala"
+    return "cero"
+
+
+def compute_summary(modules, criterion="prod"):
+    """Agregados de un conjunto de modulos. Se usa igual para el total de una
+    linea y para cada repo: los dos dicts tienen exactamente los mismos
+    campos, asi que hay una sola implementacion.
+
+    `criterion` elige que se cuenta, sobre la MISMA medicion:
+      "prod" -> solo codigo de produccion (excluye tests y andamiaje)
+      "all"  -> contando tambien los archivos de test y los __init__
+    """
+    suffix = "" if criterion == "prod" else "_all"
+    kp, ks, km = "pct" + suffix, "stmts" + suffix, "miss" + suffix
+    kk = "klass" + suffix
+
+    total = len(modules)
+    errors = [m for m in modules if m.get("error")]
+    ok = [m for m in modules if not m.get("error")]
+
+    pcts = [m[kp] for m in ok]
+    with_tests = [m for m in ok if m.get("has_tests")]
+    total_stmts = sum(m[ks] for m in ok)
+    total_miss = sum(m[km] for m in ok)
+
+    def klass_count(name):
+        return sum(1 for m in ok if m.get(kk, m.get("klass")) == name)
+
+    return {
+        "total": total,
+        "errors": len(errors),
+        "measured": len(ok),
+        "with_tests": len(with_tests),
+        "without_tests": len(ok) - len(with_tests),
+        "avg_pct": round(mean(pcts), 1) if pcts else 0.0,
+        "avg_pct_with_tests": (
+            round(mean([m[kp] for m in with_tests]), 1) if with_tests else 0.0
+        ),
+        # Ponderada por lineas: un modulo de 2000 lineas sin cubrir pesa mas
+        # que uno de 20. Es la cifra que manda para decidir donde invertir.
+        "weighted_pct": (
+            round((total_stmts - total_miss) / total_stmts * 100, 1) if total_stmts else 0.0
+        ),
+        "total_stmts": total_stmts,
+        "total_miss": total_miss,
+        "zero": sum(1 for m in ok if m[kp] == 0),
+        "no_instala": klass_count("no_instala"),
+        "sin_codigo": klass_count("sin_codigo"),
+        "cero_real": klass_count("cero"),
+        # Los modulos en 0 % no entran en ningun tramo: tienen su propio
+        # contador (`zero`) y mezclarlos con los de cobertura baja escondia
+        # justo lo que hay que mirar.
+        "low": sum(1 for m in ok if 0 < m[kp] < 30),
+        "mid": sum(1 for m in ok if 30 <= m[kp] <= 70),
+        "high": sum(1 for m in ok if m[kp] > 70),
+    }
+
+
+def by_repo_summaries(modules, criterion="prod"):
+    repos = sorted({m["repo"] for m in modules})
+    return {
+        r: compute_summary([m for m in modules if m["repo"] == r], criterion)
+        for r in repos
+    }
+
+
+# --------------------------------------------------------------------------
+# hallazgos estaticos
+# --------------------------------------------------------------------------
+
+def find_no_init(module_dirs):
+    """Modulos con codigo Python que Odoo nunca importa, porque el __init__.py
+    de la raiz falta o no importa nada. Su 0 % no es deuda de pruebas: es
+    codigo muerto.
+
+    El filtro de "tiene .py que no es de test" es necesario: sin el se cuelan
+    modulos que solo traen assets o datos y cuyo __init__ vacio es correcto."""
+    findings = []
+    for path_label, module_dir in sorted(module_dirs.items()):
+        if not os.path.isdir(module_dir):
+            continue
+        has_real_py = False
+        for root, dirs, files in os.walk(module_dir):
+            dirs[:] = [d for d in dirs if d not in ("tests", "test", "__pycache__")]
+            for f in files:
+                if f.endswith(".py") and f not in ("__init__.py", "__manifest__.py"):
+                    has_real_py = True
+                    break
+            if has_real_py:
+                break
+        if not has_real_py:
+            continue
+
+        init_path = os.path.join(module_dir, "__init__.py")
+        if not os.path.exists(init_path):
+            findings.append({"path": path_label, "reason": "sin __init__.py en la raíz"})
+            continue
+        try:
+            tree = ast.parse(open(init_path, encoding="utf8").read())
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        if not any(isinstance(n, (ast.Import, ast.ImportFrom)) for n in ast.walk(tree)):
+            findings.append({"path": path_label, "reason": "__init__.py vacío: no importa nada"})
+    return findings
+
+
+def git_ref_info(repo_dir):
+    def git(*a):
+        r = subprocess.run(["git", "-C", repo_dir, *a], capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+
+    return {
+        "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
+        "tag": git("describe", "--tags", "--abbrev=0"),
+        "commit": git("rev-parse", "--short", "HEAD"),
+        "date": git("log", "-1", "--format=%cs"),
+    }
+
+
+# --------------------------------------------------------------------------
+# lectura de un barrido
+# --------------------------------------------------------------------------
+
+def load_run(line_label, run_dir):
+    manifest_path = os.path.join(run_dir, "manifest.json")
+    if not os.path.exists(manifest_path):
+        sys.exit(f"❌ Falta {manifest_path}: {run_dir} no parece un directorio de barrido.")
+    manifest = json.load(open(manifest_path, encoding="utf8"))
+
+    worklist_path = os.path.join(run_dir, "worklist.json")
+    worklist = json.load(open(worklist_path, encoding="utf8")) if os.path.exists(worklist_path) else {}
+
+    modules = []
+    stale = []
+    modules_root = os.path.join(run_dir, "modules")
+    if os.path.isdir(modules_root):
+        for name in sorted(os.listdir(modules_root)):
+            result_path = os.path.join(modules_root, name, "result.json")
+            if not os.path.exists(result_path):
+                continue
+            record = json.load(open(result_path, encoding="utf8"))
+            if record.get("schema_version") != EXPECTED_SCHEMA:
+                stale.append(name)
+                continue
+            # La clasificacion tiene que seguir al mismo criterio que se
+            # muestra: con el criterio "all", un modulo de 41 lineas no puede
+            # aparecer etiquetado "sin codigo" solo porque su codigo de
+            # produccion son 2. Se deriva aca, de los campos ya medidos, sin
+            # necesidad de volver a medir.
+            record["klass_all"] = derive_klass(
+                error=record["error"],
+                stmts=record["stmts_all"],
+                pct=record["pct_all"],
+                has_tests=record["has_tests"],
+                install_state=record["install_state"],
+            )
+            modules.append(record)
+
+    if stale:
+        sys.exit(
+            f"❌ {len(stale)} resultado(s) de '{line_label}' son de un esquema anterior "
+            f"(se esperaba schema_version {EXPECTED_SCHEMA}): "
+            f"{', '.join(stale[:5])}{' …' if len(stale) > 5 else ''}\n"
+            f"   Volvé a medirlos: agregá --redo al 'coverage-sweep run' de esa línea, "
+            f"o borrá {modules_root} para empezar de cero."
+        )
+
+    modules.sort(key=lambda m: m["module"])
+    # Cuantos modulos deberia tener la linea, segun la lista de trabajo. Sirve
+    # para que el informe pueda decir "barrido en curso" en vez de mostrar una
+    # linea a medio medir como si estuviera completa.
+    expected = len(worklist.get("candidates", [])) or len(modules)
+    return {
+        "odoo_version": manifest.get("odoo_version"),
+        "expected": expected,
+        "complete": len(modules) >= expected,
+        "template_modules": manifest.get("template_modules"),
+        "timeout": manifest.get("timeout"),
+        "instance": manifest.get("instance"),
+        "container": manifest.get("container"),
+        "repos": manifest.get("repos", {}),
+        "template": manifest.get("template"),
+        "modules": modules,
+        "excluded": sorted(worklist.get("excluded", []), key=lambda e: e["path"]),
+        "summary": compute_summary(modules, "prod"),
+        "by_repo": by_repo_summaries(modules, "prod"),
+        "summary_all": compute_summary(modules, "all"),
+        "by_repo_all": by_repo_summaries(modules, "all"),
+        "module_dirs": {m["path"]: m.get("host_dir") for m in modules if m.get("host_dir")},
+    }
+
+
+# --------------------------------------------------------------------------
+# comparaciones
+# --------------------------------------------------------------------------
+
+def build_progress(lines, baseline, mapping, diverged):
+    """Progreso contra la linea base, emparejando por (version, repo, modulo).
+
+    La version es imprescindible en la clave, y no un detalle: la linea base
+    tiene una fila por modulo Y POR VERSION. Indexar solo por (repo, modulo)
+    hace que la fila de una version sobreescriba la de la otra, y entonces se
+    compara la 17 de hoy contra la 19 de agosto -- lo que produce "caidas" de
+    98 % a 26 % que no son caidas, sino dos versiones distintas del mismo
+    modulo. `mapping` dice a que version de la base corresponde cada linea.
+
+    `diverged` marca los (linea, repo) cuya rama se bifurco de la que se midio
+    en la base: ahi el delta existe pero no es like-for-like, y la fila lo dice
+    en vez de dejar que alguien lo lea como progreso."""
+    base_rows = {}
+    for ver, block in baseline["versions"].items():
+        for m in block["modules"]:
+            base_rows[(ver, m["repo"], m["module"])] = m
+
+    rows = []
+    for line_label, block in lines.items():
+        ver = mapping.get(line_label)
+        if not ver:
+            continue
+        for m in block["modules"]:
+            base = base_rows.get((ver, m["repo"], m["module"]))
+            if not base:
+                rows.append({
+                    "module": m["module"], "repo": m["repo"], "line": line_label,
+                    "baseline_version": ver, "pct_baseline": None,
+                    "pct_now": m["pct_all"], "delta": None,
+                    "klass_baseline": None, "klass_now": m.get("klass_all", m["klass"]),
+                    "status": "new", "lineage_ok": (line_label, m["repo"]) not in diverged,
+                    "install_cause": m.get("install_cause"),
+                })
+                continue
+            rows.append({
+                "module": m["module"], "repo": m["repo"], "line": line_label,
+                "baseline_version": ver,
+                # el pct de la base se midio contando los archivos de test, asi
+                # que se compara contra pct_all, que usa ese mismo criterio
+                "pct_baseline": base["pct"],
+                "pct_now": m["pct_all"],
+                "delta": round(m["pct_all"] - base["pct"], 1),
+                "klass_baseline": base["klass"],
+                "klass_now": m.get("klass_all", m["klass"]),
+                "status": "both",
+                "lineage_ok": (line_label, m["repo"]) not in diverged,
+                "install_cause": m.get("install_cause"),
+            })
+
+    rows.sort(key=lambda r: (r["line"], r["repo"], r["module"]))
+    return rows
+
+
+def build_progress_summary(lines, baseline, mapping, diverged, progress):
+    """Agregados del progreso: uno por (linea, repo) y el total, este ultimo
+    solo sobre los pares de linaje directo -- que es la cifra defendible."""
+    base_rows = {}
+    for ver, block in baseline["versions"].items():
+        for m in block["modules"]:
+            base_rows[(ver, m["repo"], m["module"])] = m
+
+    by_scope = []
+    clean_pairs = []
+    for line_label, block in lines.items():
+        ver = mapping.get(line_label)
+        if not ver:
+            continue
+        for repo in sorted({m["repo"] for m in block["modules"]}):
+            pairs = [
+                (base_rows[(ver, repo, m["module"])], m)
+                for m in block["modules"]
+                if not m["error"] and (ver, repo, m["module"]) in base_rows
+            ]
+            if not pairs:
+                continue
+            sa = sum(a["stmts"] for a, _ in pairs)
+            ma = sum(a["miss"] for a, _ in pairs)
+            sh = sum(h["stmts_all"] for _, h in pairs)
+            mh = sum(h["miss_all"] for _, h in pairs)
+            lineage_ok = (line_label, repo) not in diverged
+            by_scope.append({
+                "line": line_label, "repo": repo, "modules": len(pairs),
+                "weighted_baseline": round((sa - ma) / sa * 100, 1) if sa else 0.0,
+                "weighted_now": round((sh - mh) / sh * 100, 1) if sh else 0.0,
+                "delta": round(((sh - mh) / sh - (sa - ma) / sa) * 100, 1) if sa and sh else 0.0,
+                "lineage_ok": lineage_ok,
+                "improved": sum(1 for a, h in pairs if h["pct_all"] - a["pct"] > 1),
+                "regressed": sum(1 for a, h in pairs if h["pct_all"] - a["pct"] < -1),
+            })
+            if lineage_ok:
+                clean_pairs += pairs
+
+    sa = sum(a["stmts"] for a, _ in clean_pairs)
+    ma = sum(a["miss"] for a, _ in clean_pairs)
+    sh = sum(h["stmts_all"] for _, h in clean_pairs)
+    mh = sum(h["miss_all"] for _, h in clean_pairs)
+    total = {
+        "modules": len(clean_pairs),
+        "weighted_baseline": round((sa - ma) / sa * 100, 1) if sa else 0.0,
+        "weighted_now": round((sh - mh) / sh * 100, 1) if sh else 0.0,
+        "delta": round(((sh - mh) / sh - (sa - ma) / sa) * 100, 1) if sa and sh else 0.0,
+        "improved": sum(1 for a, h in clean_pairs if h["pct_all"] - a["pct"] > 1),
+        "regressed": sum(1 for a, h in clean_pairs if h["pct_all"] - a["pct"] < -1),
+        "unchanged": sum(1 for a, h in clean_pairs if abs(h["pct_all"] - a["pct"]) <= 1),
+    }
+    return {"by_scope": by_scope, "total": total,
+            "baseline_measured_at": baseline.get("measured_at")}
+
+
+def build_comparison(lines):
+    """Progresion de un mismo modulo entre lineas: es la vista de "que pasa al
+    migrar". Ordenada por nombre para que dos corridas sean diffeables."""
+    order = list(lines.keys())
+    index = {
+        label: {(m["repo"], m["module"]): m for m in block["modules"]}
+        for label, block in lines.items()
+    }
+    keys = sorted({k for per_line in index.values() for k in per_line})
+
+    rows = []
+    for repo, module in keys:
+        row = {"module": module, "repo": repo}
+        caveats = []
+        for label in order:
+            m = index[label].get((repo, module))
+            row[f"pct_{label}"] = m["pct"] if m else None
+            row[f"pct_all_{label}"] = m["pct_all"] if m else None
+            row[f"klass_{label}"] = m["klass"] if m else None
+            if m and m["klass"] == "sin_codigo":
+                caveats.append(f"sin código medible en {label}")
+            elif m and m["klass"] == "no_instala":
+                caveats.append(f"no instala en {label}")
+        row["caveat"] = "; ".join(caveats) or None
+        rows.append(row)
+    return rows
+
+
+# --------------------------------------------------------------------------
+# selftest contra la linea base
+# --------------------------------------------------------------------------
+
+def selftest(baseline):
+    """Recalcula los agregados de la linea base desde sus propios modulos y los
+    compara contra los guardados. Es la prueba de que la aritmetica de este
+    script coincide con la del informe anterior."""
+    ok = True
+    for ver, block in baseline["versions"].items():
+        for scope, stored, mods in [
+            (f"{ver}.0 · total", block["summary"], block["modules"]),
+            *[
+                (f"{ver}.0 · {repo}", s, [m for m in block["modules"] if m["repo"] == repo])
+                for repo, s in block.get("by_repo", {}).items()
+            ],
+        ]:
+            got = compute_summary(mods)
+            diffs = {
+                k: (stored[k], got[k])
+                for k in stored
+                if k in got and stored[k] != got[k]
+            }
+            if diffs:
+                ok = False
+                print(f"❌ {scope}: no cuadra")
+                for k, (want, have) in sorted(diffs.items()):
+                    print(f"     {k}: guardado={want}  recalculado={have}")
+            else:
+                print(f"✅ {scope}: {len(mods)} módulos, {len(stored)} campos idénticos")
+
+        # y la clasificacion, modulo por modulo
+        bad = []
+        for m in block["modules"]:
+            got = derive_klass(
+                error=m["error"], stmts=m["stmts"], pct=m["pct"],
+                has_tests=m["has_tests"], install_state=m["install_state"],
+            )
+            if got != m["klass"]:
+                bad.append((m["module"], m["klass"], got))
+        if bad:
+            ok = False
+            print(f"❌ {ver}.0 · klass: {len(bad)} módulos mal clasificados")
+            for name, want, have in bad[:10]:
+                print(f"     {name}: guardado={want} derivado={have}")
+        else:
+            print(f"✅ {ver}.0 · klass: {len(block['modules'])} módulos clasificados igual")
+
+    return ok
+
+
+# --------------------------------------------------------------------------
+
+def load_baseline(path):
+    raw = json.load(open(path, encoding="utf8"))
+    # el archivo commiteado envuelve el dataset en {schema_version, data, ...}
+    return raw["data"] if "data" in raw and "versions" in raw.get("data", {}) else raw
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--run", action="append", default=[], metavar="LINEA=DIR",
+        help="Barrido a agregar, como <etiqueta de linea>=<directorio de salida>. Repetible."
+    )
+    parser.add_argument("--baseline", default=None, metavar="JSON",
+                        help="Linea base contra la que calcular el progreso. Opcional: sin "
+                             "ella el dataset sale solo con el estado actual, sin seccion "
+                             "de progreso. Obligatoria con --selftest.")
+    parser.add_argument("--measured-at", default=None, metavar="TEXTO",
+                        help="Fechas de la medicion, tal cual van en el informe.")
+    parser.add_argument("--out", default=None, metavar="JSON", help="Dataset de salida.")
+    parser.add_argument(
+        "--baseline-map", action="append", default=[], metavar="LINEA=VERSION",
+        help="A que version de la linea base corresponde cada linea de hoy "
+             "(ej. 17.0=17, l10nve_17.0=17, 19.0=19). Sin esto no se calcula "
+             "progreso. Es explicito a proposito: emparejar mal las versiones "
+             "produce deltas enormes que parecen reales."
+    )
+    parser.add_argument(
+        "--diverged", action="append", default=[], metavar="LINEA:REPO",
+        help="Marca (linea, repo) cuya rama se bifurco de la medida en la base, "
+             "para que el progreso lo declare en vez de disimularlo. Repetible."
+    )
+    parser.add_argument("--selftest", action="store_true",
+                        help="Solo valida la aritmetica contra la linea base y sale.")
+    args = parser.parse_args()
+
+    if args.selftest:
+        if not args.baseline:
+            parser.error("--selftest necesita --baseline.")
+        print("Validando la aritmética contra la línea base...\n")
+        sys.exit(0 if selftest(load_baseline(args.baseline)) else 1)
+
+    baseline = load_baseline(args.baseline) if args.baseline else None
+
+    if not args.run or not args.out:
+        parser.error("hacen falta --run (al menos uno) y --out, salvo con --selftest.")
+
+    lines = {}
+    module_dirs = {}
+    for spec in args.run:
+        if "=" not in spec:
+            parser.error(f"--run mal formado: {spec!r}. Se espera LINEA=DIR.")
+        label, run_dir = spec.split("=", 1)
+        block = load_run(label, run_dir)
+        module_dirs.update(block.pop("module_dirs"))
+        lines[label] = block
+
+    diverged = set()
+    for spec in args.diverged:
+        if ":" not in spec:
+            parser.error(f"--diverged mal formado: {spec!r}. Se espera LINEA:REPO.")
+        line_label, repo = spec.split(":", 1)
+        diverged.add((line_label, repo))
+
+    dataset = {
+        "schema_version": 1,
+        "measured_at": args.measured_at,
+        "lines": lines,
+        "comparison": build_comparison(lines),
+        "only_in": {
+            label: sorted(
+                {m["module"] for m in block["modules"]}
+                - {
+                    m["module"]
+                    for other, b in lines.items() if other != label
+                    for m in b["modules"]
+                }
+            )
+            for label, block in lines.items()
+        },
+        "findings": {"no_init": find_no_init(module_dirs), "notes": []},
+        # Lo que el informe necesita para describir su propio metodo sin que
+        # nadie tenga que recordarlo de memoria.
+        "method": {
+            "template_modules": next(
+                (b["template_modules"] for b in lines.values() if b.get("template_modules")),
+                DEFAULT_TEMPLATE_MODULES,
+            ),
+            "omit": ["*/__init__.py", "*/__manifest__.py", "*/tests/*", "*/test/*"],
+            "branch_coverage": True,
+            "test_tags": "/<modulo>",
+        },
+    }
+
+    # El progreso solo se calcula si se pasa una linea base explicitamente.
+    if baseline is not None:
+        mapping = {}
+        for spec in args.baseline_map:
+            if "=" not in spec:
+                parser.error(f"--baseline-map mal formado: {spec!r}. Se espera LINEA=VERSION.")
+            k, v = spec.split("=", 1)
+            mapping[k] = v
+        if not mapping:
+            parser.error("con --baseline hace falta al menos un --baseline-map LINEA=VERSION.")
+        unknown = [l for l in mapping if l not in lines]
+        if unknown:
+            parser.error(f"--baseline-map nombra líneas que no están en los --run: {', '.join(unknown)}")
+
+        progress = build_progress(lines, baseline, mapping, diverged)
+        dataset["baseline_measured_at"] = baseline.get("measured_at")
+        dataset["progress"] = progress
+        dataset["progress_summary"] = build_progress_summary(
+            lines, baseline, mapping, diverged, progress)
+
+    parent = os.path.dirname(args.out)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(args.out, "w", encoding="utf8") as f:
+        json.dump(dataset, f, ensure_ascii=False, indent=1)
+        f.write("\n")
+
+    print(f"→ Dataset escrito en {args.out}\n")
+    for label, block in lines.items():
+        s = block["summary"]
+        print(f"  {label:14} {s['measured']:>4} módulos · ponderada {s['weighted_pct']:>5} % · "
+              f"con tests {s['with_tests']:>3} · no instalan {s['no_instala']:>2} · "
+              f"excluidos {len(block['excluded']):>2}")
+    print(f"\n  hallazgos no_init: {len(dataset['findings']['no_init'])}")
+
+
+if __name__ == "__main__":
+    main()

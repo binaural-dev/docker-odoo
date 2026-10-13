@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 
 USAGE = """\
 Ejecuta los tests de uno o varios modulos de Odoo (y opcionalmente de todo su
@@ -66,6 +68,34 @@ partir de --addons) y al terminar imprime el reporte con el porcentaje total.
 Si no se pasa -d/--db, se autogenera un nombre unico (test_<modulo>_<fecha>).
 En ambos casos (nombre dado o autogenerado): si la base no existe se crea, y
 al finalizar se borra, salvo que se pase --no-rm-db.
+
+Con --db-template <base> la base de test se clona de una plantilla ya horneada
+(createdb -T) en vez de dejar que Odoo instale la base desde cero. Para una
+corrida suelta da igual; para medir muchos modulos seguidos es la diferencia
+entre minutos y segundos de arranque por modulo. La plantilla debe estar
+horneada con la MISMA version de Odoo que el contenedor (el esquema no es
+compatible entre versiones), y conviene blindarla para que nadie le abra
+sesion ni la modifique:
+
+  ALTER DATABASE <tpl> IS_TEMPLATE true;
+  ALTER DATABASE <tpl> ALLOW_CONNECTIONS false;
+
+Con datallowconn=false sigue sirviendo como origen de CREATE DATABASE (es el
+estado de template0) pero deja de ser abrible, asi que el error "is being
+accessed by other users" se vuelve inalcanzable. Para rehornearla hay que
+revertir las dos banderas antes de poder dropearla.
+
+Ojo: clonar una base NO clona su filestore, y los ir_attachment.store_fname
+del clon apuntarian a archivos ausentes. Con --db-template se copia el
+filestore de la plantilla junto con la base, y se borra con ella.
+
+Con --timeout <segundos> la corrida se corta si se pasa de ese tiempo. El
+corte lo hace el 'timeout' de coreutils DENTRO del contenedor, prefijando solo
+el 'coverage run': matar el cliente de docker exec desde el host no mata el
+proceso de adentro. Asi 'coverage report'/'coverage json' corren igual despues
+del corte (queda la cobertura parcial) y la corrida se identifica sin
+ambiguedad por el exit code 124 y el fail_reason "timeout". Sin el flag no hay
+limite, que es el comportamiento historico.
 
 Con --out-coverage-json <ruta> se exporta ademas el reporte de cobertura en
 formato JSON (coverage json). Si <ruta> es un directorio (existente o
@@ -468,14 +498,106 @@ def db_exists(container, db_name):
     return result.stdout.strip() == "1"
 
 
-def create_db(container, db_name):
-    print(f"→ Creando base de datos '{db_name}' en {container}...")
-    subprocess.run(["docker", "exec", container, "createdb", db_name], check=True)
+FILESTORE_ROOT = "/home/odoo/data/filestore"
+
+
+def terminate_db_backends(container, db_name):
+    """Cierra las sesiones abiertas contra una base -- acotado a esa base, para
+    no tocar las conexiones de las demas instancias que comparten Postgres."""
+    subprocess.run(
+        [
+            "docker", "exec", container, "psql", "-d", "postgres", "-tAc",
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            f"WHERE datname='{db_name}' AND pid <> pg_backend_pid()",
+        ],
+        capture_output=True, text=True,
+    )
+
+
+def copy_filestore(container, src_db, dest_db):
+    """Clonar una base con createdb -T NO clona su filestore, y los
+    ir_attachment.store_fname del clon apuntarian a archivos que no existen.
+    Se copia a mano (son unos pocos MB) y se borra junto con la base."""
+    subprocess.run(
+        [
+            "docker", "exec", "-u", "root", container, "bash", "-c",
+            f"test -d {FILESTORE_ROOT}/{src_db} && "
+            f"cp -a {FILESTORE_ROOT}/{src_db} {FILESTORE_ROOT}/{dest_db} || true",
+        ],
+        capture_output=True, text=True,
+    )
+
+
+def remove_filestore(container, db_name):
+    subprocess.run(
+        [
+            "docker", "exec", "-u", "root", container, "bash", "-c",
+            f"rm -rf {FILESTORE_ROOT}/{db_name}",
+        ],
+        capture_output=True, text=True,
+    )
+
+
+def kill_container_run(container, db_name):
+    """Mata la corrida dentro del contenedor. El db_name es un token unico que
+    aparece tanto en la cadena de bash como en el argv de odoo, asi que el
+    match de pkill es preciso y no se lleva puesto nada mas -- ni el proceso
+    principal de Odoo del contenedor, ni corridas paralelas de otros modulos."""
+    for signal_flag, wait in (("-TERM", 10), ("-KILL", 0)):
+        subprocess.run(
+            ["docker", "exec", "-u", "root", container, "pkill", signal_flag, "-f", db_name],
+            capture_output=True, text=True,
+        )
+        if wait:
+            time.sleep(wait)
+
+
+def create_db(container, db_name, template=None):
+    """Crea la base de test. Con `template`, la clona de una plantilla ya
+    horneada (createdb -T) en vez de dejar que Odoo instale la base desde
+    cero: la diferencia es de minutos a segundos por modulo, que es lo que
+    hace viable un barrido de cientos de modulos."""
+    if template:
+        print(f"→ Creando base de datos '{db_name}' desde la plantilla '{template}'...")
+    else:
+        print(f"→ Creando base de datos '{db_name}' en {container}...")
+
+    cmd = ["docker", "exec", container, "createdb"]
+    if template:
+        cmd += ["-T", template]
+    cmd.append(db_name)
+
+    attempts = 3 if template else 1
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode == 0:
+            break
+        stderr = (result.stderr or "").strip()
+        # La plantilla deberia estar blindada con ALLOW_CONNECTIONS false, pero
+        # si alguien le abrio una sesion, createdb -T falla. Se corta esa sesion
+        # y se reintenta, en vez de abortar el barrido completo.
+        if template and "being accessed by other users" in stderr and attempt < attempts:
+            print(f"  la plantilla tiene sesiones abiertas, cerrandolas (intento {attempt}/{attempts})...")
+            terminate_db_backends(container, template)
+            time.sleep(5)
+            continue
+        if stderr:
+            print(stderr)
+        raise subprocess.CalledProcessError(result.returncode, cmd, result.stdout, result.stderr)
+
+    if template:
+        copy_filestore(container, template, db_name)
 
 
 def drop_db(container, db_name):
     print(f"→ Borrando base de datos '{db_name}' en {container}...")
-    subprocess.run(["docker", "exec", container, "dropdb", "--if-exists", db_name], check=False)
+    # --force (PG 13+) corta las sesiones que hayan quedado pegadas: sin eso, un
+    # backend colgado deja bases huerfanas acumulandose a lo largo del barrido.
+    subprocess.run(
+        ["docker", "exec", container, "dropdb", "--if-exists", "--force", db_name],
+        check=False,
+    )
+    remove_filestore(container, db_name)
 
 
 def query_module_states(container, db_name, module_names):
@@ -588,7 +710,12 @@ def compute_verdict(test_report, exit_code, closure, module_states):
     totals = test_report["totals"]
     not_installed = [m for m in closure if module_states.get(m) != "installed"]
     reasons = []
-    if exit_code != 0:
+    # 124 es el codigo con que `timeout` (coreutils) marca que corto la corrida.
+    # Se distingue de un fallo cualquiera: no es que los tests fallaron, es que
+    # nunca terminaron.
+    if exit_code == 124:
+        reasons.append("timeout")
+    elif exit_code != 0:
         reasons.append("process_exit_nonzero")
     if not_installed:
         reasons.append("modules_not_installed")
@@ -622,6 +749,11 @@ def export_test_json(test_report, exit_code, closure, module_states, dest_path):
         "installed": installed_modules,
         "not_installed": not_installed_modules,
     }
+    # El state crudo de ir_module_module, tal cual: con esto un consumidor
+    # (ej. coverage-sweep) puede distinguir "no tiene tests" de "no instala"
+    # sin volver a instalar el modulo por separado.
+    payload["module_states"] = dict(module_states)
+    payload["exit_code"] = exit_code
     payload["verdict"] = compute_verdict(report, exit_code, closure, module_states)
     parent = os.path.dirname(dest_path)
     if parent:
@@ -750,17 +882,47 @@ def print_recursive_overview(seed_modules, closure, excluded, modules, reverse):
     print_boxed(f"Subarbol de '{modules_label}' ({len(closure)} modulos)", blocks)
 
 
-def run_and_capture(cmd):
-    """Corre cmd, muestra su salida en vivo y la devuelve completa para parsear."""
+def run_and_capture(cmd, timeout=None, kill_hook=None):
+    """Corre cmd, muestra su salida en vivo y la devuelve completa para parsear.
+    Devuelve (returncode, output, timed_out).
+
+    Con `timeout`, este es el ultimo recurso del lado del host: el corte real lo
+    hace el `timeout` de coreutils DENTRO del contenedor (ver inner_cmd), porque
+    matar el cliente de `docker exec` NO mata el proceso de adentro. Por eso el
+    reloj de aca espera un margen extra sobre el de adentro, y si igual se vence
+    llama a kill_hook() -- que es quien mata el proceso dentro del contenedor."""
     process = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1
     )
     lines = []
-    for line in process.stdout:
-        print(line, end="")
-        lines.append(line)
-    process.wait()
-    return process.returncode, "".join(lines)
+
+    def drain():
+        for line in process.stdout:
+            print(line, end="")
+            lines.append(line)
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+
+    timed_out = False
+    try:
+        process.wait(timeout=(timeout + 120) if timeout else None)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        print(
+            f"\n⏱️  Timeout: la corrida excedio {timeout}s y el corte de adentro "
+            "no la termino. Matando el proceso en el contenedor..."
+        )
+        if kill_hook:
+            kill_hook()
+        try:
+            process.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+    reader.join(timeout=10)
+    return process.returncode, "".join(lines), timed_out
 
 
 def print_verbose_test_details(test_report):
@@ -783,7 +945,7 @@ def print_verbose_test_details(test_report):
         print(row)
 
 
-def print_test_summary(module, db_name, output, test_report, exit_code, closure, module_states):
+def print_test_summary(module, db_name, output, test_report, exit_code, closure, module_states, timed_out=False):
     """Muestra un resumen final prolijo. La fuente de verdad de pass/fail es
     compute_verdict (mismo calculo que se exporta en --out-json, ver
     export_test_json), a su vez basado en el JSON del hook de tests
@@ -873,6 +1035,8 @@ def print_test_summary(module, db_name, output, test_report, exit_code, closure,
         f"Cobertura        : {coverage_match.group(1)}%"
         if coverage_match else "Cobertura        : (no disponible)"
     )
+    if timed_out or exit_code == 124:
+        rows.append("⏱ La corrida se corto por timeout: la cobertura de arriba es parcial.")
     rows.append(f"Base de datos    : {db_name}")
 
     width = max(len(r) for r in rows) + 2
@@ -956,6 +1120,24 @@ def run_command():
              "EOFError al correr sin stdin interactivo."
     )
     parser.add_argument(
+        "--db-template", default=None, metavar="BASE",
+        help="Clona la base de test desde esta plantilla (createdb -T) en vez "
+             "de dejar que Odoo instale la base desde cero. La plantilla tiene "
+             "que estar horneada con la MISMA version de Odoo que el "
+             "contenedor. Pensado para medir muchos modulos seguidos: baja el "
+             "arranque de cada corrida de minutos a segundos. Tambien copia el "
+             "filestore de la plantilla (createdb no lo clona)."
+    )
+    parser.add_argument(
+        "--timeout", type=int, default=None, metavar="SEGUNDOS",
+        help="Corta la corrida si excede SEGUNDOS. El corte lo hace el "
+             "'timeout' de coreutils dentro del contenedor (matar el docker "
+             "exec desde afuera no mata el proceso de adentro), asi que el "
+             "reporte de cobertura parcial se genera igual y la corrida queda "
+             "marcada con exit code 124 y fail_reason 'timeout'. Sin este flag "
+             "no hay limite, que es el comportamiento historico."
+    )
+    parser.add_argument(
         "--no-rm-db", action="store_true",
         help="No borra la base de datos al terminar (por defecto se borra)."
     )
@@ -967,6 +1149,15 @@ def run_command():
              "Si RUTA es un directorio (existente o terminado en '/'), el "
              "archivo se llama coverage.json dentro de el; si no, RUTA se usa "
              "tal cual como nombre de archivo (ej: ./mi_reporte.json)."
+    )
+    parser.add_argument(
+        "--out-coverage-json-raw", default=None, metavar="RUTA",
+        help="Exporta un SEGUNDO reporte de cobertura en JSON, sin aplicar el "
+             "'omit' del .coveragerc: incluye una entrada por CADA archivo "
+             "medido, tests y __init__.py inclusive. Sirve para que el "
+             "consumidor decida que contar y que no sin volver a medir -- de "
+             "este JSON se puede derivar exactamente el mismo total que da "
+             "--out-coverage-json, sumando por archivo. Mismo criterio de RUTA."
     )
     parser.add_argument(
         "--out-json", default=None, metavar="RUTA",
@@ -1137,7 +1328,18 @@ def run_command():
     coverage_json_dest = (
         resolve_coverage_json_path(args.out_coverage_json) if args.out_coverage_json else None
     )
+    container_raw_json_path = f"/tmp/coverage_raw_{db_name}.json"
+    container_raw_rc_path = f"/tmp/coverage_raw_{db_name}.rc"
+    coverage_raw_dest = (
+        resolve_coverage_json_path(args.out_coverage_json_raw)
+        if args.out_coverage_json_raw else None
+    )
     json_step = f"python3 -m coverage json -o {container_json_path}; " if coverage_json_dest else ""
+    raw_json_step = (
+        f"printf '[run]\\nbranch = True\\n' > {container_raw_rc_path}; "
+        f"python3 -m coverage json --rcfile={container_raw_rc_path} -o {container_raw_json_path}; "
+        if coverage_raw_dest else ""
+    )
 
     # Hook de resultados de test (HOOK_SOURCE, arriba): se inyecta via
     # PYTHONPATH, sin instalar ningun modulo Odoo, y escribe el JSON exacto
@@ -1146,17 +1348,37 @@ def run_command():
     container_test_report_path = f"/tmp/test_report_{db_name}.json"
     test_json_dest = resolve_test_json_path(args.out_json) if args.out_json else None
     logs_dest = resolve_log_path(args.out_logs) if args.out_logs else None
+    # COVERAGE_FILE es imprescindible, no una prolijidad: por defecto coverage
+    # guarda sus datos en '.coverage' en el directorio de trabajo, que dentro
+    # del contenedor es el mismo para todas las corridas. Dos corridas
+    # concurrentes contra el mismo contenedor comparten ese archivo -- una hace
+    # 'coverage erase' mientras la otra escribe -- y el reporte de una termina
+    # mostrando los archivos de la otra. Con un archivo por base de datos, cada
+    # corrida queda aislada y se pueden medir varios modulos en paralelo.
+    container_coverage_data = f"/tmp/.coverage_{db_name}"
     hook_env = (
         f"export PYTHONPATH={HOOK_CONTAINER_DIR}:$PYTHONPATH; "
         f"export CICD_TEST_REPORT_PATH={container_test_report_path}; "
+        f"export COVERAGE_FILE={container_coverage_data}; "
+    )
+    # El corte por tiempo va con el `timeout` de coreutils DENTRO del contenedor,
+    # y prefijando SOLO el `coverage run`: asi `coverage report -m` y
+    # `coverage json` siguen corriendo despues del corte (queda la cobertura
+    # parcial) y el exit code 124 identifica al timeout sin ambiguedad.
+    # Hacerlo del lado del host no sirve: matar el cliente de `docker exec` deja
+    # el proceso vivo adentro.
+    timeout_prefix = (
+        f"timeout --signal=TERM --kill-after=60 {args.timeout} " if args.timeout else ""
     )
     inner_cmd = (
         f"{hook_env}"
         "pip3 install --quiet coverage && python3 -m coverage erase && "
         "CICD_TEST_HOOK_ROLE=main "
+        f"{timeout_prefix}"
         f"python3 -m coverage run --rcfile=/home/odoo/.coveragerc --source={source_paths} "
         f"/usr/bin/{odoo_cmd}; "
-        f"test_rc=$?; python3 -m coverage report -m; {json_step}exit $test_rc"
+        f"test_rc=$?; python3 -m coverage report -m; {json_step}{raw_json_step}"
+        f"rm -f {container_coverage_data}; exit $test_rc"
     )
     full_cmd = ["docker", "exec", "-u", "root", container, "bash", "-c", inner_cmd]
 
@@ -1164,20 +1386,27 @@ def run_command():
     print(f"  docker exec -u root {container} bash -c \"")
     print(f"    export PYTHONPATH={HOOK_CONTAINER_DIR}:$PYTHONPATH;")
     print(f"    export CICD_TEST_REPORT_PATH={container_test_report_path};")
+    print(f"    export COVERAGE_FILE={container_coverage_data};")
     print(f"    pip3 install --quiet coverage &&")
     print(f"    python3 -m coverage erase &&")
     print(f"    CICD_TEST_HOOK_ROLE=main \\")
+    if timeout_prefix:
+        print(f"    {timeout_prefix.strip()} \\")
     print(f"    python3 -m coverage run --rcfile=/home/odoo/.coveragerc \\")
     print(f"      --source={source_paths} \\")
     print(f"      /usr/bin/{odoo_cmd};")
     print(f"    python3 -m coverage report -m")
     if coverage_json_dest:
         print(f"    python3 -m coverage json -o {container_json_path}")
+    if coverage_raw_dest:
+        print(f"    python3 -m coverage json --rcfile={container_raw_rc_path} -o {container_raw_json_path}")
     print("  \"")
     print(f"\nBase de datos: {db_name}"
           f"{' (se conservara: --no-rm-db)' if args.no_rm_db else ' (se borrara al terminar)'}")
     if coverage_json_dest:
         print(f"Reporte JSON: se exportara a {coverage_json_dest}")
+    if coverage_raw_dest:
+        print(f"Reporte JSON sin filtrar: se exportara a {coverage_raw_dest}")
     if test_json_dest:
         print(f"Reporte JSON de tests: se exportara a {test_json_dest}")
     if logs_dest:
@@ -1191,14 +1420,18 @@ def run_command():
     install_test_hook(container)
 
     if not db_exists(container, db_name):
-        create_db(container, db_name)
+        create_db(container, db_name, template=args.db_template)
     else:
         print(f"→ Reutilizando base de datos existente '{db_name}'")
 
     exit_code = 0
     try:
         print("Ejecutando tests con cobertura...")
-        exit_code, output = run_and_capture(full_cmd)
+        exit_code, output, timed_out = run_and_capture(
+            full_cmd,
+            timeout=args.timeout,
+            kill_hook=lambda: kill_container_run(container, db_name),
+        )
         test_report = read_container_json(container, container_test_report_path)
 
         # Consulta directa a ir_module_module -- DEBE correr antes de borrar
@@ -1206,10 +1439,16 @@ def run_command():
         # se instalo y que no; nunca se determina parseando texto.
         module_states = query_module_states(container, db_name, closure)
 
-        print_test_summary(modules_label, db_name, output, test_report, exit_code, closure, module_states)
+        print_test_summary(
+            modules_label, db_name, output, test_report, exit_code, closure,
+            module_states, timed_out=timed_out,
+        )
 
         if coverage_json_dest:
             export_container_file(container, container_json_path, coverage_json_dest, "Reporte JSON de cobertura")
+        if coverage_raw_dest:
+            export_container_file(container, container_raw_json_path, coverage_raw_dest,
+                                  "Reporte JSON de cobertura sin filtrar")
         if test_json_dest:
             export_test_json(test_report, exit_code, closure, module_states, test_json_dest)
         if logs_dest:
