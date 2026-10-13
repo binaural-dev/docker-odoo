@@ -88,8 +88,10 @@ SOURCE_PATHS=${SOURCE_PATHS%,}
 MODULE_NAMES=${MODULE_NAMES%,}
 
 COVERAGERC_PATH="/home/odoo/.coveragerc"
-ODOO_CONTAINER_ID=$(docker compose -f "$COMPOSE_FILE" ps -q "$ODOO_CONTAINER" 2>/dev/null || true)
-DB_CONTAINER=$(docker inspect "$ODOO_CONTAINER_ID" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || echo "host.docker.internal")
+# The DB host is the db-vXX service the container already points at (PGHOST),
+# not the Odoo container's own IP.
+DB_CONTAINER=$(docker_exec printenv PGHOST 2>/dev/null | tr -d '\r' || true)
+DB_CONTAINER=${DB_CONTAINER:-host.docker.internal}
 
 echo ""
 echo "  ┌─────────────────────────────────────────┐"
