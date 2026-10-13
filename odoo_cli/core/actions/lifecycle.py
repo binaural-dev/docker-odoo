@@ -238,12 +238,17 @@ def restart_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
 # ============================================================
 
 
-def remove_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
-    """Remove containers and volumes.
+def remove_odoo(
+    runner: "Runner", config: dict, instance: str | None, base_path: str = "."
+) -> None:
+    """Remove containers and volumes, and optionally repo + config.
 
     Asks the user for confirmation first. If the user agrees, removes
-    the requested instance (or everything, when ``instance`` is None)
-    and offers to bring the environment back up blank.
+    the requested instance (or everything, when ``instance`` is None).
+    A second confirmation offers to also delete the repository in
+    ``src/custom/<instance>`` and the entry in instances.json (see
+    :func:`_purge_instances`); if that is declined, it offers to bring
+    the environment back up blank instead.
 
     Hard-blocked (no confirm, no override) against any instance flagged
     ``"production": true`` in instances.json — this is the only lifecycle
@@ -303,10 +308,95 @@ def remove_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
 
     runner.info("\n🛑 Eliminado.\n")
 
+    # Sin instancia no se ofrece: borraría todas las habilitadas de
+    # instances.json y load_config exige al menos una, así que el CLI
+    # (incluido './odoo new') dejaría de arrancar.
+    if instance and runner.confirm(
+        f"¿Eliminar también el repositorio src/custom/{instance} y su "
+        f"entrada en instances.json?",
+        default=False,
+    ):
+        _purge_instances(runner, base_path, [instance])
+        return
+
     if runner.confirm(
         "¿Deseas levantar el entorno nuevamente en blanco?", default=True
     ):
         start_odoo(runner, config, instance)
+
+
+def _purge_instances(runner: "Runner", base_path: str, targets: list[str]) -> None:
+    """Delete ``src/custom/<name>`` and the instances.json entry of each target.
+
+    Works on the *full* instances.json (``load_full_config``), not on the
+    enabled-only ``config`` the CLI loads: writing that back would silently
+    drop every disabled instance. A repo folder that another remaining
+    instance still lists in its addons is kept.
+    """
+    import os
+    import shutil
+
+    from generators.config_loader import is_instance_enabled, load_full_config
+    from odoo_cli.core.actions.instance_state import (
+        _regenerate_configs,
+        _write_instances_json,
+    )
+
+    full_config = load_full_config(base_path)
+    instances = full_config.get("instances", {})
+    custom_dir = os.path.join(base_path, "src", "custom")
+
+    if not any(
+        is_instance_enabled(conf)
+        for name, conf in instances.items()
+        if name not in targets
+    ):
+        runner.error(
+            "\n❌ No se modifica instances.json: quedaría sin instancias "
+            "habilitadas y el CLI dejaría de arrancar. Contenedores y volúmenes "
+            "ya se eliminaron; el repositorio y la configuración se conservan.\n"
+        )
+        return
+
+    for name in targets:
+        instances.pop(name, None)
+
+    for name in targets:
+        rel = f"src/custom/{name}"
+        still_used_by = [
+            other for other, conf in instances.items()
+            if any(
+                str(a).rstrip("/") == rel or str(a).startswith(rel + "/")
+                for a in conf.get("overwrite_odoo_config", {}).get("addons", [])
+            )
+        ]
+        repo_path = os.path.join(custom_dir, name)
+        if not os.path.isdir(repo_path):
+            continue
+        if still_used_by:
+            runner.warn(
+                f"→ Se conserva {rel}: lo usa(n) {', '.join(still_used_by)}."
+            )
+            continue
+        runner.info(f"→ Eliminando repositorio: {rel}")
+        try:
+            shutil.rmtree(repo_path)
+        except PermissionError:
+            # Archivos creados como root desde el contenedor (filestore,
+            # .pyc, coverage...): reintentar con sudo.
+            subprocess.run(["sudo", "rm", "-rf", "--", repo_path])
+        if os.path.exists(repo_path):
+            runner.error(f"❌ No se pudo eliminar {rel}.")
+
+    runner.info("→ Actualizando instances.json...")
+    success, error_message = _write_instances_json(base_path, full_config)
+    if not success:
+        runner.error(f"\n❌ No se pudo guardar instances.json: {error_message}")
+        sys.exit(1)
+
+    runner.info("→ Regenerando docker-compose.generated.yml y nginx...")
+    _regenerate_configs(full_config)
+    runner.info(f"\n✅ Eliminada(s) de la configuración: {', '.join(targets)}\n")
 
 
 # ============================================================

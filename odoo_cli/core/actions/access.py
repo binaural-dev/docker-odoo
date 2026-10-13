@@ -84,10 +84,68 @@ def show_logs(runner: "Runner", config: dict, instance: str | None) -> None:
 # ============================================================
 
 
+def _running_compose_services() -> dict[str, dict]:
+    """Map compose service name -> ``docker compose ps`` JSON row.
+
+    Compose v2.21+ prints one JSON object per line; older versions print
+    a single JSON array. Both are accepted.
+    """
+    import json
+
+    result = subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "ps", "--format", "json"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "docker compose ps falló")
+
+    out = result.stdout.strip()
+    if not out:
+        return {}
+    if out.startswith("["):
+        rows = json.loads(out)
+    else:
+        rows = [json.loads(line) for line in out.splitlines() if line.strip()]
+    return {row.get("Service", ""): row for row in rows}
+
+
 def list_containers(runner: "Runner", config: dict) -> None:
-    """List running containers."""
-    runner.info("\n=== 🐳 CONTENEDORES EN EJECUCIÓN ===\n")
-    _docker_compose(runner, "ps")
+    """List running Odoo instances as an instance/container/port table."""
+    try:
+        running = _running_compose_services()
+    except (RuntimeError, ValueError) as exc:
+        runner.error(f"\n❌ Error al listar contenedores: {exc}\n")
+        return
+
+    rows = []
+    for instance, conf in config.get("instances", {}).items():
+        row = running.get(f"odoo-{instance}")
+        if row is None:
+            continue
+        rows.append((
+            instance,
+            row.get("Name", ""),
+            str(conf.get("odoo_version", "")),
+            str(conf.get("external_port", "N/A")),
+            row.get("Status", "") or row.get("State", ""),
+        ))
+
+    headers = ("Instancia", "Contenedor", "Versión", "Puerto", "Estado")
+    widths = [
+        max(len(headers[i]), *(len(r[i]) for r in rows)) if rows else len(headers[i])
+        for i in range(len(headers))
+    ]
+
+    def fmt(cols):
+        return " | ".join(c.ljust(w) for c, w in zip(cols, widths))
+
+    lines = ["", fmt(headers), "-+-".join("-" * w for w in widths)]
+    if rows:
+        lines += [fmt(r) for r in sorted(rows)]
+    else:
+        lines.append("No hay instancias de Odoo en ejecución.")
+    runner.info("\n".join(lines) + "\n")
 
 
 # ============================================================

@@ -219,7 +219,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # list
     subparsers.add_parser(
-        "list", help="Lista contenedores en ejecución"
+        "list", aliases=["ps"], help="Lista las instancias en ejecución (alias: ps)"
     )
 
     # remove
@@ -762,4 +762,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        # Ctrl+C fuera de un prompt: salir sin traceback, con el código
+        # convencional de SIGINT.
+        print()
+        sys.exit(130)

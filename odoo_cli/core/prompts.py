@@ -279,8 +279,11 @@ def prompt_selection(
                 except ValueError:
                     pass
 
-            # Regresar cursor arriba
-            sys.stdout.write(f"\033[{lines_to_clear}F")
+            # Regresar cursor a la primera fila del menú: render_menu deja
+            # el cursor sobre la línea de ayuda, num_rows líneas más abajo.
+            # Subir lines_to_clear (num_rows + 1) pisaba el título y el menú
+            # se iba corriendo hacia arriba en cada redibujado.
+            sys.stdout.write(f"\033[{num_rows}F")
             render_menu()
 
         # Al salir, limpiar el menú de la pantalla para no ensuciar el log

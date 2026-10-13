@@ -12,6 +12,23 @@ BASE_PATH = Path(__file__).resolve().parent.parent
 INSTANCES_FILE = BASE_PATH / "instances.json"
 CUSTOM_DIR = BASE_PATH / "src" / "custom"
 
+# El nombre termina en el servicio/contenedor 'odoo-<nombre>' de docker compose y
+# en la carpeta src/custom/<nombre>: tiene que ser un nombre de contenedor valido
+# (un '\' o un espacio colado por el terminal rompia la instancia entera).
+INSTANCE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def is_valid_instance_name(name):
+    return bool(INSTANCE_NAME_RE.match(name))
+
+
+def print_invalid_name_error(name):
+    print(f"❌ Error: El nombre de instancia {name!r} no es válido.")
+    print(
+        "💡 Usa solo letras, números, '_', '-' o '.', empezando por letra o número "
+        "(ej. proalca, 17_proalca_bs)."
+    )
+
 
 def get_used_ports(data):
     return [
@@ -83,6 +100,94 @@ def build_instance_entry(
         entry["db_password"] = generate_db_password()
 
     return entry
+
+
+# Cada instalación nombra distinto sus odoo_configs, servicios de Postgres y
+# carpetas enterprise (ej. '19.0_full' / 'v19' / 'src/enterprise_v19' en una PC,
+# '17.0_default' / 'pg16' / 'src/enterprise-17' en otra). En vez de fijar una
+# convención, se prueban las conocidas, luego lo que ya usan las instancias de
+# la misma versión, y como último recurso se pregunta.
+
+
+def _major(odoo_version):
+    return odoo_version.split(".")[0]
+
+
+def _same_major_instances(data, odoo_version):
+    major = _major(odoo_version)
+    return [
+        inst for inst in data.get("instances", {}).values()
+        if _major(str(inst.get("odoo_version", ""))) == major
+    ]
+
+
+def _most_common(values):
+    values = [v for v in values if v]
+    return max(set(values), key=values.count) if values else None
+
+
+def resolve_odoo_config(data, odoo_version, ask=None):
+    """Nombre del odoo_config para la versión, o None si no hay ninguno."""
+    available = list(data.get("odoo_configs", {}))
+    for candidate in (f"{odoo_version}_full", f"{odoo_version}_default", odoo_version):
+        if candidate in available:
+            return candidate
+    used = _most_common(
+        [i.get("odoo_config") for i in _same_major_instances(data, odoo_version)]
+    )
+    if used in available:
+        return used
+    if "default" in available:
+        return "default"
+    if len(available) == 1:
+        return available[0]
+    if available and ask:
+        return ask("⚙️  Selecciona el odoo_config", available)
+    return None
+
+
+def resolve_database(data, odoo_version, ask=None):
+    """Servicio de Postgres (clave de 'databases') para la versión, o None."""
+    available = list(data.get("databases", {}))
+    major = _major(odoo_version)
+    for candidate in (f"v{major}", f"pg{major}", f"v{odoo_version}"):
+        if candidate in available:
+            return candidate
+    used = _most_common(
+        [i.get("database") for i in _same_major_instances(data, odoo_version)]
+    )
+    if used in available:
+        return used
+    if len(available) == 1:
+        return available[0]
+    if available and ask:
+        return ask("🐘 Selecciona el servicio de Postgres", available)
+    return None
+
+
+def resolve_enterprise_folder(data, odoo_version, base_path=BASE_PATH):
+    """Ruta relativa de la carpeta enterprise para la versión, o None."""
+    major = _major(odoo_version)
+    for candidate in (
+        f"src/enterprise_v{major}",
+        f"src/enterprise-{major}",
+        f"src/enterprise{major}",
+    ):
+        if (base_path / candidate).is_dir():
+            return candidate
+    for inst in _same_major_instances(data, odoo_version):
+        for addon in inst.get("overwrite_odoo_config", {}).get("addons", []):
+            if "enterprise" in str(addon) and (base_path / addon).is_dir():
+                return addon
+    if (base_path / "src/enterprise").is_dir():
+        return "src/enterprise"
+    return None
+
+
+def _ask_from_list(prompt_text, values):
+    return interactive_menu(
+        prompt_text, [(i, v, v) for i, v in enumerate(values, start=1)]
+    )
 
 
 def interactive_menu(prompt_text, options_list):
@@ -188,6 +293,10 @@ def is_ssh_url(url):
 
 
 def create_instance(name, repo_url, branch, odoo_version):
+    if not is_valid_instance_name(name):
+        print_invalid_name_error(name)
+        sys.exit(1)
+
     if not is_ssh_url(repo_url):
         print(
             "❌ Error: La URL del repositorio debe ser SSH (debe empezar con 'git@' o 'ssh://')."
@@ -259,28 +368,38 @@ def create_instance(name, repo_url, branch, odoo_version):
         except ValueError:
             print("❌ Error: Por favor ingresa un número de puerto válido.")
 
-    requested_config = f"{odoo_version}_full"
-    available_configs = data.get("odoo_configs", {}).keys()
-
-    if requested_config in available_configs:
-        odoo_config = requested_config
-    elif "default" in available_configs:
-        odoo_config = "default"
-    else:
-        print(
-            f"❌ Error: No existe la configuración '{requested_config}' ni 'default' en la sección odoo_configs del JSON."
-        )
+    odoo_config = resolve_odoo_config(data, odoo_version, ask=_ask_from_list)
+    if not odoo_config:
+        print("❌ Error: No hay ninguna configuración en la sección odoo_configs del JSON.")
         sys.exit(1)
+
+    database_name = resolve_database(data, odoo_version, ask=_ask_from_list)
+    if not database_name:
+        print("❌ Error: No hay ningún servicio en la sección databases del JSON.")
+        sys.exit(1)
+
+    print(f"🔧 odoo_config: '{odoo_config}' · Postgres: '{database_name}'")
+    for label, chosen in (("odoo_config", odoo_config), ("Postgres", database_name)):
+        numbers = re.findall(r"\d+", chosen)
+        if numbers and _major(odoo_version) not in numbers:
+            print(
+                f"⚠️  {label} '{chosen}' parece de otra versión que {odoo_version}: "
+                f"no hay uno propio para {odoo_version} en instances.json. "
+                f"Revisalo antes de levantar la instancia."
+            )
 
     addons_list = []
 
-    major_version = odoo_version.split(".")[0]
-    database_name = f"v{major_version}"
-    enterprise_folder = f"src/enterprise_v{major_version}"
-    if (BASE_PATH / enterprise_folder).exists():
+    enterprise_folder = resolve_enterprise_folder(data, odoo_version)
+    if enterprise_folder:
         addons_list.append(enterprise_folder)
+        print(f"🏢 Enterprise: {enterprise_folder}")
     else:
-        addons_list.append("src/enterprise")
+        print(
+            f"⚠️  No se encontró carpeta enterprise para {odoo_version} "
+            f"(src/enterprise_v{_major(odoo_version)}, src/enterprise-{_major(odoo_version)}, "
+            f"src/enterprise); la instancia queda sin enterprise."
+        )
 
     addons_list.append(f"src/custom/{name}")
 
@@ -374,8 +493,14 @@ if __name__ == "__main__":
     print("\n=== Creador de Instancias Odoo ===")
     try:
         name = sys.argv[1] if len(sys.argv) > 1 else ""
+        if name and not is_valid_instance_name(name):
+            print_invalid_name_error(name)
+            sys.exit(1)
         while not name:
             name = input("📦 Ingresa el nombre de la instancia (ej. micliente): ").strip()
+            if name and not is_valid_instance_name(name):
+                print_invalid_name_error(name)
+                name = ""
 
         repo_url = sys.argv[2] if len(sys.argv) > 2 else ""
         while not repo_url or not is_ssh_url(repo_url):

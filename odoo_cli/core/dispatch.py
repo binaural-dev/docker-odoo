@@ -252,11 +252,11 @@ def dispatch(
     elif args.action == "logs":
         show_logs(runner, config, args.instance)
 
-    elif args.action == "list":
+    elif args.action in ("list", "ps"):
         list_containers(runner, config)
 
     elif args.action == "remove":
-        remove_odoo(runner, config, args.instance)
+        remove_odoo(runner, config, args.instance, base_path)
 
     elif args.action == "fix-files":
         fix_filestore(runner, config, args.instance)
