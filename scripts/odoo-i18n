@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Export and refresh module translations inside a running Odoo container.
+
+Two subcommands:
+
+  export  Dump a module's terms (with current DB translations) to a .po file
+          and copy it back to the host — useful to pick up new msgids after
+          adding fields/views, then translate the empty msgstr by hand.
+
+  reload  Re-import the module's i18n/*.po into the database, OVERWRITING the
+          existing terms. This is the key difference vs ``scripts/odoo-update``:
+          a plain ``-u module`` does NOT overwrite already-loaded translations,
+          so edits to the .po never show up. ``--i18n-overwrite`` forces it.
+
+Examples:
+  ./scripts/odoo-i18n reload contiflex -d procert contiflex_digital_invoice
+  ./scripts/odoo-i18n export contiflex -d procert -m contiflex_digital_invoice
+"""
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import click
+
+BASE_PATH = str(Path(__file__).resolve().parent.parent)
+sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
+from generators.config_loader import load_config
+
+ODOO_CONF = "/home/odoo/.config/odoo.conf"
+
+
+def _resolve_container(instance):
+    """Validate the instance exists and return its container name."""
+    config = load_config(BASE_PATH)
+    if instance not in config["instances"]:
+        click.echo(f"Error: instancia '{instance}' no existe")
+        sys.exit(1)
+    return f"odoo-{instance}"
+
+
+def _find_module_po_dir(module):
+    """Best-effort lookup of <module>/i18n on the host (under src/)."""
+    src = Path(BASE_PATH) / "src"
+    for manifest in src.glob(f"**/{module}/__manifest__.py"):
+        return manifest.parent / "i18n"
+    return None
+
+
+@click.group()
+def cli():
+    """Manage Odoo module translations (export / reload)."""
+
+
+@cli.command()
+@click.argument("instance")
+@click.option("-d", required=True, help="Database name")
+@click.option("-m", "--module", required=True, help="Module technical name")
+@click.option("-l", "--lang", default="es_VE", help="Language code (default: es_VE)")
+@click.option(
+    "-o",
+    "--output",
+    default=None,
+    help="Host path for the exported .po (default: <module>/i18n/<lang>.po if found, "
+    "else ./<module>.<lang>.po)",
+)
+def export(instance, d, module, lang, output):
+    """Export MODULE terms from the DB to a .po file on the host."""
+    container = _resolve_container(instance)
+    remote = f"/tmp/{module}.{lang}.po"
+
+    if output is None:
+        po_dir = _find_module_po_dir(module)
+        if po_dir is not None:
+            output = str(po_dir / f"{lang}.po")
+        else:
+            output = os.path.join(os.getcwd(), f"{module}.{lang}.po")
+
+    export_cmd = [
+        "docker", "exec", "-u", "odoo", container, "odoo",
+        "-c", ODOO_CONF,
+        "-d", d,
+        f"--i18n-export={remote}",
+        f"--modules={module}",
+        "-l", lang,
+        "--http-port=0",
+        "--workers=0",
+        "--stop-after-init",
+    ]
+    rc = subprocess.run(export_cmd).returncode
+    if rc != 0:
+        sys.exit(rc)
+
+    Path(output).parent.mkdir(parents=True, exist_ok=True)
+    rc = subprocess.run(["docker", "cp", f"{container}:{remote}", output]).returncode
+    if rc == 0:
+        click.echo(f"OK: translations exported to {output}")
+    sys.exit(rc)
+
+
+@cli.command()
+@click.argument("instance")
+@click.option("-d", required=True, help="Database name")
+@click.option("-l", "--lang", default="es_VE", help="Language to load (default: es_VE)")
+@click.argument("modules", nargs=-1, required=True)
+def reload(instance, d, lang, modules):
+    """Upgrade MODULES and OVERWRITE their translations from i18n/*.po."""
+    container = _resolve_container(instance)
+    reload_cmd = [
+        "docker", "exec", "-u", "odoo", container, "odoo",
+        "-c", ODOO_CONF,
+        "-d", d,
+        "-u", ",".join(modules),
+        "--i18n-overwrite",
+        f"--load-language={lang}",
+        "--http-port=0",
+        "--workers=0",
+        "--stop-after-init",
+    ]
+    sys.exit(subprocess.run(reload_cmd).returncode)
+
+
+if __name__ == "__main__":
+    cli()
