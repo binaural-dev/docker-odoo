@@ -108,6 +108,8 @@ def run_tests(
         args.out_json = args.out_json or logs_dir
         args.out_coverage_json = args.out_coverage_json or logs_dir
         args.out_logs = args.out_logs or logs_dir
+        if args.per_module_db:
+            args.out_summary_json = args.out_summary_json or logs_dir
         args.out_verbose = True
         runner.info(f"--all-verbose: guardando reportes en {logs_dir}/")
 
@@ -125,6 +127,8 @@ def run_tests(
         cmd.append("--recursive")
     if args.exclude:
         cmd += ["--exclude", args.exclude]
+    if args.no_confirm:
+        cmd.append("--no-confirm")
     if args.no_rm_db:
         cmd.append("--no-rm-db")
     if args.out_coverage_json:
@@ -135,6 +139,10 @@ def run_tests(
         cmd += ["--out-logs", args.out_logs]
     if args.out_verbose:
         cmd.append("--out-verbose")
+    if args.per_module_db:
+        cmd.append("--per-module-db")
+    if args.out_summary_json:
+        cmd += ["--out-summary-json", args.out_summary_json]
     if args.dry_run:
         cmd.append("--dry-run")
 
