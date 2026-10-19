@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="res_groups_privilege_fleet_inspection" model="res.groups.privilege">
+        <field name="name">Inspecciones de Vehículos</field>
+        <field name="category_id" ref="base.module_category_human_resources_fleet"/>
+    </record>
+
+    <record id="group_fleet_inspection_user" model="res.groups">
+        <field name="name">Inspector</field>
+        <field name="privilege_id" ref="res_groups_privilege_fleet_inspection"/>
+        <field name="implied_ids" eval="[(4, ref('fleet.fleet_group_user'))]"/>
+    </record>
+
+    <record id="group_fleet_inspection_manager" model="res.groups">
+        <field name="name">Supervisor de inspecciones</field>
+        <field name="privilege_id" ref="res_groups_privilege_fleet_inspection"/>
+        <field name="implied_ids" eval="[(4, ref('group_fleet_inspection_user'))]"/>
+        <field name="user_ids" eval="[(4, ref('base.user_root')), (4, ref('base.user_admin'))]"/>
+    </record>
+
+    <record id="fleet_inspection_rule_own" model="ir.rule">
+        <field name="name">Inspecciones: el inspector ve las suyas</field>
+        <field name="model_id" ref="model_fleet_inspection"/>
+        <field name="domain_force">[('inspector_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('group_fleet_inspection_user'))]"/>
+    </record>
+
+    <record id="fleet_inspection_rule_all" model="ir.rule">
+        <field name="name">Inspecciones: el supervisor ve todas</field>
+        <field name="model_id" ref="model_fleet_inspection"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_fleet_inspection_manager'))]"/>
+    </record>
+</odoo>

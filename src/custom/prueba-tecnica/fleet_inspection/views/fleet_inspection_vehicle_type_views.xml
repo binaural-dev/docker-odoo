@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Vista de Lista (Odoo 19: <list> editable) -->
+    <record id="fleet_inspection_vehicle_type_view_list" model="ir.ui.view">
+        <field name="name">fleet.inspection.vehicle.type.list</field>
+        <field name="model">fleet.inspection.vehicle.type</field>
+        <field name="arch" type="xml">
+            <list string="Tipos de Vehículos de Inspección" editable="bottom">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="code"/>
+                <field name="active" column_invisible="1"/>
+            </list>
+        </field>
+    </record>
+
+    <!-- Vista de Formulario -->
+    <record id="fleet_inspection_vehicle_type_view_form" model="ir.ui.view">
+        <field name="name">fleet.inspection.vehicle.type.form</field>
+        <field name="model">fleet.inspection.vehicle.type</field>
+        <field name="arch" type="xml">
+            <form string="Tipo de Vehículo de Inspección">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name" string="Tipo de Vehículo"/>
+                        <h1><field name="name" placeholder="Ej. Camión Cisterna"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="code"/>
+                            <field name="sequence"/>
+                        </group>
+                        <group>
+                            <field name="active"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Acción de Ventana -->
+    <record id="fleet_inspection_vehicle_type_action" model="ir.actions.act_window">
+        <field name="name">Tipos de Vehículos de Inspección</field>
+        <field name="res_model">fleet.inspection.vehicle.type</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Crea un nuevo tipo de vehículo para las inspecciones
+            </p>
+        </field>
+    </record>
+</odoo>
