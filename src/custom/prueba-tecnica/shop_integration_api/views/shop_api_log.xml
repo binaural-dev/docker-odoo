@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- ======================================================== -->
+    <!-- 1. VISTAS: shop.api.log (Logs de Auditoría)             -->
+    <!-- ======================================================== -->
+    <record id="view_shop_api_log_list" model="ir.ui.view">
+        <field name="name">shop.api.log.list</field>
+        <field name="model">shop.api.log</field>
+        <field name="arch" type="xml">
+            <!-- Sintaxis Odoo 19: <list> en vez de <tree>. Solo lectura. -->
+            <list string="Logs de API" create="false" edit="false">
+                <field name="create_date" string="Fecha y Hora"/>
+                <field name="endpoint"/>
+                <field name="user_id"/>
+                <field name="response_code" 
+                       decoration-success="response_code in (200, 201)" 
+                       decoration-warning="response_code in (400, 422, 409)" 
+                       decoration-danger="response_code in (401, 500)"/>
+                <field name="duration" string="Duración (s)"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_shop_api_log_form" model="ir.ui.view">
+        <field name="name">shop.api.log.form</field>
+        <field name="model">shop.api.log</field>
+        <field name="arch" type="xml">
+            <form string="Log de API" create="false" edit="false">
+                <sheet>
+                    <group>
+                        <group string="Detalles de la Petición">
+                            <field name="endpoint" readonly="1"/>
+                            <field name="user_id" readonly="1"/>
+                            <field name="create_date" string="Fecha y Hora" readonly="1"/>
+                        </group>
+                        <group string="Resultado">
+                            <field name="response_code" readonly="1"/>
+                            <field name="duration" readonly="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+
+    <record id="action_shop_api_log" model="ir.actions.act_window">
+        <field name="name">Logs de API</field>
+        <field name="res_model">shop.api.log</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- ======================================================== -->
+    <!-- 2. VISTAS: shop.idempotency.key                         -->
+    <!-- ======================================================== -->
+    <record id="view_shop_idempotency_key_list" model="ir.ui.view">
+        <field name="name">shop.idempotency.key.list</field>
+        <field name="model">shop.idempotency.key</field>
+        <field name="arch" type="xml">
+            <list string="Claves de Idempotencia" create="false" edit="false">
+                <field name="create_date" string="Fecha"/>
+                <field name="key"/>
+                <field name="order_id"/>
+                <field name="response_code"/>
+                <field name="request_hash"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_shop_idempotency_key_form" model="ir.ui.view">
+        <field name="name">shop.idempotency.key.form</field>
+        <field name="model">shop.idempotency.key</field>
+        <field name="arch" type="xml">
+            <form string="Clave de Idempotencia" create="false" edit="false">
+                <sheet>
+                    <group>
+                        <group string="Identificación">
+                            <field name="key" readonly="1"/>
+                            <field name="order_id" readonly="1"/>
+                            <field name="response_code" readonly="1"/>
+                        </group>
+                        <group string="Seguridad">
+                            <field name="create_date" readonly="1"/>
+                            <field name="request_hash" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Payload Guardado">
+                            <field name="response_body" readonly="1"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_shop_idempotency_key" model="ir.actions.act_window">
+        <field name="name">Claves de Idempotencia</field>
+        <field name="res_model">shop.idempotency.key</field>
+        <field name="view_mode">list,form</field>
+    </record>
+
+    <!-- ======================================================== -->
+    <!-- 3. MENÚS: En Ajustes > Técnico (base.menu_custom)        -->
+    <!-- ======================================================== -->
+    <menuitem id="menu_shop_api_root"
+              name="Integración Tienda"
+              parent="base.menu_custom"
+              sequence="90"/>
+
+    <menuitem id="menu_shop_api_logs"
+              name="Logs de API"
+              parent="menu_shop_api_root"
+              action="action_shop_api_log"
+              sequence="10"/>
+
+    <menuitem id="menu_shop_idempotency_keys"
+              name="Claves de Idempotencia"
+              parent="menu_shop_api_root"
+              action="action_shop_idempotency_key"
+              sequence="20"/>
+</odoo>
