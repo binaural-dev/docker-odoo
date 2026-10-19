@@ -188,7 +188,8 @@ Si el módulo vive en un repo sin `openspec/` inicializado, sigue el flujo norma
 (módulo, versión, descripción del problema/feature); obtienes un `job_id` de inmediato (no bloquea). Hacé un
 único `Task(subagent_type: "sdd-opencode-runner")` en modo status-check con ese `job_id`, y si sigue `running`,
 repetí en modo **wait** (no status-check uno por uno — `wait` cubre varios minutos por invocación) hasta llegar
-a un estado terminal (`done`/`failed`/`orphaned`), y luego `Task(subagent_type: "sdd-judge")` para verificar.
+a un estado terminal (`done`/`failed`/`orphaned`), y luego `Task(subagent_type: "sdd-judge")` para verificar. El prompt al juez incluye siempre el `job_id`
+y el número de iteración (1-3): con ellos `sdd-judge` registra el evento `judge_verdict` en las métricas.
 Repite el ciclo dispatch→poll→judge hasta `PASS` o hasta 3 iteraciones en `FAIL` (regla R5) — cada iteración de
 retry es un `job_id` nuevo, no reintentes el status-check/wait de un job ya terminado.
 

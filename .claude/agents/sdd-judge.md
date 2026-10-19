@@ -80,6 +80,13 @@ MOTIVO: <detalle concreto y accionable — si es NEEDS_HUMAN_INPUT, la pregunta 
 ARTEFACTOS: <rutas verificadas>
 ```
 
+Antes de devolver el bloque, registra el veredicto para las métricas (una sola línea de Bash; el `job_id` y la
+iteración vienen en el prompt de `sdd-lead`; si faltan, omite este paso en vez de inventarlos):
+
+```
+bash scripts/sdd_judge_event.sh <job_id> <PASS|FAIL|NEEDS_HUMAN_INPUT> <iteración> "<MOTIVO en una línea>"
+```
+
 `sdd-lead` decide con esto si cierra el flujo (PASS), reintenta la delegación con el motivo como contexto
 adicional (FAIL, iteración < 3), escala al usuario (FAIL, iteración ≥ 3 — regla R5), o escala de inmediato
 sin reintentar (NEEDS_HUMAN_INPUT — regla R6, no cuenta como iteración).

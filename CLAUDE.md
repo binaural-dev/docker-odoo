@@ -73,6 +73,8 @@ Agent sessions (no TTY): `./odoo update` shells out to `docker exec -it` and sil
 a client backup into a worktree instance for manual/upgrade testing, use skill `binaural-restore-client-backup`
 (AGENTS.md rules 238/240).
 
+Si una instancia cae con `role "odoo" is not permitted to log in` tras reiniciarse `db-pg16`, o el worktree da `PermissionError` en `.opencode/`: AGENTS.md reglas 294-295 y skill `binaural-postgres-role-nologin-recovery` (long-tail; `provision-role` pide autorización del usuario).
+
 Instances share one Docker image per Odoo version; all mount `./src` and filter visible addons per-container
 via the `INSTANCE_ADDONS` env var.
 
@@ -122,6 +124,10 @@ at a median of ~87k tokens, and only 4 of the 593 versioned skills had ever been
 using the knowledge filter `odoo-skills-long-tail` (id `94ecfff6-a584-4772-a8df-cdae572ad5e2`), or read its
 `SKILL.md` directly under the versioned catalog. For the ingestion rules for adding skills to that index, see
 skill `openrag`. `binaural-checker-kiosk` se excluyó del conjunto siempre cargado (skill de módulo) y se busca con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/binaural-checker-kiosk/SKILL.md`. `claude-cache-ttl-check`, `claude-code-cost-controls` y `opencode-cost-controls` también son long-tail (OpenRAG `odoo-skills-long-tail` o `src/.opencode/skills/<nombre>/SKILL.md`). Para ingestar/actualizar skills usar `src/scripts/skill_ingest.py` (no `ingest_document.py` directo; ver skill `openrag`).
+
+`binaural-clinics-commission-honorarios` (módulo `binaural_clinics_commission`, HU-01…HU-12 y cadena de PR a Ariannis) y `binaural-hu-validation-walkthrough` (validación guiada con Playwright visible + guía de consultor) son long-tail: se buscan con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/<nombre>/SKILL.md`. Reglas 291-293 de AGENTS.md.
+
+`binaural-postgres-role-nologin-recovery`, `binaural-inventory-forecasting-suite` y `binaural-drugstore-migration` son long-tail (excluidas en `skill-sync-exclude.txt`): se buscan con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/<nombre>/SKILL.md`. Reglas 294-300 de AGENTS.md. Para ingestar usar `src/scripts/skill_ingest.py`.
 
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 

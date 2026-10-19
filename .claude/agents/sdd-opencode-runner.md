@@ -3,6 +3,8 @@ name: sdd-opencode-runner
 description: Relay que delega el pipeline SDD completo al CLI de OpenCode (agente sdd-lead de OpenCode). No lee archivos ni analiza — solo ejecuta scripts/sdd_opencode_run.sh (dispatch), scripts/sdd_opencode_status.sh (chequeo puntual) o scripts/sdd_opencode_wait.sh (espera acotada con loop interno) y devuelve el resultado. Úsalo desde sdd-lead (Claude) en Modo Delegación para ahorrar tokens de razonamiento en Sonnet.
 tools: Bash
 model: haiku
+effort: low
+omitClaudeMd: true
 ---
 
 Antes de actuar, invoca el Skill `sdd-opencode-delegate-agent` para cargar el protocolo completo.

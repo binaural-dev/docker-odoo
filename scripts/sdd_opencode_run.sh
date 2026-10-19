@@ -415,6 +415,17 @@ append_metric "dispatch" \
   "agent=$AGENT" "model=$(resolve_model)" "repo=$DISPATCH_REPO" "module=$DISPATCH_MODULE" \
   "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH" "phase=$DISPATCH_PHASE"
 
+# Project agents (src/.opencode/agents/*.md, with their deny lists) are only loaded when --dir sits inside
+# src/'s own git repo; client repos under src/custom/<client> are separate repos, so there OpenCode falls back to
+# the model-only agent entries of the JSON config (`* allow`) and --auto leaves bash wide open. Injecting the
+# deny list through OPENCODE_CONFIG applies it regardless of --dir.
+GUARD_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sdd-guardrails.json"
+[[ -f "$GUARD_CFG" ]] || reject_dispatch "guardrails config not found: $GUARD_CFG"
+
+# Seconds without any output before the in-session watchdog kills a stalled job (0 = disabled).
+STALL_SECS="${SDD_STALL_SECS:-2700}"
+[[ "$STALL_SECS" =~ ^[0-9]+$ ]] || STALL_SECS=2700
+
 OC_ARGS=("run" "--agent" "$AGENT" "--auto")
 [[ -n "$MODEL" ]] && OC_ARGS+=("--model" "$MODEL")
 [[ -n "$WORK_DIR" && -d "$WORK_DIR" ]] && OC_ARGS+=("--dir" "$WORK_DIR")
@@ -437,14 +448,56 @@ INNER_CMD=$(cat <<EOF
 # window attached via sdd_opencode_view.sh shows nothing until the session
 # ends. PIPESTATUS[0] recovers opencode's own exit code past the pipe.
 _start=\$(date +%s)
+export OPENCODE_CONFIG="$GUARD_CFG"
+# Inactivity watchdog: headless opencode can hang with no output (never-answered permission prompt, run that does
+# not exit, MCP startup hang). If $OUT has not been written for SDD_STALL_SECS, terminate opencode and flag the job
+# as stalled so the result carries cause=stalled instead of the job sitting in "running" until cleanup reaps it.
+# 0 disables it. No automatic retry here: a job edits the working tree, so re-running is the lead's decision.
+(
+  _stall=$STALL_SECS
+  [[ "\$_stall" -gt 0 ]] || exit 0
+  while sleep 60; do
+    [[ -e "$OUT" ]] || continue
+    _idle=\$(( \$(date +%s) - \$(stat -c %Y "$OUT") ))
+    if [[ "\$_idle" -ge "\$_stall" ]]; then
+      echo "no output for \${_idle}s (limit \${_stall}s)" > "$JOB_DIR/stalled"
+      # Only the opencode process itself may be signalled. Matching by argv alone is unsafe: this session's
+      # \`bash -c\` and the shared tmux server (one socket for every job) both carry "--title <job>" in their argv,
+      # and killing the server would take every concurrent job down with it. Its children (e.g. a long bash tool
+      # call) are signalled first so they do not outlive it.
+      for _sig in TERM KILL; do
+        for _pid in \$(pgrep -f -- "--title $JOB_ID"); do
+          [[ "\$(ps -o comm= -p "\$_pid" 2>/dev/null)" == opencode ]] || continue
+          pkill -"\$_sig" -P "\$_pid" 2>/dev/null
+          kill -"\$_sig" "\$_pid" 2>/dev/null
+        done
+        sleep 20
+      done
+      exit 0
+    fi
+  done
+) &
+_wd=\$!
 "$OC_BIN" $OC_ARGS_Q 2>&1 | tee "$OUT"
 ec=\${PIPESTATUS[0]}
+kill "\$_wd" 2>/dev/null || true
 _duration=\$(( \$(date +%s) - _start ))
 echo "\$ec" > "$EXIT_FILE"
 if [[ "\$ec" -eq 0 ]]; then
   st=done
 else
   st=failed
+fi
+# Classify failures that are infrastructure, not task quality. The lead must not spend an R5 iteration on these
+# (retrying the same dispatch cannot fix an expired key or an unreachable API) and the reporter can count them.
+_kind=""
+if [[ "\$st" == failed ]]; then
+  _t="\$(tail -n 60 "$OUT" 2>/dev/null)"
+  if [[ -e "$JOB_DIR/stalled" ]]; then _kind=stalled
+  elif grep -qiE 'api key (has )?expired|invalid api key' <<<"\$_t"; then _kind=api_key_expired
+  elif grep -qiE 'cannot connect to api|econnrefused|enotfound|etimedout|connection reset|fetch failed' <<<"\$_t"; then _kind=api_unreachable
+  elif grep -qiE 'rate limit|quota exceeded|usage limit|limit reached' <<<"\$_t"; then _kind=quota_exceeded
+  fi
 fi
 echo "\$st" > "$STATUS_FILE"
 tail_body="\$(tail -n 40 "$OUT" 2>/dev/null || true)"
@@ -455,6 +508,7 @@ tail_body="\$(tail -n 40 "$OUT" 2>/dev/null || true)"
   echo "job: $JOB_ID"
   echo "status: \$st"
   echo "exit_code: \$ec"
+  [[ -n "\$_kind" ]] && echo "cause_kind: \$_kind"
   echo "completed_at: \$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
   echo
   echo "output: $OUT"
@@ -467,9 +521,9 @@ try:
     print(next((s["id"] for s in json.load(sys.stdin) if s.get("title")=="$JOB_ID"), ""))
 except Exception:
     print("")' 2>/dev/null || true)"
-python3 - "\$st" "\$ec" "\$_duration" "\$_ses" "$JOB_ID" "$OUT" >> "$METRICS_FILE" <<'PY' || true
-import datetime, json, sys
-st, ec, dur, ses, job, out = sys.argv[1:]
+python3 - "\$st" "\$ec" "\$_duration" "\$_ses" "$JOB_ID" "$OUT" "$JOB_DIR/stalled" "\$_kind" >> "$METRICS_FILE" <<'PY' || true
+import datetime, json, os, sys
+st, ec, dur, ses, job, out, stalled, kind = sys.argv[1:]
 d = {"ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "job": job, "event": "result",
      "status": st, "exit_code": int(ec), "duration_s": int(dur), "opencode_session": ses}
 if st == "failed":
@@ -478,7 +532,23 @@ if st == "failed":
         d["cause"] = " | ".join(lines[-3:])[:400]
     except OSError:
         pass
+if os.path.exists(stalled):
+    d["status"] = "failed"
+    d["cause"] = "stalled: " + open(stalled).read().strip()
+if kind:
+    d["cause_kind"] = kind
+needs_question = ""
+try:
+    import re
+    for l in open(out, errors="replace").read().splitlines():
+        m = re.match(r"^\s*NEEDS_HUMAN_INPUT:\s*(\S.*)$", re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", l))
+        if m and not m.group(1).startswith("<"):
+            needs_question = m.group(1).strip()[:300]
+except OSError:
+    pass
 print(json.dumps(d))
+if needs_question:
+    print(json.dumps({"ts": d["ts"], "job": job, "event": "needs_human", "question": needs_question}))
 PY
 rm -f "$LOCK_FILE"
 EOF

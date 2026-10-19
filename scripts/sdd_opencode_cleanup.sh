@@ -18,6 +18,7 @@ TMUX_SOCKET="/tmp/sdd-tmux/sdd.sock"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SDD_LOG_ROOT="${SDD_LOG_ROOT:-$REPO_ROOT/src/.sdd/logs}"
 JOBS_DIR="$SDD_LOG_ROOT/jobs"
+METRICS_FILE="$SDD_LOG_ROOT/metrics.jsonl"
 TTL_HOURS=6
 REAP_ALL=0
 
@@ -61,13 +62,27 @@ for job_dir in "$JOBS_DIR"/*/; do
     bash "$(dirname "$0")/sdd_opencode_status.sh" "$job_id" >/dev/null 2>&1 || true
   fi
 
-  age=$(( NOW - $(stat -c '%Y' "$job_dir" 2>/dev/null || echo "$NOW") ))
+  # Age counts from the last sign of life, not just the dir mtime: appending to output.log does not touch the
+  # directory, so a long job that is still producing output was reaped at the TTL while running.
+  _dir_m="$(stat -c '%Y' "$job_dir" 2>/dev/null || echo "$NOW")"
+  _log_m="$(stat -c '%Y' "$job_dir/output.log" 2>/dev/null || echo 0)"
+  age=$(( NOW - (_log_m > _dir_m ? _log_m : _dir_m) ))
   stale=0
   if [[ "$REAP_ALL" -eq 1 || "$age" -ge "$TTL_SECONDS" ]]; then
     stale=1
   fi
 
   if [[ "$stale" -eq 1 ]]; then
+    # A job reaped while still "running" used to vanish with no terminal event (the dispatch then showed up in
+    # metrics.jsonl with nothing after it). Record it as orphaned with an explicit reason before deleting.
+    if [[ "$(cat "$job_dir/status" 2>/dev/null)" == "running" ]]; then
+      python3 - "$job_id" "$age" >> "$METRICS_FILE" <<'PY2' || true
+import datetime, json, sys
+job, age = sys.argv[1:]
+print(json.dumps({"ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "job": job,
+                  "event": "orphaned", "reason": "reaped_ttl", "cause": "reaped while running, idle for %ss" % age}))
+PY2
+    fi
     if tmux -S "$TMUX_SOCKET" has-session -t "$job_id" 2>/dev/null; then
       tmux -S "$TMUX_SOCKET" kill-session -t "$job_id" 2>/dev/null || true
       REAPED_SESSIONS=$(( REAPED_SESSIONS + 1 ))

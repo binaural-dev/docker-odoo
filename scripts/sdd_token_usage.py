@@ -11,8 +11,10 @@ Used by sdd-metrics-reporter for the "Consumo y caché" section. Complements
 
 "ieq" (input-equivalent tokens) weights each bucket by its price relative to
 base input on the same model: input 1, cache write 5m 1.25, cache write 1h 2,
-cache read 0.1, output 5. It is a trend metric, not dollars — compare it
-across days, not across models.
+cache read 0.1 (0.05 on Opus 5.5 / Sonnet 5.5, 0.025 on Fable 5.1 / Mythos 5.1,
+per the prompt-caching docs checked 2026-10-19), output 5. It is a trend metric,
+not dollars — compare it across days, not across models. Figures computed before
+2026-10-19 used 0.1 for every model, so Opus/Sonnet 5.5 days read higher there.
 
 Usage:
   scripts/sdd_token_usage.py [--since YYYY-MM-DD] [--until YYYY-MM-DD]
@@ -27,6 +29,16 @@ import os
 import sys
 
 WEIGHTS = {"in": 1.0, "cw5m": 1.25, "cw1h": 2.0, "cr": 0.1, "out": 5.0}
+
+
+def read_weight(model):
+    """Cache-read price relative to base input; 0.1 unless the docs list a cheaper read for the model."""
+    m = model or ""
+    if "fable-5-1" in m or "mythos-5-1" in m:
+        return 0.025
+    if "opus-5-5" in m or "sonnet-5-5" in m:
+        return 0.05
+    return WEIGHTS["cr"]
 
 # Alert thresholds (documented in sdd-metrics-reporter-agent).
 MAX_SESSION_CTX = 400_000
@@ -60,22 +72,26 @@ def iter_usage(path):
             yield entry.get("timestamp") or "", msg.get("model") or "?", msg["usage"]
 
 
-def buckets(usage):
+def buckets(usage, model=None):
     cc = usage.get("cache_creation") or {}
     cw = usage.get("cache_creation_input_tokens", 0) or 0
     cw1h = cc.get("ephemeral_1h_input_tokens", 0) or 0
     cw5m = cc.get("ephemeral_5m_input_tokens", cw - cw1h) or 0
-    return {
+    b = {
         "in": usage.get("input_tokens", 0) or 0,
         "cw5m": cw5m,
         "cw1h": cw1h,
         "cr": usage.get("cache_read_input_tokens", 0) or 0,
         "out": usage.get("output_tokens", 0) or 0,
     }
+    # Reads weighted at this call's own model price; summed with the other buckets by Counter.update().
+    b["cr_w"] = b["cr"] * read_weight(model)
+    return b
 
 
 def ieq(c):
-    return sum(c[k] * w for k, w in WEIGHTS.items())
+    reads = c["cr_w"] if "cr_w" in c else c["cr"] * WEIGHTS["cr"]
+    return sum(c[k] * w for k, w in WEIGHTS.items() if k != "cr") + reads
 
 
 def hit_rate(c):
@@ -97,7 +113,7 @@ def collect(project_dir, since, until):
                 day = ts[:10]
                 if not day or day < since or day > until:
                     continue
-                b = buckets(usage)
+                b = buckets(usage, model)
                 ctx = b["in"] + b["cw5m"] + b["cw1h"] + b["cr"]
                 d = days[day]
                 d.update(b)
