@@ -19,3 +19,14 @@ Calcula la comisión del vendedor en cada línea de pedido de venta y ofrece un 
 ```bash
 ./odoo test prueba-tecnica sale_commission
 ```
+---
+
+## Estado del Módulo
+* **Ticket Resuelto:** `T-200` (Error de permisos que bloqueaba a los vendedores al confirmar pedidos).
+* **Rama de trabajo:** `hotfix/T-200`
+* **Documentación técnica:** Ver [INCIDENT.md](INCIDENT.md) para el reporte forense detallado del incidente, plan de contingencia, script de auditoría y análisis de causa raíz.
+
+## Cómo Probar la Corrección
+Para validar que la corrección permite a los vendedores confirmar pedidos de forma regular:
+```bash
+./odoo test prueba_v19 sale_commission
