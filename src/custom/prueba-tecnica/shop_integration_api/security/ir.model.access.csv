@@ -1,0 +1,3 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_shop_api_log_user,shop.api.log.user,model_shop_api_log,base.group_user,1,1,1,1
+access_shop_idempotency_key_user,shop.idempotency.key.user,model_shop_idempotency_key,base.group_user,1,1,1,1
