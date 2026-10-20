@@ -14,9 +14,9 @@ echo "Detected PostgreSQL version: $VERSION"
 
 if [ "$VERSION" -ge 16 ]; then
   if psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres -tAc \
-      "SELECT 1 FROM pg_available_extensions WHERE name = 'vector'" | grep -q 1; then
-    echo "pgvector extension package available for PostgreSQL ${VERSION}."
+      "SELECT 1 FROM pg_available_extension_versions WHERE name = 'vector' AND trusted" | grep -q 1; then
+    echo "pgvector extension package available (trusted) for PostgreSQL ${VERSION}."
   else
-    echo "WARNING: pgvector package not found -- check the apt-get step in db.Dockerfile." >&2
+    echo "WARNING: pgvector package not found or not trusted -- check db.Dockerfile." >&2
   fi
 fi
