@@ -29,7 +29,8 @@
       "mcp__claude_ai_Binaural_MCP__get_record",
       "mcp__claude_ai_Binaural_MCP__ping",
       "mcp__claude_ai_Binaural_MCP__search_records",
-      "Bash(mkdir -p /tmp/claude-1000/-home-binlp011-sources-docker-multi/2520ad3c-5e86-470c-afc1-ba0bf3196357/scratchpad/docchunks)"
+      "Bash(mkdir -p /tmp/claude-1000/-home-binlp011-sources-docker-multi/2520ad3c-5e86-470c-afc1-ba0bf3196357/scratchpad/docchunks)",
+      "mcp__claude_ai_Binaural_MCP__list_models"
     ]
   }
 }
