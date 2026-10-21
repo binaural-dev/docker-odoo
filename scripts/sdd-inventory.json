@@ -207,9 +207,11 @@
    "precommit": "harness-sdd",
    "run_tests.sh": "harness-sdd",
    "sdd-guardrails.json": "harness-sdd",
+   "sdd-rules-index.json": "harness-sdd",
    "sdd_install_git_hook.sh": "harness-sdd",
    "sdd_inventory_check.py": "harness-sdd",
    "sdd_judge_event.sh": "harness-sdd",
+   "sdd_lane_fingerprint.py": "harness-sdd",
    "sdd_odoo_cmd_guard.sh": "harness-sdd",
    "sdd_opencode_cleanup.sh": "harness-sdd",
    "sdd_opencode_config_sync_check.sh": "harness-sdd",
@@ -217,10 +219,12 @@
    "sdd_opencode_status.sh": "harness-sdd",
    "sdd_opencode_view.sh": "harness-sdd",
    "sdd_opencode_wait.sh": "harness-sdd",
+   "sdd_rules_check.py": "harness-sdd",
    "sdd_token_usage.py": "harness-sdd",
    "sdd_tool_guard.py": "harness-sdd",
    "sdd_tree_proof.sh": "harness-sdd",
    "sdd_verdict_gate.sh": "harness-sdd",
+   "tests": "unowned",
    "update_addon_pools.sh": "harness-sdd"
   }
  }
