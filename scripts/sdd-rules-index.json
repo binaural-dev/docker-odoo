@@ -12,7 +12,7 @@
   "preserved": 53,
   "intentional-difference": 1,
   "bounded-external": 59,
-  "unknown": 197
+  "unknown": 200
  },
  "gaps": [
   101
@@ -903,7 +903,10 @@
     308,
     309,
     310,
-    311
+    311,
+    312,
+    313,
+    314
    ],
    "dispositions": {
     "bounded-external": [
@@ -956,7 +959,10 @@
      305,
      306,
      307,
-     310
+     310,
+     312,
+     313,
+     314
     ],
     "preserved": [
      264,
@@ -3165,6 +3171,27 @@
    "reason": "",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
    "title": "Exit codes honestos en los scripts de test** — `scripts/run_tests.sh` y `scripts/coverage` usan `set -uo pipefail` y propagan el exit de `docker exec` (`PIPESTATUS`); antes terminaban en `echo`/`grep` y devolvian siempre 0 aunque hubiera tracebacks. `scripts/coverage` ya no usa `docker exec -it` sin TTY. `scripts/precommit` ejecuta `msgfmt -c -o /dev/null` sobre los `.po` modificados (reglas 263-265). No reintroducir un `echo` final que enmascare el codigo de salida."
+  },
+  "312": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Causa raiz antes de despachar o redespachar** — tras un fallo (job `failed`/`orphaned`, `rejected`, judge FAIL, o el mismo error repetido) NO se redespacha con \"arregla los fallos\": primero se investiga la causa raiz (leer `output.log`/`result.handoff`, reproducir con `./odoo test ... --tags`, leer el fuente) y se escribe un diagnostico `src/specs/<cambio>/diagnosis-<job_id>.md` con los campos `sintoma`, `evidencia`, `causa_raiz`, `descartado`, `fix_sugerido` (plantilla `scripts/diagnosis.template.md`). El `Context {}` del re-dispatch lleva `retry_of: <job_id>` y `diagnosis_path: <ruta>`; el prompt solo cita la ruta, nunca pega el cuerpo (regla 155). `sdd_opencode_run.sh` valida el diagnostico: `SDD_DIAGNOSIS_MODE=advisory` (default) avisa y registra el evento `diagnosis_check` (`state=ok|invalid`); `enforce` rechaza el dispatch. Las rondas de OpenCode que repiten un error sin diagnostico nuevo gastan cuota sin avanzar (caso r15b)."
+  },
+  "313": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Registro de errores de subagentes (`scripts/sdd_error_report.py`)** — registro append-only `src/.sdd/logs/errors.jsonl` (`v:1`, una linea por error) con `error_class`, `symptom`, `root_cause`, `evidence`, `fix`, `fingerprint` y `repeat_count` (la huella detecta reincidencia). `ingest` lo alimenta desde `metrics.jsonl` (`rejected`, `orphaned`, `result` failed, `needs_human`, `judge_verdict` FAIL; idempotente por `job+evento`); `add` registra a mano el diagnostico tras la causa raiz; `top [--role] [--class] [--since]` lista reincidentes; `lessons --role <rol>` imprime los 3 errores conocidos con su fix. Lo no clasificable queda `unclassified` y se cuenta: nunca se presenta como \"sin errores\"."
+  },
+  "314": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Ciclo de aprendizaje de errores en SDD** — taxonomia `error_class`: `infra`, `context` (Context incompleto, cwd, spec), `guardrail`, `spec`, `code`, `test`, `tooling`, `misread`. `sdd-lead` corre `python3 scripts/sdd_error_report.py ingest` y `lessons --role <rol>` antes de despachar y cita la salida por ruta; tras un FAIL escribe el diagnostico (regla 312) y registra `add` antes de reintentar. `sdd-judge` registra el veredicto FAIL con `SDD_ERROR_CLASS=<clase> bash scripts/sdd_judge_event.sh ...` (la clase queda en `error_class`). `sdd-metrics-reporter` incluye la seccion \"Errores recurrentes\" (`top`) con la poblacion y los `unclassified`. El runner (haiku) no diagnostica: solo reporta el error textual del script. Detalle: skill `sdd-error-reports` (long-tail)."
   }
  }
 }

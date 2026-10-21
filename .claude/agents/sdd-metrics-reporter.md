@@ -78,3 +78,7 @@ frío (que sí lo tiene declarado en su propio frontmatter).
 
 Al terminar, devolvé a quien te invocó la ruta del archivo escrito y el resumen ejecutivo (3-5 líneas) tal
 cual quedó en el reporte — no lo repitas parafraseado.
+
+## Errores recurrentes (reglas 312-314)
+
+Corre `python3 scripts/sdd_error_report.py ingest` y `python3 scripts/sdd_error_report.py top --since <inicio>`; incluye la seccion "Errores recurrentes" con la poblacion y los `unclassified` (nunca como "sin errores"). Separa errores del dispatcher (`context`, rol `lead`) de errores de OpenCode.

@@ -131,6 +131,8 @@ skill `openrag`. `binaural-checker-kiosk` se excluyó del conjunto siempre carga
 
 `sdd-governance-gates` (gates mecanicos F0-F4: veredicto ligado al arbol, hook `sdd_tool_guard.py`, inventario con duenos, indice de reglas, honestidad de evidencia) es long-tail (excluida en `skill-sync-exclude.txt`): se busca con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/sdd-governance-gates/SKILL.md`. Reglas 305-311 de AGENTS.md. El pre-commit de docker-multi bloquea por defecto si el inventario tiene scripts sin dueno (`SDD_INVENTORY_MODE=advisory` para solo avisar).
 
+`sdd-error-reports` (causa raiz antes de despachar/redespachar, registro y taxonomia de errores de subagentes con `scripts/sdd_error_report.py`) es long-tail (excluida en `skill-sync-exclude.txt`): se busca con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/sdd-error-reports/SKILL.md`. Reglas 312-314 de AGENTS.md. Regla corta: tras un fallo, diagnosticar la causa raiz y pasar el diagnostico al agente (`retry_of` + `diagnosis_path`) en vez de redespachar a ciegas.
+
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 
 `sudolang-cache-engine/` (repo root — NOT under `src/`, corrected 2026-09-05) is a local Claude Code plugin, a git submodule, with authoring guidance for

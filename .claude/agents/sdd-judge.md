@@ -103,3 +103,7 @@ bash scripts/sdd_judge_event.sh <job_id> <PASS|FAIL|NEEDS_HUMAN_INPUT> <iteraci�
 `sdd-lead` decide con esto si cierra el flujo (PASS), reintenta la delegación con el motivo como contexto
 adicional (FAIL, iteración < 3), escala al usuario (FAIL, iteración ≥ 3 — regla R5), o escala de inmediato
 sin reintentar (NEEDS_HUMAN_INPUT — regla R6, no cuenta como iteración).
+
+## Clase de error en FAIL (reglas 312-314)
+
+Si el veredicto es FAIL, agrega `ERROR_CLASS: <infra|context|guardrail|spec|code|test|tooling|misread>` al bloque de veredicto y registra el evento con `SDD_ERROR_CLASS=<clase> bash scripts/sdd_judge_event.sh <job_id> FAIL <iteracion> "$(bash scripts/sdd_tree_proof.sh <repo>)" "<motivo>"`. El motivo cita archivo:linea y la causa, para que `sdd-lead` escriba el diagnostico de causa raiz antes de redespachar.

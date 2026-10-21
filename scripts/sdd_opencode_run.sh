@@ -261,6 +261,33 @@ if [[ -n "$SPEC_PATH_CTX" ]]; then
   fi
 fi
 
+# --- root cause before re-dispatch: optional retry_of + diagnosis_path in Context{} --------------------------
+# A re-dispatch after a failure must carry a written diagnosis (scripts/diagnosis.template.md, 5 fields).
+# SDD_DIAGNOSIS_MODE=advisory (default): warn and log a diagnosis_check metric. enforce: reject the dispatch.
+RETRY_OF_CTX="$(extract_context_field retry_of)"
+DIAGNOSIS_PATH_CTX="$(extract_context_field diagnosis_path)"
+DIAGNOSIS_STATE=""
+if [[ -n "$RETRY_OF_CTX" ]]; then
+  _diag="$DIAGNOSIS_PATH_CTX"
+  [[ -n "$_diag" && "$_diag" != /* ]] && _diag="$REPO_ROOT/$_diag"
+  _missing=""
+  if [[ -z "$DIAGNOSIS_PATH_CTX" || ! -f "$_diag" ]]; then
+    _missing="diagnosis_path missing or file not found"
+  else
+    for _f in sintoma evidencia causa_raiz descartado fix_sugerido; do
+      grep -qiE "^(#+ *|\*\*|- *)?${_f}\b" "$_diag" || _missing+="${_missing:+,}$_f"
+    done
+    [[ -n "$_missing" ]] && _missing="diagnosis incomplete: $_missing"
+  fi
+  if [[ -n "$_missing" ]]; then
+    DIAGNOSIS_STATE="invalid"
+    [[ "${SDD_DIAGNOSIS_MODE:-advisory}" == enforce ]] && reject_dispatch "retry_of=${RETRY_OF_CTX} requires a root-cause diagnosis (${_missing})"
+    echo "WARNING (advisory): retry_of=${RETRY_OF_CTX} without a valid diagnosis (${_missing}); write one from scripts/diagnosis.template.md first" >&2
+  else
+    DIAGNOSIS_STATE="ok"
+  fi
+fi
+
 # --- duplicate-dispatch lock ----------------------------------------------
 # Observed in production (2026-09-12 23:39-23:40): 6 byte-identical dispatches
 # of the same task fired within under a minute (a relay re-dispatching instead
@@ -439,6 +466,7 @@ DISPATCH_PHASE="$(extract_context_field phase)"; DISPATCH_PHASE="${DISPATCH_PHAS
 append_metric "dispatch" \
   "agent=$AGENT" "model=$(resolve_model)" "repo=$DISPATCH_REPO" "module=$DISPATCH_MODULE" \
   "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH" "phase=$DISPATCH_PHASE"
+[[ -n "$RETRY_OF_CTX" ]] && append_metric "diagnosis_check" "retry_of=$RETRY_OF_CTX" "state=$DIAGNOSIS_STATE"
 
 # Project agents (src/.opencode/agents/*.md, with their deny lists) are only loaded when --dir sits inside
 # src/'s own git repo; client repos under src/custom/<client> are separate repos, so there OpenCode falls back to

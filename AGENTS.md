@@ -25,7 +25,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
     ├── reports/coverage/              ← Reportes de coverage
     └── .opencode/                     ← OpenCode config
         ├── agents/                    ← Agentes SDD + Binaural (13 agentes)
-        ├── skills/                    ← Skills del proyecto (133 dirs)
+        ├── skills/                    ← Skills del proyecto (134 dirs)
         ├── commands/                  ← Comandos del proyecto (13 commands)
         ├── docs/                      ← Documentación Odoo 19 (654 .md)
         ├── plans/                     ← Planes de migración
@@ -46,7 +46,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | Categoría | Cantidad |
 |-----------|----------|
 | skills/19.0/skills/ (161 dirs) | **161** |
-| skills/.opencode/skills/ (project: 133 dirs) | **133** |
+| skills/.opencode/skills/ (project: 134 dirs) | **134** |
 | skills/17.0/skills/ (325 dirs) | **325** |
 | skills/16.0/skills/ (100 dirs) | **100** |
 | skills/global (~/.config/opencode/skills/, 169 dirs) | **169** |
@@ -1179,6 +1179,12 @@ Reglas para sincronizar conocimiento entre Claude Code y OpenCode.
 310. **Honestidad de evidencia en rondas SDD (F4)** — (a) el `qc-report.md` separa `completion: DONE|PARTIAL` de `correctness: PASS|FAIL`; un FAIL de correctness no se compensa con nada; (b) rondas defectuosas se conservan etiquetadas con `contamination:` (defecto + blast radius), no se re-muestrean; (c) pre-registro de rubrica en `src/.sdd/reports/<cambio>-prereg.md` (plantilla `scripts/prereg.template.md`) ANTES de despachar; cambiar la rubrica = ronda nueva; (d) el bloque `Context {}` admite `spec_path` y `spec_sha256`: `sdd_opencode_run.sh` verifica el sha antes del lock y lo repite en los handoffs (`spec_sha256_end`, `spec_changed`); (e) tras una compactacion, releer estado con `bash scripts/sdd_rehydrate.sh <module> [branch]` en vez de confiar en el resumen; (f) `bash scripts/sdd_canary.sh <job_id> [artefacto]` cierra la cadena con artefactos canonicos (exit 1 = parar, no ampliar la matriz); (g) `metrics.jsonl` lleva `"v": 1`; las filas sin `v` son legado v=0 (`python3 scripts/sdd_metrics_migrate.py` es dry-run por defecto, `--apply` migra); bytes no son tokens.
 
 311. **Exit codes honestos en los scripts de test** — `scripts/run_tests.sh` y `scripts/coverage` usan `set -uo pipefail` y propagan el exit de `docker exec` (`PIPESTATUS`); antes terminaban en `echo`/`grep` y devolvian siempre 0 aunque hubiera tracebacks. `scripts/coverage` ya no usa `docker exec -it` sin TTY. `scripts/precommit` ejecuta `msgfmt -c -o /dev/null` sobre los `.po` modificados (reglas 263-265). No reintroducir un `echo` final que enmascare el codigo de salida.
+
+312. **Causa raiz antes de despachar o redespachar** — tras un fallo (job `failed`/`orphaned`, `rejected`, judge FAIL, o el mismo error repetido) NO se redespacha con "arregla los fallos": primero se investiga la causa raiz (leer `output.log`/`result.handoff`, reproducir con `./odoo test ... --tags`, leer el fuente) y se escribe un diagnostico `src/specs/<cambio>/diagnosis-<job_id>.md` con los campos `sintoma`, `evidencia`, `causa_raiz`, `descartado`, `fix_sugerido` (plantilla `scripts/diagnosis.template.md`). El `Context {}` del re-dispatch lleva `retry_of: <job_id>` y `diagnosis_path: <ruta>`; el prompt solo cita la ruta, nunca pega el cuerpo (regla 155). `sdd_opencode_run.sh` valida el diagnostico: `SDD_DIAGNOSIS_MODE=advisory` (default) avisa y registra el evento `diagnosis_check` (`state=ok|invalid`); `enforce` rechaza el dispatch. Las rondas de OpenCode que repiten un error sin diagnostico nuevo gastan cuota sin avanzar (caso r15b).
+
+313. **Registro de errores de subagentes (`scripts/sdd_error_report.py`)** — registro append-only `src/.sdd/logs/errors.jsonl` (`v:1`, una linea por error) con `error_class`, `symptom`, `root_cause`, `evidence`, `fix`, `fingerprint` y `repeat_count` (la huella detecta reincidencia). `ingest` lo alimenta desde `metrics.jsonl` (`rejected`, `orphaned`, `result` failed, `needs_human`, `judge_verdict` FAIL; idempotente por `job+evento`); `add` registra a mano el diagnostico tras la causa raiz; `top [--role] [--class] [--since]` lista reincidentes; `lessons --role <rol>` imprime los 3 errores conocidos con su fix. Lo no clasificable queda `unclassified` y se cuenta: nunca se presenta como "sin errores".
+
+314. **Ciclo de aprendizaje de errores en SDD** — taxonomia `error_class`: `infra`, `context` (Context incompleto, cwd, spec), `guardrail`, `spec`, `code`, `test`, `tooling`, `misread`. `sdd-lead` corre `python3 scripts/sdd_error_report.py ingest` y `lessons --role <rol>` antes de despachar y cita la salida por ruta; tras un FAIL escribe el diagnostico (regla 312) y registra `add` antes de reintentar. `sdd-judge` registra el veredicto FAIL con `SDD_ERROR_CLASS=<clase> bash scripts/sdd_judge_event.sh ...` (la clase queda en `error_class`). `sdd-metrics-reporter` incluye la seccion "Errores recurrentes" (`top`) con la poblacion y los `unclassified`. El runner (haiku) no diagnostica: solo reporta el error textual del script. Detalle: skill `sdd-error-reports` (long-tail).
 
 ## Plugins (opencode.jsonc)
 
