@@ -81,7 +81,9 @@ ARTEFACTOS: <rutas verificadas>
 ```
 
 Antes de devolver el bloque, registra el veredicto para las métricas (una sola línea de Bash; el `job_id` y la
-iteración vienen en el prompt de `sdd-lead`; si faltan, omite este paso en vez de inventarlos):
+iteración vienen en el prompt de `sdd-lead`). Si faltan, NO inventes valores y NO omitas el paso en silencio:
+devuelve `FAIL` con `GATE_FALLIDO: GUARDRAIL` y motivo "falta job_id/iteración para registrar judge_verdict"
+(un veredicto sin evento registrado cuenta como FAIL):
 
 ```
 bash scripts/sdd_judge_event.sh <job_id> <PASS|FAIL|NEEDS_HUMAN_INPUT> <iteración> "<MOTIVO en una línea>"

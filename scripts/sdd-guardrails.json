@@ -21,5 +21,8 @@
       "*--no-verify*": "deny",
       "*--force*": "deny"
     }
-  }
+  },
+  "plugin": [
+    "./opencode-plugins/sdd-odoo-guard.js"
+  ]
 }

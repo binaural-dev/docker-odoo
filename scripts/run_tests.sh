@@ -1,4 +1,18 @@
 #!/bin/bash
+# Exit code: 0 only if every docker exec succeeded AND no run reported failed tests/errors.
+set -uo pipefail
+
+FAILED=0
+# run_checked <grep-filter> <cmd...>: prints filtered output, keeps tracebacks, flags failures.
+run_checked() {
+  local filter="$1"; shift
+  local out rc
+  out=$("$@" 2>&1); rc=$?
+  printf '%s\n' "$out" | grep -E "($filter|Traceback)" || true
+  if [[ $rc -ne 0 ]] || printf '%s\n' "$out" | grep -qE '(^|[^0-9])[1-9][0-9]* (failed|error\(s\))|FAIL:|Traceback'; then
+    echo "!!! FAILURE DETECTED (exit=$rc)"; FAILED=1
+  fi
+}
 
 # Default values
 MODULES="binaural_website_sale,binaural_website_sale_delivery,binaural_website_sale_transit"
@@ -64,20 +78,21 @@ docker exec -u root "$CONTAINER" odoo \
   --stop-after-init \
   --http-port=19999 \
   --log-level=warn 2>&1 | tail -5
+[[ ${PIPESTATUS[0]} -eq 0 ]] || { echo "!!! module install failed"; FAILED=1; }
 echo ""
 
 # Run tests WITHOUT tag filter (full chain)
 echo ">>> Running ALL tests (no filter) on: $MODULE_NAMES"
 if [[ "$NO_COV" = true ]]; then
-  docker exec -u root "$CONTAINER" odoo \
+  run_checked "Starting|FAILED|ERROR|passed|failed|error\\(s\\)" docker exec -u root "$CONTAINER" odoo \
     -d "$DB_NAME" \
     --test-tags "/$MODULE_NAMES" \
     --stop-after-init \
     --workers 0 \
     --http-port=19999 \
-    --log-level=test 2>&1 | grep -E "(Starting|FAILED|ERROR|passed|failed|error\(s\))"
+    --log-level=test
 else
-  docker exec -u root "$CONTAINER" bash -c "
+  run_checked "Starting|FAILED|ERROR|passed|failed|error\\(s\\)|TOTAL|Name|Stmts|Miss" docker exec -u root "$CONTAINER" bash -c "
     pip3 install coverage >/dev/null 2>&1 &&
     python3 -m coverage erase &&
     python3 -m coverage run --rcfile=/home/odoo/.coveragerc --source=$SOURCE_PATHS /usr/bin/odoo \
@@ -89,22 +104,22 @@ else
       --without-demo=True \
       --log-level=test &&
     python3 -m coverage report -m
-  " 2>&1 | grep -E "(Starting|FAILED|ERROR|passed|failed|error\(s\)|TOTAL|Name|Stmts|Miss)"
+  "
 fi
 echo ""
 
 # Run tests WITH specific tag filter
 echo ">>> Running tests with tag filter: $TAGS"
 if [[ "$NO_COV" = true ]]; then
-  docker exec -u root "$CONTAINER" odoo \
+  run_checked "Starting|FAILED|ERROR|passed|failed|error\\(s\\)" docker exec -u root "$CONTAINER" odoo \
     -d "$DB_NAME" \
     --test-tags "$TAGS" \
     --stop-after-init \
     --workers 0 \
     --http-port=19999 \
-    --log-level=test 2>&1 | grep -E "(Starting|FAILED|ERROR|passed|failed|error\(s\))"
+    --log-level=test
 else
-  docker exec -u root "$CONTAINER" bash -c "
+  run_checked "Starting|FAILED|ERROR|passed|failed|error\\(s\\)|TOTAL|Name|Stmts|Miss" docker exec -u root "$CONTAINER" bash -c "
     python3 -m coverage run --rcfile=/home/odoo/.coveragerc --source=$SOURCE_PATHS /usr/bin/odoo \
       -d $DB_NAME \
       --test-tags=$TAGS \
@@ -114,7 +129,8 @@ else
       --without-demo=True \
       --log-level=test &&
     python3 -m coverage report -m
-  " 2>&1 | grep -E "(Starting|FAILED|ERROR|passed|failed|error\(s\)|TOTAL|Name|Stmts|Miss)"
+  "
 fi
 echo ""
+if [[ $FAILED -ne 0 ]]; then echo "Done (WITH FAILURES)."; exit 1; fi
 echo "Done."

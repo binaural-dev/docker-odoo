@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -112,6 +113,23 @@ def _check_secrets(module_paths):
             findings.append(f'Generic secret assignment: {snippet}...')
 
     return findings
+
+
+def _check_po_files(files):
+    """Run `msgfmt -c` on every .po file (AGENTS.md rules 263-265). Returns list of error strings."""
+    po_files = [f for f in files if f.endswith(".po")]
+    if not po_files:
+        return []
+    if shutil.which("msgfmt") is None:
+        return ["msgfmt no está instalado (apt install gettext): no se puede validar los .po"]
+    errors = []
+    for po in po_files:
+        res = subprocess.run(
+            ["msgfmt", "-c", "-o", "/dev/null", po], capture_output=True, text=True
+        )
+        if res.returncode != 0:
+            errors.append(f"{po}: {res.stderr.strip()}")
+    return errors
 
 
 def _print_devops_guidance(message):
@@ -361,6 +379,13 @@ class PrecommitRunner:
             print("No se encontraron archivos para procesar en los módulos especificados.")
             return
 
+        po_errors = _check_po_files(target_files)
+        if po_errors:
+            print("\nBLOCKED: msgfmt -c falló en archivos .po:", file=sys.stderr)
+            for err in po_errors:
+                print(f"  - {err}", file=sys.stderr)
+            raise SystemExit(1)
+
         subprocess.run(
             _precommit_cmd()
             + ["run", "--config", setup_info["config_path"], "--files"]
@@ -423,8 +448,20 @@ def prompt_instance(config):
         print(f"'" + choice + "' no es una instancia válida. Probá de nuevo.")
 
 
+def _warn_opencode_config_drift():
+    """Advisory (non-blocking): report repo-vs-global OpenCode config drift."""
+    script = Path(BASE_PATH) / "scripts" / "sdd_opencode_config_sync_check.sh"
+    if not script.exists():
+        return
+    res = subprocess.run(["bash", str(script)], capture_output=True, text=True)
+    if res.returncode != 0:
+        print("WARNING: drift entre config OpenCode del repo y la global:", file=sys.stderr)
+        print((res.stdout or res.stderr).strip(), file=sys.stderr)
+
+
 def main():
     args = parse_args()
+    _warn_opencode_config_drift()
     modules = [m.strip() for m in args.modules.split(",") if m.strip()]
 
     instance = args.instance

@@ -1,4 +1,8 @@
 #!/bin/bash
+# Exit code propagates docker exec failures (coverage run / report).
+set -uo pipefail
+DOCKER_TTY=""; [[ -t 0 && -t 1 ]] && DOCKER_TTY="-it"
+RC=0
 
 # 🛡️ Validación y parsing de argumentos
 for arg in "$@"; do
@@ -78,7 +82,7 @@ echo "
 
 
 # 🚀 Ejecutar Coverage dentro del contenedor
-docker exec -u root -it "$ODOO_CONTAINER" bash -c "
+docker exec -u root $DOCKER_TTY "$ODOO_CONTAINER" bash -c "
   pip3 install coverage >/dev/null 2>&1 &&
   python3 -m coverage erase &&
   python3 -m coverage run --rcfile=$COVERAGERC_PATH --source=$SOURCE_PATHS /usr/bin/odoo \
@@ -91,10 +95,12 @@ docker exec -u root -it "$ODOO_CONTAINER" bash -c "
     --log-handler=odoo.tests:DEBUG \
     -p 9999
 "
+RC=$?
+[[ $RC -eq 0 ]] || echo "❌ coverage run falló (exit=$RC)"
 echo ""
 echo "🚀 Observa el reporte:"
 echo ""
-docker exec -u root -it "$ODOO_CONTAINER" bash -c "python3 -m coverage report -m"
+docker exec -u root $DOCKER_TTY "$ODOO_CONTAINER" bash -c "python3 -m coverage report -m" || RC=$?
 
 echo ""
 echo ""
@@ -103,3 +109,4 @@ echo '✅ Los resultados del reporte están listos. Ahora manualmente ve a la ta
 echo ""
 echo ""
 echo ""
+exit $RC
