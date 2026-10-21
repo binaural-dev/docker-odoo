@@ -224,7 +224,7 @@
    "sdd_tool_guard.py": "harness-sdd",
    "sdd_tree_proof.sh": "harness-sdd",
    "sdd_verdict_gate.sh": "harness-sdd",
-   "tests": "unowned",
+   "tests": "harness-sdd",
    "update_addon_pools.sh": "harness-sdd"
   }
  }
