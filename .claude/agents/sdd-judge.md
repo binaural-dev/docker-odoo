@@ -86,7 +86,7 @@ devuelve `FAIL` con `GATE_FALLIDO: GUARDRAIL` y motivo "falta job_id/iteración 
 (un veredicto sin evento registrado cuenta como FAIL):
 
 ```
-bash scripts/sdd_judge_event.sh <job_id> <PASS|FAIL|NEEDS_HUMAN_INPUT> <iteración> "<MOTIVO en una línea>"
+bash scripts/sdd_judge_event.sh <job_id> <PASS|FAIL|NEEDS_HUMAN_INPUT> <iteración> "$(bash scripts/sdd_tree_proof.sh <ruta del repo juzgado>)" "<MOTIVO en una línea>"
 ```
 
 `sdd-lead` decide con esto si cierra el flujo (PASS), reintenta la delegación con el motivo como contexto
