@@ -23,6 +23,7 @@
     }
   },
   "plugin": [
-    "./opencode-plugins/sdd-odoo-guard.js"
+    "./opencode-plugins/sdd-odoo-guard.js",
+    "./opencode-plugins/sdd-lean-ruleset.js"
   ]
 }

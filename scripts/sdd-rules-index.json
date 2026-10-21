@@ -9,9 +9,9 @@
   "unknown"
  ],
  "counts": {
-  "preserved": 53,
+  "preserved": 54,
   "intentional-difference": 1,
-  "bounded-external": 59,
+  "bounded-external": 60,
   "unknown": 200
  },
  "gaps": [
@@ -906,7 +906,9 @@
     311,
     312,
     313,
-    314
+    314,
+    315,
+    316
    ],
    "dispositions": {
     "bounded-external": [
@@ -914,7 +916,8 @@
      253,
      258,
      261,
-     294
+     294,
+     316
     ],
     "unknown": [
      251,
@@ -978,12 +981,14 @@
      304,
      308,
      309,
-     311
+     311,
+     315
     ]
    },
    "evidence": [
     "odoo",
     "scripts/coverage",
+    "scripts/opencode-plugins/sdd-lean-ruleset.js",
     "scripts/opencode_model_switch.sh",
     "scripts/precommit",
     "scripts/run_tests.sh",
@@ -994,6 +999,7 @@
     "scripts/sdd_opencode_run.sh",
     "scripts/sdd_rules_check.py",
     "scripts/sdd_token_usage.py",
+    "scripts/tests/test_sdd_lean_plugin.py",
     "src/odoo-19.0/odoo/addons/base/models/res_currency.py",
     "src/odoo-19.0/odoo/orm/fields.py",
     "src/odoo-19.0/odoo/orm/models.py"
@@ -3192,6 +3198,20 @@
    "reason": "",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
    "title": "Ciclo de aprendizaje de errores en SDD** — taxonomia `error_class`: `infra`, `context` (Context incompleto, cwd, spec), `guardrail`, `spec`, `code`, `test`, `tooling`, `misread`. `sdd-lead` corre `python3 scripts/sdd_error_report.py ingest` y `lessons --role <rol>` antes de despachar y cita la salida por ruta; tras un FAIL escribe el diagnostico (regla 312) y registra `add` antes de reintentar. `sdd-judge` registra el veredicto FAIL con `SDD_ERROR_CLASS=<clase> bash scripts/sdd_judge_event.sh ...` (la clase queda en `error_class`). `sdd-metrics-reporter` incluye la seccion \"Errores recurrentes\" (`top`) con la poblacion y los `unclassified`. El runner (haiku) no diagnostica: solo reporta el error textual del script. Detalle: skill `sdd-error-reports` (long-tail)."
+  },
+  "315": {
+   "disposition": "preserved",
+   "evidence": "scripts/opencode-plugins/sdd-lean-ruleset.js + scripts/tests/test_sdd_lean_plugin.py",
+   "reason": "",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Regla \"lean change\" solo en el builder (plugin `sdd-lean-ruleset.js`)** — adaptacion propia de la idea de ponytail (MIT, analizada, NO instalada): `scripts/lean-change.md` (texto estatico, un solo nivel) se agrega al system prompt del agente `sdd-builder` y a su contexto de compactacion mediante `scripts/opencode-plugins/sdd-lean-ruleset.js`, cargado desde la clave `plugin` de `scripts/sdd-guardrails.json` (solo jobs de `sdd_opencode_run.sh`). Modo por job: `lean: on|off` en `Context {}` o `SDD_LEAN_MODE` (default `off`); se registra en el evento `dispatch` (`lean=`) y en `dispatch.handoff`. Lead, spec, architect, pm, qc y judge NO la reciben. La regla nunca desplaza al spec, a los tests ni a la cobertura > 90 %. No se activa por defecto hasta un A/B pre-registrado (`scripts/prereg.template.md`, seccion de reglas inyectadas) con tareas ya cerradas en worktree aislado; las cifras del autor (-53 % codigo, -45 % tokens, Claude Code + Opus 5.5) no se extrapolan."
+  },
+  "316": {
+   "disposition": "bounded-external",
+   "evidence": "scripts/tests/test_sdd_lean_plugin.py",
+   "reason": "los hooks `experimental.*` dependen de la version de OpenCode; se reverifican al actualizar.",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Restricciones del plugin lean y de los hooks `experimental.*` de OpenCode** — el plugin no usa red, `child_process` ni archivo de estado global (se verifica en `scripts/tests/test_sdd_lean_plugin.py`); el modo viene solo del entorno del job. `experimental.chat.system.transform` recibe `sessionID` y NO el agente: el alcance al builder se resuelve con `chat.message` (que si trae `agent`, tambien en subagentes lanzados por `task`), verificado en OpenCode 1.19.3 el 2026-10-21; `experimental.session.compacting` NO se ejercito en vivo. Reverificar los hooks `experimental.*` al actualizar OpenCode. Excluidos de forma explicita: instalacion npm de ponytail, band/board/ledger, webhook, `band import`, comandos `/ponytail*`, niveles lite/ultra y modo global compartido. Un cambio del texto de `lean-change.md` = ronda nueva. Skill `sdd-lean-change` (long-tail)."
   }
  }
 }

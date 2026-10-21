@@ -281,6 +281,12 @@ CLASSIFY = {
     308: (PRESERVED, "scripts/sdd_inventory_check.py", ""),
     309: (PRESERVED, "scripts/sdd_rules_check.py", ""),
     311: (PRESERVED, "scripts/run_tests.sh + scripts/coverage", ""),
+    315: (PRESERVED, "scripts/opencode-plugins/sdd-lean-ruleset.js + scripts/tests/test_sdd_lean_plugin.py", ""),
+    316: (
+        EXTERNAL,
+        "scripts/tests/test_sdd_lean_plugin.py",
+        "los hooks `experimental.*` dependen de la version de OpenCode; se reverifican al actualizar.",
+    ),
 }
 
 RULE_RE = re.compile(r"^(\d+)\.\s+\*\*(.*)$")

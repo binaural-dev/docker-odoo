@@ -133,6 +133,8 @@ skill `openrag`. `binaural-checker-kiosk` se excluyó del conjunto siempre carga
 
 `sdd-error-reports` (causa raiz antes de despachar/redespachar, registro y taxonomia de errores de subagentes con `scripts/sdd_error_report.py`) es long-tail (excluida en `skill-sync-exclude.txt`): se busca con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/sdd-error-reports/SKILL.md`. Reglas 312-314 de AGENTS.md. Regla corta: tras un fallo, diagnosticar la causa raiz y pasar el diagnostico al agente (`retry_of` + `diagnosis_path`) en vez de redespachar a ciegas.
 
+`sdd-lean-change` (regla "lean change" solo en `sdd-builder`, plugin `scripts/opencode-plugins/sdd-lean-ruleset.js`, `lean: on|off`, A/B pre-registrado) es long-tail (excluida en `skill-sync-exclude.txt`): se busca con OpenCode/OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/sdd-lean-change/SKILL.md`. Reglas 315-316 de AGENTS.md. Esta apagada por defecto (`SDD_LEAN_MODE=off`).
+
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 
 `sudolang-cache-engine/` (repo root — NOT under `src/`, corrected 2026-09-05) is a local Claude Code plugin, a git submodule, with authoring guidance for

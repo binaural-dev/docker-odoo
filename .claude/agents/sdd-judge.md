@@ -107,3 +107,7 @@ sin reintentar (NEEDS_HUMAN_INPUT — regla R6, no cuenta como iteración).
 ## Clase de error en FAIL (reglas 312-314)
 
 Si el veredicto es FAIL, agrega `ERROR_CLASS: <infra|context|guardrail|spec|code|test|tooling|misread>` al bloque de veredicto y registra el evento con `SDD_ERROR_CLASS=<clase> bash scripts/sdd_judge_event.sh <job_id> FAIL <iteracion> "$(bash scripts/sdd_tree_proof.sh <repo>)" "<motivo>"`. El motivo cita archivo:linea y la causa, para que `sdd-lead` escriba el diagnostico de causa raiz antes de redespachar.
+
+## Lente lean (consejo, regla 315)
+
+Agrega `LEAN_FINDINGS:` al bloque de veredicto: abstracciones, wrappers, opciones o dependencias que el spec no pidio, o duplicados de algo existente, con archivo:linea; `ninguno` si no hay. Es consejo: no cambia PASS/FAIL ni cuenta como gate.

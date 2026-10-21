@@ -346,6 +346,13 @@ if [[ "$DISPATCH_ENV" == *-tests ]] && \
   log "$(printf "${YELLOW}  ⚠ environment '%s' ends in -tests but repo '%s' is not a shared pool (integra-addons-*/odoo-venezuela-*/third-party-addons-*) — verify this wasn't guessed by pattern instead of declared for the actual client${RESET}" "$DISPATCH_ENV" "$DISPATCH_REPO")"
 fi
 
+# --- lean ruleset (plugin scripts/opencode-plugins/sdd-lean-ruleset.js): optional `lean: on|off` in Context{} ----
+# Default = env SDD_LEAN_MODE, then off. The plugin injects scripts/lean-change.md only into sdd-builder; the mode is
+# fixed per job and recorded (dispatch metric + handoff) so A/B rounds stay comparable.
+LEAN_CTX="$(extract_context_field lean)"
+LEAN_MODE="${LEAN_CTX:-${SDD_LEAN_MODE:-off}}"
+[[ "$LEAN_MODE" == on || "$LEAN_MODE" == off ]] || reject_dispatch "lean must be on|off, got '${LEAN_MODE}'"
+
 JOB_ID="sdd-$(date +%s%3N)"
 JOB_DIR="$JOBS_DIR/$JOB_ID"
 mkdir -p "$JOB_DIR"
@@ -378,6 +385,7 @@ write_dispatch_handoff() {
     echo "branch: $branch"
     echo "allowed_files: $allowed_files"
     [[ -n "$SPEC_PATH_CTX" ]] && { echo "spec_path: $SPEC_PATH_CTX"; echo "spec_sha256: $SPEC_SHA_ACTUAL"; }
+    echo "lean: $LEAN_MODE"
     echo "priority: 50"
     echo "created_at: $(now_iso)"
     echo
@@ -465,7 +473,7 @@ DISPATCH_BRANCH="$(extract_context_field branch)"
 DISPATCH_PHASE="$(extract_context_field phase)"; DISPATCH_PHASE="${DISPATCH_PHASE:-pipeline}"
 append_metric "dispatch" \
   "agent=$AGENT" "model=$(resolve_model)" "repo=$DISPATCH_REPO" "module=$DISPATCH_MODULE" \
-  "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH" "phase=$DISPATCH_PHASE"
+  "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH" "phase=$DISPATCH_PHASE" "lean=$LEAN_MODE"
 [[ -n "$RETRY_OF_CTX" ]] && append_metric "diagnosis_check" "retry_of=$RETRY_OF_CTX" "state=$DIAGNOSIS_STATE"
 
 # Project agents (src/.opencode/agents/*.md, with their deny lists) are only loaded when --dir sits inside
@@ -502,6 +510,7 @@ INNER_CMD=$(cat <<EOF
 # ends. PIPESTATUS[0] recovers opencode's own exit code past the pipe.
 _start=\$(date +%s)
 export OPENCODE_CONFIG="$GUARD_CFG"
+export SDD_LEAN_MODE="$LEAN_MODE"
 # Inactivity watchdog: headless opencode can hang with no output (never-answered permission prompt, run that does
 # not exit, MCP startup hang). If $OUT has not been written for SDD_STALL_SECS, terminate opencode and flag the job
 # as stalled so the result carries cause=stalled instead of the job sitting in "running" until cleanup reaps it.
