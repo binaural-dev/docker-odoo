@@ -9,9 +9,9 @@
   "unknown"
  ],
  "counts": {
-  "preserved": 51,
+  "preserved": 50,
   "intentional-difference": 1,
-  "bounded-external": 58,
+  "bounded-external": 59,
   "unknown": 193
  },
  "gaps": [
@@ -788,12 +788,13 @@
     249
    ],
    "dispositions": {
-    "preserved": [
+    "bounded-external": [
      217,
-     225,
-     226,
-     239,
-     247
+     222,
+     224,
+     237,
+     238,
+     246
     ],
     "unknown": [
      218,
@@ -820,15 +821,15 @@
      248,
      249
     ],
-    "bounded-external": [
-     222,
-     224,
-     237,
-     238,
-     246
+    "preserved": [
+     225,
+     226,
+     239,
+     247
     ]
    },
    "evidence": [
+    ".pylintrc-mandatory",
     "docker-compose.generated.yml",
     "scripts/odoo-update",
     "scripts/precommit",
@@ -2484,9 +2485,9 @@
    "title": "Cache Engine Governance: Context{} block fijo ~80 tokens, Skills on demand**: Todo agente SDD invocado via `Task()` debe tener bloque `Context{}` fijo (task_id, ears_requirement, plan_ref, tasks_ref, branch, repo, module, stage). Máximo ~80 tokens. Skills se cargan via tool `skill` cuando el agente las necesita (Fondo Volátil). Usar `cache-analyzer` para auditar prompts, `cache-optimizer` para reestructurar. Referencia: skill `sudolang-cache-engine-governance`."
   },
   "217": {
-   "disposition": "preserved",
-   "evidence": "scripts/precommit",
-   "reason": "",
+   "disposition": "bounded-external",
+   "evidence": ".pylintrc-mandatory",
+   "reason": "solo exigible donde pylint_odoo activa `translation-not-lazy`: verificado con pylint_odoo 9.1.3 que con la config 17.0 se reporta W8301 y con la 19.0 (`valid-odoo-versions=19.0`) no se reporta nada, asi que en 19.0 no hay gate mecanico. Misma salvedad para except-pass, method-required-super y test-folder-imported, aunque ninguna otra regla del indice depende de ellos.",
    "family": "### Translation & Precommit Rules",
    "title": "Translation patterns that pass OCA precommit mandatory**: The ONLY `_()` format that passes `translation-not-lazy` (W8301) in mandatory precommit is `.format()`. Patterns like `_('...%s...') % (value)` and `_('...%(name)s...') % {'name': value}` both FAIL. The \"lazy\" second-argument pattern `_('...%s', value)` also FAILS. Only `.format()` works. Reference: skill `odoo-translation-precommit-patterns`, PR `cadipa1#235`."
   },

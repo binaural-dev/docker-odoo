@@ -231,7 +231,14 @@ CLASSIFY = {
     210: (PRESERVED, SKILL_SYNC, ""),
     213: (PRESERVED, PRECOMMIT, ""),
     214: (PRESERVED, SKILL_SYNC, ""),
-    217: (PRESERVED, PRECOMMIT, ""),
+    217: (
+        EXTERNAL,
+        ".pylintrc-mandatory",
+        "solo exigible donde pylint_odoo activa `translation-not-lazy`: verificado con pylint_odoo 9.1.3 "
+        "que con la config 17.0 se reporta W8301 y con la 19.0 (`valid-odoo-versions=19.0`) no se reporta "
+        "nada, asi que en 19.0 no hay gate mecanico. Misma salvedad para except-pass, "
+        "method-required-super y test-folder-imported, aunque ninguna otra regla del indice depende de ellos.",
+    ),
     222: (EXTERNAL, ADDON_MAIL_THREAD, "el dominio de `message_ids` excluye `user_notification` por diseno del core."),
     224: (
         EXTERNAL,
