@@ -73,6 +73,10 @@ retry).
    scope declarado en el dispatch", con el path concreto fuera de scope. Es una condición adicional, no
    reemplaza el chequeo de core/enterprise. Si el archivo acumulado no existe (job viejo, anterior a este
    mecanismo), caer al fallback documentado en `sdd-judge-agent`.
+   **Carriles (si existe `src/.sdd/plans/<branch con / → _>/REVIEW_PLAN.json`)**: decide el scope con
+   `python3 scripts/sdd_lane_fingerprint.py --repo <repo juzgado> validate` (exit ≠ 0 → **FAIL**, motivo = su
+   salida: path sin carril, ciclo o obligación sin cubrir) y toma `fingerprint` como identidad de cada carril;
+   sin plan, usa solo el chequeo por `allowed_files` de arriba.
 5. **Trazabilidad EARS → tareas → código**: cada requisito EARS en spec.md tiene al menos una tarea en tasks.md
    y esa tarea tiene código/test correspondiente en el diff.
 

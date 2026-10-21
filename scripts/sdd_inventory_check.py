@@ -31,7 +31,7 @@ OWNER_RULES = {  # per family, first regex match wins; fallback "unowned". Heuri
     "claude_agents": [(r".*", "harness-sdd")],
     "commands": [(r"^(cache|plan|specs|tasks|implement|index|re-index)", "harness-sdd"),
                  (r".*", "dev-environment")],
-    "scripts": [(r"^(sdd|opencode|run_tests|precommit|coverage|update_addon|README|tests$)", "harness-sdd"),
+    "scripts": [(r"^(sdd|opencode|run_tests|precommit|coverage|update_addon|README|tests$|prereg)", "harness-sdd"),
                 (r"^(odoo|migrate|detect_move|mcp_servers)", "odoo-tooling")],
 }
 OWNERS = ["harness-sdd", "binaural-product", "binaural-process", "odoo-knowledge", "dev-environment", "odoo-tooling"]

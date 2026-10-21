@@ -59,6 +59,21 @@ sync ni leer logs con herramientas de shell. Usar fork solo cuando el caller ya 
 disponible; si no, seguir invocando `Task(subagent_type:"sdd-metrics-reporter")` como sub-agente
 frío (que sí lo tiene declarado en su propio frontmatter).
 
+## Honestidad métrica (F4, reglas de evidencia)
+
+- Nunca reportes solo el agregado: incluí la tabla por ronda/módulo y la **población** (qué jobs, qué módulos,
+  qué modelo, cuántas rondas). Si dos métricas se contradicen (total menor pero mediana mayor), reportá ambas;
+  no las resumas como "más rápido/mejor".
+- Rondas defectuosas (job colgado, mutación en el árbol, poll stale, ambiente cambiado): **se conservan**
+  etiquetadas con `contamination:` (defecto + blast radius); el agregado mantiene sus números con la etiqueta,
+  no se re-muestrea para corregir.
+- Filas sin `v` son legado (v=0; ver `scripts/sdd_metrics_migrate.py`); contá `corrupt_lines:` y reportalas, nunca
+  las disfraces de "0 uso" o "0 fallos".
+- Bytes no son tokens: no presentes una reducción de bytes como ahorro de tokens o costo; los contadores de caché
+  del proveedor son evidencia de apoyo, no prueba de prefijo reutilizable.
+- Rondas nuevas: pre-registro en `src/.sdd/reports/<cambio>-prereg.md` (plantilla `scripts/prereg.template.md`) antes
+  de despachar; cambiar la rúbrica a mitad de ronda = ronda nueva. Canario de cadena: `scripts/sdd_canary.sh <job>`.
+
 ## Reportar
 
 Al terminar, devolvé a quien te invocó la ruta del archivo escrito y el resumen ejecutivo (3-5 líneas) tal

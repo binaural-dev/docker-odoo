@@ -119,7 +119,7 @@ append_metric() {
     python3 - "$JOB_ID" "$event" "$@" >> "$METRICS_FILE" 2>/dev/null <<'PY' || true
 import datetime, json, sys
 job, event, *rest = sys.argv[1:]
-d = {"ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "job": job, "event": event}
+d = {"v": 1, "ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), "job": job, "event": event}
 for kv in rest:
     if "=" in kv:
         k, v = kv.split("=", 1)
@@ -129,7 +129,7 @@ PY
   else
     local pairs="" kv
     for kv in "$@"; do pairs+=",\"${kv%%=*}\":\"${kv#*=}\""; done
-    printf '{"ts":"%s","job":"%s","event":"%s"%s}\n' "$(now_iso)" "$JOB_ID" "$event" "$pairs" >> "$METRICS_FILE"
+    printf '{"v":1,"ts":"%s","job":"%s","event":"%s"%s}\n' "$(now_iso)" "$JOB_ID" "$event" "$pairs" >> "$METRICS_FILE"
   fi
 }
 
@@ -242,6 +242,25 @@ if [[ "$DISPATCH_BRANCH_CHECK" =~ [[:space:]\(\)] ]]; then
   reject_dispatch "branch must be a git branch name or 'none', got '${DISPATCH_BRANCH_RAW}' — put instructions like 'do not checkout' in the prompt body, not in the Context branch field"
 fi
 
+# --- artifact identity (F4): optional spec_path + spec_sha256 in Context{} ----------------------------------
+# A declared sha must match the file at dispatch time; otherwise the spec was replaced between the lead's
+# read and the dispatch and the frontier is untrusted (re-derive the spec instead of dispatching).
+SPEC_PATH_CTX="$(extract_context_field spec_path)"
+SPEC_SHA_DECLARED="$(extract_context_field spec_sha256)"
+SPEC_SHA_ACTUAL=""
+spec_sha_now() {
+  local f="$SPEC_PATH_CTX"
+  [[ -n "$f" && "$f" != /* ]] && f="$REPO_ROOT/$f"
+  [[ -n "$f" && -f "$f" ]] && sha256sum "$f" | cut -d' ' -f1
+}
+if [[ -n "$SPEC_PATH_CTX" ]]; then
+  SPEC_SHA_ACTUAL="$(spec_sha_now)"
+  [[ -n "$SPEC_SHA_ACTUAL" ]] || reject_dispatch "spec_path not found: ${SPEC_PATH_CTX}"
+  if [[ -n "$SPEC_SHA_DECLARED" && "$SPEC_SHA_DECLARED" != "$SPEC_SHA_ACTUAL" ]]; then
+    reject_dispatch "spec_sha256 mismatch for ${SPEC_PATH_CTX}: declared ${SPEC_SHA_DECLARED:0:12}, actual ${SPEC_SHA_ACTUAL:0:12} — spec changed since it was read; re-derive it"
+  fi
+fi
+
 # --- duplicate-dispatch lock ----------------------------------------------
 # Observed in production (2026-09-12 23:39-23:40): 6 byte-identical dispatches
 # of the same task fired within under a minute (a relay re-dispatching instead
@@ -331,6 +350,7 @@ write_dispatch_handoff() {
     echo "module: $module"
     echo "branch: $branch"
     echo "allowed_files: $allowed_files"
+    [[ -n "$SPEC_PATH_CTX" ]] && { echo "spec_path: $SPEC_PATH_CTX"; echo "spec_sha256: $SPEC_SHA_ACTUAL"; }
     echo "priority: 50"
     echo "created_at: $(now_iso)"
     echo
@@ -350,6 +370,11 @@ write_result_handoff() {
     echo "status: $status"
     echo "exit_code: $exit_code"
     echo "completed_at: $(now_iso)"
+    if [[ -n "$SPEC_PATH_CTX" ]]; then
+      local _end; _end="$(spec_sha_now)"
+      echo "spec_sha256_end: $_end"
+      [[ "$_end" == "$SPEC_SHA_ACTUAL" ]] && echo "spec_changed: false" || echo "spec_changed: true"
+    fi
     echo
     echo "output: $OUT"
     echo
@@ -510,6 +535,12 @@ tail_body="\$(tail -n 40 "$OUT" 2>/dev/null || true)"
   echo "exit_code: \$ec"
   [[ -n "\$_kind" ]] && echo "cause_kind: \$_kind"
   echo "completed_at: \$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  if [[ -n "$SPEC_PATH_CTX" ]]; then
+    _spec_f="$SPEC_PATH_CTX"; [[ "\$_spec_f" != /* ]] && _spec_f="$REPO_ROOT/\$_spec_f"
+    _end="\$(sha256sum "\$_spec_f" 2>/dev/null | cut -d' ' -f1)"
+    echo "spec_sha256_end: \$_end"
+    [[ "\$_end" == "$SPEC_SHA_ACTUAL" ]] && echo "spec_changed: false" || echo "spec_changed: true"
+  fi
   echo
   echo "output: $OUT"
   echo

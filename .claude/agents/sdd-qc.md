@@ -93,7 +93,9 @@ docker exec -u root <instancia> bash -c \
 - Coverage Report (por archivo)
 - EARS Traceability
 - Issues Found (Critical/High/Medium/Low)
-- Verdict (PASS/FAIL)
+- Verdict (PASS/FAIL), con dos campos SEPARADOS al inicio del reporte:
+  `completion:` (DONE/PARTIAL: ¿se entregó todo lo pedido?) y `correctness:` (PASS/FAIL: ¿lo entregado es correcto?).
+  Un `correctness: FAIL` no se compensa con eficiencia, claridad ni completitud; no se resume como "30/30 listo".
 
 ## Verificación manual/E2E (Playwright, nunca psql)
 
