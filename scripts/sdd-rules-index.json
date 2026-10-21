@@ -9,10 +9,10 @@
   "unknown"
  ],
  "counts": {
-  "preserved": 50,
+  "preserved": 51,
   "intentional-difference": 1,
-  "bounded-external": 53,
-  "unknown": 199
+  "bounded-external": 58,
+  "unknown": 193
  },
  "gaps": [
   101
@@ -632,9 +632,11 @@
      154,
      182,
      183,
+     188,
      198,
      199,
      200,
+     201,
      203,
      207
     ],
@@ -650,7 +652,6 @@
      164,
      165,
      166,
-     167,
      168,
      169,
      170,
@@ -661,11 +662,9 @@
      185,
      186,
      187,
-     188,
      190,
      196,
      197,
-     201,
      202,
      204,
      206,
@@ -677,6 +676,7 @@
      157,
      158,
      159,
+     167,
      172,
      175,
      177,
@@ -698,7 +698,11 @@
     ]
    },
    "evidence": [
+    "docker-compose.generated.yml",
+    "odoo",
+    "scripts/opencode-plugins/sdd-odoo-guard.js",
     "scripts/sdd-guardrails.json",
+    "scripts/sdd_odoo_cmd_guard.sh",
     "scripts/sdd_opencode_run.sh",
     "scripts/sdd_opencode_status.sh",
     "scripts/sdd_opencode_wait.sh",
@@ -797,7 +801,6 @@
      220,
      221,
      223,
-     224,
      227,
      228,
      229,
@@ -819,12 +822,14 @@
     ],
     "bounded-external": [
      222,
+     224,
      237,
      238,
      246
     ]
    },
    "evidence": [
+    "docker-compose.generated.yml",
     "scripts/odoo-update",
     "scripts/precommit",
     "scripts/sdd_opencode_run.sh",
@@ -896,7 +901,9 @@
     "bounded-external": [
      250,
      253,
-     258
+     258,
+     261,
+     294
     ],
     "unknown": [
      251,
@@ -907,7 +914,6 @@
      257,
      259,
      260,
-     261,
      262,
      263,
      266,
@@ -935,7 +941,6 @@
      291,
      292,
      293,
-     294,
      295,
      296,
      297,
@@ -956,6 +961,7 @@
     ]
    },
    "evidence": [
+    "odoo",
     "scripts/coverage",
     "scripts/opencode_model_switch.sh",
     "scripts/precommit",
@@ -2128,9 +2134,9 @@
    "title": "Antes de comitear en un repo con submódulos, excluir punteros de submódulo ajenos al trabajo actual (`M <nombre-submódulo>` en `git status`, sin ruta de archivo)**: son el `Subproject commit` desactualizado por otra sesión/persona, sin relación con la tarea — un `git add -A` los mezcla sin querer en el commit. Confirmar con `git diff <submódulo>` que es solo el puntero (no contenido) y usar `git add <rutas específicas>` en vez de `-A`. Skill `workspace-structure`. Referencia: proyecto `test-countryclub17`."
   },
   "167": {
-   "disposition": "unknown",
-   "evidence": "",
-   "reason": "",
+   "disposition": "preserved",
+   "evidence": "scripts/sdd_odoo_cmd_guard.sh + scripts/opencode-plugins/sdd-odoo-guard.js + scripts/sdd-guardrails.json",
+   "reason": "scripts/sdd_odoo_cmd_guard.sh:99-107 rechaza un `-d` igual a una instancia/BD real de instances.json (exit 1 en :107); scripts/opencode-plugins/sdd-odoo-guard.js:11-17 lo invoca en tool.execute.before y lanza error si el exit no es 0; scripts/sdd-guardrails.json:25-26 carga ese plugin. Alcance: solo runtime OpenCode (.claude/settings.json no lo invoca) y solo el binario `odoo -d`, no `./odoo test`.",
    "family": "### Testing l10n_ve & Controllers (2026-08-21)",
    "title": "Nunca correr `--stop-after-init`/`--test-enable`/`-u` por CLI directamente contra una base de datos que tiene un servidor Odoo real corriendo (`--dev=all`)**: un segundo proceso Odoo choca por locks de `ir.cron` con el servidor real (`UserError: El registro no se puede modificar en este momento: esta tarea de cron se está ejecutando`). Antes de correr cualquier test automatizado, crear SIEMPRE una base nueva por copia (`CREATE DATABASE \"<nombre>\" WITH TEMPLATE \"<base_origen>\"` — ejecutado con `psql -d postgres`, NUNCA `-d odoo`, que no existe como base física), correr los tests ahí, y borrarla al terminar (`DROP DATABASE IF EXISTS \"<nombre>\"`, verificando el nombre exacto antes de borrar). Skill `sdd-opencode-guardrails`. Referencia: proyecto `countryclub-copy` (bases `countryclub-copy`/`countryclub-copy-2`)."
   },
@@ -2275,9 +2281,9 @@
    "title": "Un override de `write()` que auto-rellena/normaliza un campo para satisfacer un `@api.constrains` debe replicarse en `create()`, o el registro puede persistir inválido**: `@api.constrains` es *triggered-only* — si la lógica de auto-relleno solo vive en `write()`, un `create()` directo con el campo disparador ya activo puede persistir sin el campo dependiente. Confirmado con evidencia real en producción (`countryclub-copy-2`): 3 órdenes de `country_sale_subscription_fees` con `is_debt_order=True` y `debt_period_date=NULL`, ya confirmadas, creadas directamente sin pasar por `write()`. Fix: replicar la misma lógica de resolución de origen (`vals` → `self.default_get([...])` → fallback) en un override de `create()` (`@api.model_create_multi`), sin mutar los dicts de `vals_list` en sitio. Skill `odoo-write-trigger-completeness-19.0` (aplica igual a 17.0). Referencia: `country_sale_subscription_fees`, tarea 81463, PR #232."
   },
   "188": {
-   "disposition": "unknown",
-   "evidence": "",
-   "reason": "",
+   "disposition": "bounded-external",
+   "evidence": "docker-compose.generated.yml",
+   "reason": "db-pg16 no publica puerto al host en el compose generado (docker-compose.generated.yml:5-20); la conexion del MCP es frontera Docker/Postgres.",
    "family": "### Testing l10n_ve & Controllers (2026-08-21)",
    "title": "El MCP `postgres-db` (`postgresql://odoo:odoo@localhost:5432/postgres`) falla con connection refused si el contenedor `db-pg16` no publica el puerto 5432 al host (`docker port db-pg16` vacío)**: para diagnóstico de solo lectura cuando el MCP no conecta, usar `docker exec db-pg16 psql -U odoo -d \"<db_name>\" -c \"<SQL>\"` (Claude directo — para OpenCode ese comando sigue denegado, ver regla 178). Para ESCRITURAS que deben respetar computes/constraints, usar `docker exec -i <contenedor_odoo> odoo shell -d \"<db_name>\" --no-http` por stdin, cerrando con `env.cr.commit()` explícito — a diferencia del protocolo de solo-verificación de `binaural-odoo-shell-live-verification` (siempre `rollback()`), este es un segundo modo de esa skill para escritura autorizada. El clasificador de auto-mode de Claude Code bloquea por defecto escrituras directas a BD real vía este mecanismo — requiere confirmación explícita del usuario. Skills `postgresql-db-work`, `binaural-odoo-shell-live-verification`. Referencia: `country_sale_subscription_fees`, tarea 81463."
   },
@@ -2366,9 +2372,9 @@
    "title": "Crear una `res.company` con `country_id` seteado dispara automáticamente `install_l10n_modules()` (sin wizard manual)**: en Odoo 19, `res.company.create()` (`base/models/res_company.py`) instala la localización del país y carga su chart template (`account.chart.template._load()` → `_post_load_data()`) en el mismo `create()` — cualquier validación custom sobre `product.template`/`account.tax` que se dispare por ese batch `write()` debe soportar un recordset multi-registro real, no solo el caso de un producto a la vez. Skill `l10n-ve-accountant` (sección TI-15065). Referencia: PR #1305, verificación E2E 2026-09-10."
   },
   "201": {
-   "disposition": "unknown",
-   "evidence": "",
-   "reason": "",
+   "disposition": "bounded-external",
+   "evidence": "odoo",
+   "reason": "el owner root del filestore lo fija Docker al correr el binario como root; la mitigacion es `./odoo fix-files` (odoo:1613-1614), fuera del control del indice.",
    "family": "### Testing l10n_ve & Controllers (2026-08-21)",
    "title": "Crear una BD manualmente vía `docker exec -u root <container> odoo -d <db> -i <mod> --stop-after-init` deja el filestore con owner `root`, causando `PermissionError`/`500` al servir assets web cuando el worker normal (usuario `odoo`) intente generarlos**: correr `./odoo fix-files <instancia>` inmediatamente después, antes de cualquier verificación por UI (Playwright u otra). Skill `binaural-docker-odoo`. Referencia: verificación E2E TI-15065, 2026-09-10."
   },
@@ -2527,9 +2533,9 @@
    "title": "Reconciliar STATE.md/tasks.md/checklists locales contra el diff real antes de cerrar una ronda de review** — un ítem marcado \"DEFER\"/pendiente en un tracking doc puede llevar implementado desde una ronda anterior sin que el archivo lo refleje (o viceversa), confundiendo a un revisor futuro que confía en el checklist en vez de en el código. Antes de reportar un punto como \"aplicado\"/\"diferido\", `grep` el código real por la palabra clave y actualizar el tracking doc para que coincida. Skill `sdd-pr-review-fix`. Referencia: PR #254 (countryclub) — `openspec/changes/ta-82205-.../STATE.md` marcaba \"Fix 7: DEFER\" sobre código ya shippeado."
   },
   "224": {
-   "disposition": "unknown",
-   "evidence": "",
-   "reason": "",
+   "disposition": "bounded-external",
+   "evidence": "docker-compose.generated.yml",
+   "reason": "el daemon Docker lo gestiona el host; la contencion por sesiones concurrentes no es verificable en el repo.",
    "family": "### Translation & Precommit Rules",
    "title": "El daemon Docker puede quedar contendido por sesiones concurrentes**: si otra sesión (agente u otra terminal) está construyendo una imagen pesada de Odoo al mismo tiempo, comandos básicos como `docker ps`/`docker images` pueden colgarse varios minutos sin fallar — no asumir que el daemon está caído. Skill `binaural-docker-odoo`. Referencia: PR #2691 (integra-addons), setup de instancia de test aislada, 2026-09-21/22."
   },
@@ -2786,9 +2792,9 @@
    "title": "`./odoo shell write/create/unlink` hace COMMIT por defecto — no confundir con `docker exec <container> odoo shell` (interactivo, siempre-rollback)** — son dos herramientas distintas con nombre parecido: `./odoo shell` (wrapper del CLI, delega a `scripts/odoo-shell`, subcomandos `search/read/count/create/write/unlink/method`) persiste los cambios de `create`/`write`/`unlink` salvo que se pase `--no-commit`. Antes de usarlo contra una base real de cliente, agregar `--no-commit` para un dry-run, o usar el protocolo interactivo de `odoo shell` (siempre `env.cr.rollback()`, skill `binaural-odoo-shell-live-verification`) si la operación es exploratoria. Skill `binaural-docker-odoo`."
   },
   "261": {
-   "disposition": "unknown",
-   "evidence": "",
-   "reason": "",
+   "disposition": "bounded-external",
+   "evidence": "odoo",
+   "reason": "los roles y el CONNECT de Postgres son del servidor; `./odoo provision-role` (odoo:110-116) los aplica y el mensaje de error de la instancia lo sugiere (odoo:170).",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
    "title": "Aislamiento de roles Postgres por instancia (`./odoo provision-role`) puede dejar el rol bootstrap (`odoo`) en NOLOGIN** — una vez aprovisionada una instancia (rol dedicado, `REVOKE CONNECT ... FROM PUBLIC` sobre sus bases), el rol bootstrap genérico del servicio se deja en NOLOGIN en reposo (solo se habilita brevemente vía break-glass, `./odoo psql --ps`/`psql remove --ps`, que reinicia el contenedor del servicio). Si el MCP `postgres-db` (`postgresql://odoo:odoo@...`) o `docker exec db-pg16 psql -U odoo` fallan con un error de conexión/autenticación en un servicio donde YA se aprovisionó alguna instancia, no es necesariamente el caveat de puerto no publicado (regla 188) — verificar si el rol bootstrap está en NOLOGIN antes de asumir que el MCP está roto. Skills `binaural-docker-odoo`, `postgresql-db-work`. Referencia: ya aplicado a `cadipa1-dev1`/`cadipa1-dev1-tests` sobre el servicio `pg16`."
   },
@@ -3017,9 +3023,9 @@
    "title": "Tras editar `instances.json` hay que correr `./odoo build --no-confirm` antes de `restart`, y las corridas de `./odoo test` en background no llevan `&` interno** — de lo contrario el contenedor conserva los addons viejos o la tarea \"termina\" vacía; confirmar el resultado en `res.json` (`verdict.passed`), no en el código de salida. Ver `docker-multi-testing-rules`. Validación guiada con Playwright visible y guía de consultor (artifact privado): skill `binaural-hu-validation-walkthrough`."
   },
   "294": {
-   "disposition": "unknown",
-   "evidence": "",
-   "reason": "",
+   "disposition": "bounded-external",
+   "evidence": "odoo",
+   "reason": "la caida por `role odoo is not permitted to log in` la produce el rol de Postgres en reposo; el CLI solo sugiere `provision-role` (odoo:170).",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
    "title": "Instancia caída por `role \"odoo\" is not permitted to log in`: árbol de decisión y recuperación con `provision-role`** — el rol bootstrap `odoo` queda NOLOGIN en reposo en cuanto el servicio tiene alguna instancia aprovisionada (regla 261); cualquier reinicio de `db-pg16` (otra sesión, break-glass, reinicio de máquina) deja caídas las instancias que siguen con `db_user: odoo` (incluidas las efímeras de worktree de la regla 267). Diagnóstico solo por `docker logs`, nunca `psql`. Recuperación (PIDE autorización al usuario: REINICIA el clúster compartido): respaldar `instances.json`, agregar `db_user`/`db_password` dedicados y mover `db_filter` dentro de `overwrite_odoo_config`, `echo y | ./odoo provision-role <instancia>` (pide confirmación interactiva y el agente no tiene TTY), `./odoo build --no-confirm` + `docker compose up -d --no-deps odoo-<instancia>`; no hacer `ALTER ROLE odoo LOGIN`. OpenCode lo tiene PROHIBIDO (provision-role, psql, ALTER ROLE, reinicio de `db-pg16`, editar `instances.json`). Skills `binaural-postgres-role-nologin-recovery` (long-tail) y `binaural-docker-odoo`. Caso: `sr-pr2731-review` (2026-10-16)."
   },

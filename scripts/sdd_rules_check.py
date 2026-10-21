@@ -68,6 +68,8 @@ COVERAGE = "scripts/coverage"
 SKILL_SYNC = "src/scripts/skill-sync-daemon.sh"
 AGENT_LEAD = "src/.opencode/agents/sdd-lead.md"
 OPENCODE_JSON = "src/.opencode/opencode.json"
+ODOO_CLI = "odoo"
+DOCKER_COMPOSE = "docker-compose.generated.yml"
 
 ORM_MODELS = "src/odoo-19.0/odoo/orm/models.py"
 ORM_FIELDS = "src/odoo-19.0/odoo/orm/fields.py"
@@ -170,6 +172,14 @@ CLASSIFY = {
     157: (PRESERVED, AGENT_LEAD, ""),
     158: (PRESERVED, GUARDRAILS, ""),
     159: (PRESERVED, RUNNER, ""),
+    167: (
+        PRESERVED,
+        ODOO_CMD_GUARD + " + " + GUARD_PLUGIN + " + " + GUARDRAILS,
+        "scripts/sdd_odoo_cmd_guard.sh:99-107 rechaza un `-d` igual a una instancia/BD real de instances.json "
+        "(exit 1 en :107); scripts/opencode-plugins/sdd-odoo-guard.js:11-17 lo invoca en tool.execute.before y "
+        "lanza error si el exit no es 0; scripts/sdd-guardrails.json:25-26 carga ese plugin. Alcance: solo runtime "
+        "OpenCode (.claude/settings.json no lo invoca) y solo el binario `odoo -d`, no `./odoo test`.",
+    ),
     172: (
         PRESERVED,
         STATUS,
@@ -193,6 +203,12 @@ CLASSIFY = {
         ADDON_SALE_ORDER,
         "`sale.order._prepare_invoice()` es del core y copia `transaction_ids` sin filtro.",
     ),
+    188: (
+        EXTERNAL,
+        DOCKER_COMPOSE,
+        "db-pg16 no publica puerto al host en el compose generado (docker-compose.generated.yml:5-20); "
+        "la conexion del MCP es frontera Docker/Postgres.",
+    ),
     189: (PRESERVED, WAITER, ""),
     191: (PRESERVED, RUNNER, ""),
     192: (PRESERVED, RUNNER, ""),
@@ -202,7 +218,13 @@ CLASSIFY = {
     198: (EXTERNAL, MIGRATION, "los scripts de migracion solo corren en upgrade; `post_init_hook` es del core."),
     199: (EXTERNAL, MIGRATION, "el disparo de los scripts de migracion lo decide el core."),
     200: (EXTERNAL, RES_COMPANY, "`install_l10n_modules()` del core dispara la localizacion al crear la compania."),
-    203: (EXTERNAL, WEB_CLASS_JS, "el mixin `Class.include()` y `_super` son del frontend web del core."),
+    201: (
+        EXTERNAL,
+        ODOO_CLI,
+        "el owner root del filestore lo fija Docker al correr el binario como root; la mitigacion es "
+        "`./odoo fix-files` (odoo:1613-1614), fuera del control del indice.",
+    ),
+    203: (EXTERNAL, WEB_CLASS_JS,"el mixin `Class.include()` y `_super` son del frontend web del core."),
     205: (PRESERVED, GUARDRAILS, ""),
     207: (EXTERNAL, POS_PRODUCT_TPL, "el split `ProductTemplate`/`ProductProduct` y `getPrice` son del core del POS."),
     208: (PRESERVED, RUNNER, ""),
@@ -211,6 +233,11 @@ CLASSIFY = {
     214: (PRESERVED, SKILL_SYNC, ""),
     217: (PRESERVED, PRECOMMIT, ""),
     222: (EXTERNAL, ADDON_MAIL_THREAD, "el dominio de `message_ids` excluye `user_notification` por diseno del core."),
+    224: (
+        EXTERNAL,
+        DOCKER_COMPOSE,
+        "el daemon Docker lo gestiona el host; la contencion por sesiones concurrentes no es verificable en el repo.",
+    ),
     225: (PRESERVED, PRECOMMIT, ""),
     226: (PRESERVED, PRECOMMIT, ""),
     237: (EXTERNAL, LOADING, "el purgado de huerfanos (`_process_end`) es del core."),
@@ -221,11 +248,23 @@ CLASSIFY = {
     250: (EXTERNAL, RES_CURRENCY, "`res.currency._convert()` es la API del core."),
     253: (EXTERNAL, ORM_MODELS, "`_get_product_price()` es kwargs-only en el core."),
     258: (EXTERNAL, ORM_FIELDS, "el chequeo de acceso a campo (`check_field_access_rights`) es del core."),
+    261: (
+        EXTERNAL,
+        ODOO_CLI,
+        "los roles y el CONNECT de Postgres son del servidor; `./odoo provision-role` (odoo:110-116) los aplica "
+        "y el mensaje de error de la instancia lo sugiere (odoo:170).",
+    ),
     264: (PRESERVED, PRECOMMIT, ""),
     265: (PRESERVED, PRECOMMIT, ""),
     271: (PRESERVED, COVERAGE, ""),
     274: (PRESERVED, MODEL_SWITCH, ""),
     288: (PRESERVED, RUNNER, ""),
+    294: (
+        EXTERNAL,
+        ODOO_CLI,
+        "la caida por `role odoo is not permitted to log in` la produce el rol de Postgres en reposo; el CLI solo "
+        "sugiere `provision-role` (odoo:170).",
+    ),
     298: (PRESERVED, PRECOMMIT, ""),
     300: (PRESERVED, RUNNER, ""),
     301: (PRESERVED, GUARDRAILS + " + " + CONFIG_SYNC, ""),
@@ -346,12 +385,24 @@ def disposition_for(num):
     return CLASSIFY.get(num, (UNKNOWN, "", ""))
 
 
-def build_index(root=ROOT):
-    """Construye el indice completo a partir de AGENTS.md y la clasificacion curada."""
+def build_index(root=ROOT, previous=None):
+    """Construye el indice completo a partir de AGENTS.md y la clasificacion curada.
+
+    previous: indice anterior (dict). Sus clasificaciones manuales (disposicion distinta de
+    unknown) para reglas que NO estan en CLASSIFY se conservan; CLASSIFY siempre gana.
+    Sin esta conservacion, un --write pisaria cualquier edicion a mano del JSON.
+    """
     rules, gaps = parse_rules(root)
+    manual = (previous or {}).get("rules", {}) or {}
     entries = {}
     for num in sorted(rules):
-        disp, evidence, reason = disposition_for(num)
+        prev = manual.get(str(num), {})
+        if num not in CLASSIFY and prev.get("disposition", UNKNOWN) != UNKNOWN:
+            disp = prev.get("disposition")
+            evidence = prev.get("evidence", "")
+            reason = prev.get("reason", "")
+        else:
+            disp, evidence, reason = disposition_for(num)
         entries[str(num)] = {
             "disposition": disp,
             "evidence": evidence,
@@ -400,7 +451,7 @@ def _evidence_parts(evidence):
 def write(root=ROOT):
     """Regenera scripts/sdd-rules-index.json."""
     path = os.path.join(root, INDEX)
-    index = build_index(root)
+    index = build_index(root, previous=load_index(root))
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(index, fh, indent=1, ensure_ascii=False, sort_keys=False)
     with open(path, "a", encoding="utf-8") as fh:

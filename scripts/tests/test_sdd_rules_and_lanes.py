@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 SCRIPTS = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.dirname(SCRIPTS)
@@ -127,6 +128,40 @@ class RulesGateTest(unittest.TestCase):
         self.write_index()
         index = self.read_index()
         self.assertEqual(index["gaps"], [902, 903, 904])
+
+    def _add_guard_script(self):
+        os.makedirs(os.path.join(self.tmp, "scripts"), exist_ok=True)
+        with open(os.path.join(self.tmp, "scripts", "guard.sh"), "w", encoding="utf-8") as fh:
+            fh.write("#!/usr/bin/env bash\n")
+
+    def test_manual_json_classification_survives_write(self):
+        # --write regenera desde CLASSIFY; una clasificacion manual del JSON (regla sin entrada
+        # curada) debe conservarse, no pisarse.
+        self._add_guard_script()
+        self.write_index()
+        index = self.read_index()
+        index["rules"]["901"].update(
+            disposition="preserved", evidence="scripts/guard.sh", reason="tmp scripts/guard.sh:1"
+        )
+        self.save_index(index)
+        self.write_index()
+        kept = self.read_index()["rules"]["901"]
+        self.assertEqual(kept["disposition"], "preserved")
+        self.assertEqual(kept["evidence"], "scripts/guard.sh")
+        self.assertEqual(rules.check(strict=False, root=self.tmp), 0)
+
+    def test_curated_classification_wins_over_manual_json(self):
+        # Si la regla tiene entrada en CLASSIFY, esa clasificacion gana sobre el JSON a mano.
+        self._add_guard_script()
+        self.write_index()
+        index = self.read_index()
+        index["rules"]["901"].update(
+            disposition="preserved", evidence="scripts/guard.sh", reason="tmp scripts/guard.sh:1"
+        )
+        self.save_index(index)
+        with mock.patch.dict(rules.CLASSIFY, {901: (rules.UNKNOWN, "", "")}):
+            self.write_index()
+        self.assertEqual(self.read_index()["rules"]["901"]["disposition"], "unknown")
 
 
 class RepoIndexTest(unittest.TestCase):
