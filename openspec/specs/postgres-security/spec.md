@@ -52,6 +52,24 @@ INDEX`, `DROP TABLE`, etc.) sigan funcionando sin necesitar superusuario.
 - **THEN** la operación debe completarse sin error de permisos (requiere
   `CREATEDB` en el rol de app)
 
+### Requirement: `pgvector` debe poder crearse sin superusuario
+
+La imagen de cada servicio de Postgres DEBE traer `pgvector` marcado como
+extensión confiable (`trusted = true` en `vector.control`), para que el rol
+de la instancia, dueño de su base, pueda ejecutar `CREATE EXTENSION vector`
+(lo hace el `pre_init_hook` del módulo `ai` de Odoo 20) sin ser superusuario.
+
+#### Scenario: Instalar el módulo `ai` con el rol de la instancia
+- **GIVEN** una base propiedad del rol de la instancia (no superusuario)
+- **WHEN** el rol ejecuta `CREATE EXTENSION IF NOT EXISTS vector`
+- **THEN** la extensión se crea sin error de permisos
+
+#### Scenario: Volumen de datos existente
+- **GIVEN** un volumen inicializado antes de este cambio
+- **WHEN** se reconstruye la imagen del servicio y se recrea su contenedor
+- **THEN** `pg_available_extension_versions` reporta `vector` con
+  `trusted = true`, sin tocar `PGDATA`
+
 ### Requirement: Los puertos de Postgres no deben publicarse al host por defecto
 
 Ningún servicio de base de datos gestionado debe exponer su puerto al host (ni,
