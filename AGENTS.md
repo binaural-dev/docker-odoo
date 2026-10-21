@@ -25,7 +25,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
     ├── reports/coverage/              ← Reportes de coverage
     └── .opencode/                     ← OpenCode config
         ├── agents/                    ← Agentes SDD + Binaural (13 agentes)
-        ├── skills/                    ← Skills del proyecto (132 dirs)
+        ├── skills/                    ← Skills del proyecto (133 dirs)
         ├── commands/                  ← Comandos del proyecto (13 commands)
         ├── docs/                      ← Documentación Odoo 19 (654 .md)
         ├── plans/                     ← Planes de migración
@@ -46,7 +46,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | Categoría | Cantidad |
 |-----------|----------|
 | skills/19.0/skills/ (161 dirs) | **161** |
-| skills/.opencode/skills/ (project: 132 dirs) | **132** |
+| skills/.opencode/skills/ (project: 133 dirs) | **133** |
 | skills/17.0/skills/ (325 dirs) | **325** |
 | skills/16.0/skills/ (100 dirs) | **100** |
 | skills/global (~/.config/opencode/skills/, 169 dirs) | **169** |
@@ -1165,6 +1165,20 @@ Reglas para sincronizar conocimiento entre Claude Code y OpenCode.
 303. **Métricas de delegación: eventos y motivos** — `metrics.jsonl` ahora tiene `needs_human` y `judge_verdict` (lo escribe `scripts/sdd_judge_event.sh <job_id> <PASS|FAIL|NEEDS_HUMAN_INPUT> <iteración> [motivo]`, que `sdd-judge` corre antes de devolver el veredicto), y `orphaned` lleva `reason`: `session_dead` (la sesión tmux murió) o `reaped_ttl` (la barrió el cleanup; la edad usa el mayor entre mtime del dir y de `output.log`). `sdd-lead` debe pasar `job_id` e iteración en el prompt a `sdd-judge`; sin ellos el juez omite el evento. Los eventos de prueba (`guardrail-probe`, `watchdog-probe`, `a4-probe`, ids `sdd-000000000000N`) se excluyen de los reportes.
 
 304. **Consumo del orquestador Claude: medir, no suponer** — relays con `effort: low` + `omitClaudeMd: true` bajan la primera llamada de 15.556 a 8.068 tokens (medido con `claude -p` nuevos; las definiciones de agentes se cargan al iniciar la sesión, un A/B dentro de la misma sesión no muestra nada). Lectura de caché: ×0.05 en Opus 5.5/Sonnet 5.5, ×0.025 en Fable/Mythos 5.1, ×0.1 resto; `sdd_token_usage.py` y el hook de `sudolang-cache-engine` usan el peso por modelo y el hook registra subagentes en `cache-usage-subagents.jsonl`. Tras editar el plugin hay que copiarlo a `~/.claude/plugins/cache/local/sudolang-cache-engine/1.0.0/`. El contexto inicial (≈25k de piso) lo dominan MCP/plugins duplicados, no CLAUDE.md. Detalle: skills `claude-code-cost-controls` y `opencode-cost-controls`.
+
+305. **Gates mecanicos de gobernanza F0-F4 (mapa)** — cada gate es un script determinista (0 tokens LLM) y nace en modo `advisory`: F0 `scripts/run_tests.sh`/`scripts/coverage`/`scripts/precommit` (exit codes honestos); F1 `sdd_tree_proof.sh` + `sdd_verdict_gate.sh` + `sdd_install_git_hook.sh` (`SDD_GATE_MODE=advisory|enforce`, `SDD_GATE_SKIP=1` bypass registrado); F2 `sdd_tool_guard.py` + plugin OpenCode `scripts/opencode-plugins/sdd-odoo-guard.js` (`SDD_GUARD_MODE`); F3 `sdd_inventory_check.py` + `sdd_rules_check.py` + `sdd_lane_fingerprint.py` (`SDD_INVENTORY_MODE`); F4 `sdd_rehydrate.sh`, `sdd_canary.sh`, `sdd_metrics_migrate.py`, `scripts/prereg.template.md`. Detalle y tabla "si bloquea": skill `sdd-governance-gates` (long-tail).
+
+306. **El veredicto del juez va ligado al arbol (`tree_sha`)** — `sdd_judge_event.sh <job_id> <verdict> <iteration> <tree_sha> [reason]` registra `judge_verdict` con `tree_sha` calculado por `sdd_tree_proof.sh <repo>` (indice temporal + `git write-tree`). `sdd_verdict_gate.sh` exige un PASS cuyo `tree_sha` coincida con el arbol staged y que los paths esten dentro de `allowed_files`. Sin evento = FAIL. El hook de pre-commit es LOCAL (`.git/hooks/`, no versionado, compartido por worktrees): reinstalarlo en cada clon con `bash scripts/sdd_install_git_hook.sh <repo>` (nunca sobrescribe; aborta si hay `core.hooksPath` o un pre-commit previo). No requiere red.
+
+307. **Hook `sdd_tool_guard.py` (Claude Code `PreToolUse`) y plugin OpenCode** — ambos leen `scripts/sdd-guardrails.json` como unica fuente de denies (psql, `rm -rf`, `--force`, `--no-verify`, edits bajo `odoo-*`/`enterprise-*`). `git commit*`/`git push*` son advisory: se permiten con el token `.git/sdd-commit-authorized` (vigencia 10 min, lo crea el humano al autorizar el Gate 6). Registrado en `.claude/settings.json` (matcher `Bash|Edit|Write|MultiEdit|NotebookEdit`). Si el guard bloquea, no lo evadas con otro mecanismo (p. ej. `shutil.rmtree` en lugar de `rm -rf`): ajusta el plan o pide autorizacion.
+
+308. **Inventario con duenos: gate en `enforce` por defecto en docker-multi** — `scripts/sdd-inventory.json` (213 entradas al 2026-10-21) asigna un dueno a cada script/agente/skill/comando; `python3 scripts/sdd_inventory_check.py` falla si algo existe sin dueno o el conteo no coincide. El pre-commit local de docker-multi bloquea por defecto (`SDD_INVENTORY_MODE=advisory` solo avisa). Al agregar un script o skill nuevo: `python3 scripts/sdd_inventory_check.py --write`, revisar el dueno asignado y recien entonces commitear.
+
+309. **Indice de reglas honesto (`scripts/sdd-rules-index.json`)** — cada regla numerada de AGENTS.md tiene disposicion `preserved` (oraculo en el repo), `intentional-difference`, `bounded-external` (el limite vive en un tercero) o `unknown`. Nunca declarar `preserved` sin un oraculo verificado; el reporte siempre cuenta los `unknown` (197 al 2026-10-21). La clasificacion curada vive en `CLASSIFY` de `scripts/sdd_rules_check.py` (`--write` regenera el JSON y conserva ediciones manuales de reglas fuera de `CLASSIFY`). Caso real, regla 217: figuraba como `preserved` pero pylint_odoo 9.1.3 reporta `translation-not-lazy` (W8301) con la config 17.0 y NO con la 19.0 (`valid-odoo-versions=19.0`): pasa a `bounded-external`. Lo mismo vale para `except-pass`, `method-required-super` y `test-folder-imported`. El precommit real usa `.ignore/precommit-config-files-<17|19>/.pylintrc-mandatory`, no el de la raiz.
+
+310. **Honestidad de evidencia en rondas SDD (F4)** — (a) el `qc-report.md` separa `completion: DONE|PARTIAL` de `correctness: PASS|FAIL`; un FAIL de correctness no se compensa con nada; (b) rondas defectuosas se conservan etiquetadas con `contamination:` (defecto + blast radius), no se re-muestrean; (c) pre-registro de rubrica en `src/.sdd/reports/<cambio>-prereg.md` (plantilla `scripts/prereg.template.md`) ANTES de despachar; cambiar la rubrica = ronda nueva; (d) el bloque `Context {}` admite `spec_path` y `spec_sha256`: `sdd_opencode_run.sh` verifica el sha antes del lock y lo repite en los handoffs (`spec_sha256_end`, `spec_changed`); (e) tras una compactacion, releer estado con `bash scripts/sdd_rehydrate.sh <module> [branch]` en vez de confiar en el resumen; (f) `bash scripts/sdd_canary.sh <job_id> [artefacto]` cierra la cadena con artefactos canonicos (exit 1 = parar, no ampliar la matriz); (g) `metrics.jsonl` lleva `"v": 1`; las filas sin `v` son legado v=0 (`python3 scripts/sdd_metrics_migrate.py` es dry-run por defecto, `--apply` migra); bytes no son tokens.
+
+311. **Exit codes honestos en los scripts de test** — `scripts/run_tests.sh` y `scripts/coverage` usan `set -uo pipefail` y propagan el exit de `docker exec` (`PIPESTATUS`); antes terminaban en `echo`/`grep` y devolvian siempre 0 aunque hubiera tracebacks. `scripts/coverage` ya no usa `docker exec -it` sin TTY. `scripts/precommit` ejecuta `msgfmt -c -o /dev/null` sobre los `.po` modificados (reglas 263-265). No reintroducir un `echo` final que enmascare el codigo de salida.
 
 ## Plugins (opencode.jsonc)
 

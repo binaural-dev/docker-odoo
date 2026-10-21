@@ -278,6 +278,9 @@ CLASSIFY = {
     302: (PRESERVED, RUNNER, ""),
     303: (PRESERVED, JUDGE_EVENT + " + " + TOKEN_USAGE, ""),
     304: (PRESERVED, TOKEN_USAGE, ""),
+    308: (PRESERVED, "scripts/sdd_inventory_check.py", ""),
+    309: (PRESERVED, "scripts/sdd_rules_check.py", ""),
+    311: (PRESERVED, "scripts/run_tests.sh + scripts/coverage", ""),
 }
 
 RULE_RE = re.compile(r"^(\d+)\.\s+\*\*(.*)$")

@@ -93,7 +93,7 @@ via the `INSTANCE_ADDONS` env var.
   then an explicit `enable=` allowlist (~70 rules) including `sql-injection`, `eval-used`,
   `dangerous-default-value`, `method-required-super`, `translation-required`, `except-pass`,
   `create-user-wo-reset-password`, `external-request-timeout`, `xml-attribute-translatable`, and license checks
-  (AGPL-3/GPL-2/GPL-3/LGPL-3). `.pylintrc` holds general style rules.
+  (AGPL-3/GPL-2/GPL-3/LGPL-3). `.pylintrc` holds general style rules. Nota (verificada 2026-10-21): el precommit real usa `.ignore/precommit-config-files-<17|19>/.pylintrc-mandatory` (`valid-odoo-versions` = 17.0 o 19.0 segun la version); con 19.0 pylint_odoo 9.1.3 NO reporta `translation-not-lazy`, `except-pass`, `method-required-super` ni `test-folder-imported` (regla 217, regla 309).
 - `.pre-commit-config.yaml` runs `OCA/odoo-pre-commit-hooks` (`oca-checks-po`), excluding
   `third-party-addons/`, generated/static files, and docs.
 - `scripts/precommit` is a wrapper that pulls the shared `binaural-dev/precommit-config-files` config into
@@ -128,6 +128,8 @@ skill `openrag`. `binaural-checker-kiosk` se excluyó del conjunto siempre carga
 `binaural-clinics-commission-honorarios` (módulo `binaural_clinics_commission`, HU-01…HU-12 y cadena de PR a Ariannis) y `binaural-hu-validation-walkthrough` (validación guiada con Playwright visible + guía de consultor) son long-tail: se buscan con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/<nombre>/SKILL.md`. Reglas 291-293 de AGENTS.md.
 
 `binaural-postgres-role-nologin-recovery`, `binaural-inventory-forecasting-suite` y `binaural-drugstore-migration` son long-tail (excluidas en `skill-sync-exclude.txt`): se buscan con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/<nombre>/SKILL.md`. Reglas 294-300 de AGENTS.md. Para ingestar usar `src/scripts/skill_ingest.py`.
+
+`sdd-governance-gates` (gates mecanicos F0-F4: veredicto ligado al arbol, hook `sdd_tool_guard.py`, inventario con duenos, indice de reglas, honestidad de evidencia) es long-tail (excluida en `skill-sync-exclude.txt`): se busca con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/sdd-governance-gates/SKILL.md`. Reglas 305-311 de AGENTS.md. El pre-commit de docker-multi bloquea por defecto si el inventario tiene scripts sin dueno (`SDD_INVENTORY_MODE=advisory` para solo avisar).
 
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 
