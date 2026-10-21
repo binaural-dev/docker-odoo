@@ -25,8 +25,8 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
     ├── reports/coverage/              ← Reportes de coverage
     └── .opencode/                     ← OpenCode config
         ├── agents/                    ← Agentes SDD + Binaural (13 agentes)
-        ├── skills/                    ← Skills del proyecto (108 dirs)
-        ├── commands/                  ← Comandos del proyecto (12 commands)
+        ├── skills/                    ← Skills del proyecto (132 dirs)
+        ├── commands/                  ← Comandos del proyecto (13 commands)
         ├── docs/                      ← Documentación Odoo 19 (654 .md)
         ├── plans/                     ← Planes de migración
         ├── goals/                     ← Goal tracking
@@ -46,7 +46,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | Categoría | Cantidad |
 |-----------|----------|
 | skills/19.0/skills/ (161 dirs) | **161** |
-| skills/.opencode/skills/ (project: 118 dirs) | **118** |
+| skills/.opencode/skills/ (project: 132 dirs) | **132** |
 | skills/17.0/skills/ (325 dirs) | **325** |
 | skills/16.0/skills/ (100 dirs) | **100** |
 | skills/global (~/.config/opencode/skills/, 169 dirs) | **169** |
