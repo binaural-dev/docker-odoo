@@ -62,3 +62,6 @@ Restaura el backup `<archivo_backup>` en la base de datos `<base_de_datos>`, uti
 - Para máxima compatibilidad, solicita siempre el dump en formato SQL plano (`.sql`).
 - Si tienes problemas, revisa los logs de restauración y asegúrate de que todos los módulos requeridos estén presentes en el entorno.
 
+## Harness SDD (scripts `sdd_*`)
+
+Los scripts `sdd_*`, los plugins de `opencode-plugins/` y los JSON de gobernanza son parte del flujo SDD → OpenCode. Mapa completo (que usar para cada necesidad, variables `SDD_*` y defaults): skill `sdd-harness-catalog` (`src/.opencode/skills/sdd-harness-catalog/SKILL.md`). Cada script debe tener dueno en `sdd-inventory.json`.

@@ -135,6 +135,10 @@ skill `openrag`. `binaural-checker-kiosk` se excluyó del conjunto siempre carga
 
 `sdd-lean-change` (regla "lean change" solo en `sdd-builder`, plugin `scripts/opencode-plugins/sdd-lean-ruleset.js`, `lean: on|off`, A/B pre-registrado) es long-tail (excluida en `skill-sync-exclude.txt`): se busca con OpenCode/OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/sdd-lean-change/SKILL.md`. Reglas 315-316 de AGENTS.md. Esta apagada por defecto (`SDD_LEAN_MODE=off`).
 
+`sdd-harness-catalog` (mapa de scripts `sdd_*`, plugins, hooks y variables `SDD_*` con sus defaults: que usar para despachar, vigilar, juzgar, medir, bloquear o diagnosticar) es long-tail (excluida en `skill-sync-exclude.txt`): se busca con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/sdd-harness-catalog/SKILL.md`. Regla 317 de AGENTS.md. Consultarla antes de crear un script o gate nuevo.
+
+**Busquedas largas o investigaciones profundas de codigo (mas de ~10 archivos o varios repos): delegarlas a OpenCode en vez de leerlas en esta sesion** (modelo de los agentes SDD con contexto de 1M y costo cero; verificado 2026-10-21). Job de solo lectura con `scripts/sdd_opencode_run.sh ... sdd-lead` (`environment: read-only-research`, `allowed_files` = un informe en `src/.sdd/reports/research/`), leer solo el informe y verificarlo por muestreo con `grep`. Para 1-3 archivos usar `grep`/`codebase-memory-mcp`. Solo codigo, nunca datos de clientes. Skill `sdd-research-delegation` (long-tail, excluida en `skill-sync-exclude.txt`: OpenRAG `odoo-skills-long-tail` o `src/.opencode/skills/sdd-research-delegation/SKILL.md`). Regla 318 de AGENTS.md.
+
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 
 `sudolang-cache-engine/` (repo root — NOT under `src/`, corrected 2026-09-05) is a local Claude Code plugin, a git submodule, with authoring guidance for

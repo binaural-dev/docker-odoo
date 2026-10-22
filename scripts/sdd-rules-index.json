@@ -9,10 +9,10 @@
   "unknown"
  ],
  "counts": {
-  "preserved": 54,
+  "preserved": 55,
   "intentional-difference": 1,
   "bounded-external": 60,
-  "unknown": 200
+  "unknown": 201
  },
  "gaps": [
   101
@@ -908,7 +908,9 @@
     313,
     314,
     315,
-    316
+    316,
+    317,
+    318
    ],
    "dispositions": {
     "bounded-external": [
@@ -965,7 +967,8 @@
      310,
      312,
      313,
-     314
+     314,
+     318
     ],
     "preserved": [
      264,
@@ -982,7 +985,8 @@
      308,
      309,
      311,
-     315
+     315,
+     317
     ]
    },
    "evidence": [
@@ -3212,6 +3216,20 @@
    "reason": "los hooks `experimental.*` dependen de la version de OpenCode; se reverifican al actualizar.",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
    "title": "Restricciones del plugin lean y de los hooks `experimental.*` de OpenCode** — el plugin no usa red, `child_process` ni archivo de estado global (se verifica en `scripts/tests/test_sdd_lean_plugin.py`); el modo viene solo del entorno del job. `experimental.chat.system.transform` recibe `sessionID` y NO el agente: el alcance al builder se resuelve con `chat.message` (que si trae `agent`, tambien en subagentes lanzados por `task`), verificado en OpenCode 1.19.3 el 2026-10-21; `experimental.session.compacting` NO se ejercito en vivo. Reverificar los hooks `experimental.*` al actualizar OpenCode. Excluidos de forma explicita: instalacion npm de ponytail, band/board/ledger, webhook, `band import`, comandos `/ponytail*`, niveles lite/ultra y modo global compartido. Un cambio del texto de `lean-change.md` = ronda nueva. Skill `sdd-lean-change` (long-tail)."
+  },
+  "317": {
+   "disposition": "preserved",
+   "evidence": "scripts/sdd_inventory_check.py",
+   "reason": "",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Mapa del harness SDD (skill `sdd-harness-catalog`, long-tail)** — antes de crear un script, gate, plugin o variable `SDD_*` nuevo, o de dudar si ya existe una herramienta para despachar, vigilar, juzgar, medir, bloquear o diagnosticar, consultar la skill `sdd-harness-catalog` (tablas por necesidad con script, hook, variable y default) y `scripts/sdd-inventory.json`. Todo script nuevo necesita dueno en `scripts/sdd_inventory_check.py` (el pre-commit local lo exige). Al agregar o cambiar una herramienta del harness, actualizar la tabla correspondiente de la skill en el mismo cambio. `scripts/README.md` apunta a ella."
+  },
+  "318": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Investigaciones largas o profundas de codigo se delegan a OpenCode (skill `sdd-research-delegation`, long-tail)** — para barridos de mas de ~10 archivos o varios repos cuyo producto es un informe (overrides de un metodo, usos de un campo, mapas de dependencias, auditorias de un patron), despachar un job de solo lectura con `sdd_opencode_run.sh` con el agente `sdd-lead`, Context `environment: read-only-research` y `allowed_files` = un unico informe en `src/.sdd/reports/research/`, y leer solo ese informe. Motivo verificado el 2026-10-21 (`opencode models --verbose`): `opencode/minimax-m3.1-flash-free` tiene contexto de 1.000.000 y costo 0; `opencode-go/mimo-v2.5`, 1.000.000 a 0.14/0.28 USD por M tokens. Sonda real: 7 de 7 definiciones citadas con archivo:linea exacto contra `grep`. Obligatorio: muestrear con `grep` independiente y desconfiar de lo que el informe declara sin auditar. No usar para 1-3 archivos (usar `grep` o `codebase-memory-mcp`), ni para decisiones de seguridad. Datos de la empresa: solo codigo y documentacion; sin datos de clientes, volcados de BD ni credenciales (no se verifico la retencion del plan gratuito)."
   }
  }
 }

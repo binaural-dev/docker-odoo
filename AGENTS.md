@@ -25,7 +25,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
     ├── reports/coverage/              ← Reportes de coverage
     └── .opencode/                     ← OpenCode config
         ├── agents/                    ← Agentes SDD + Binaural (13 agentes)
-        ├── skills/                    ← Skills del proyecto (135 dirs)
+        ├── skills/                    ← Skills del proyecto (137 dirs)
         ├── commands/                  ← Comandos del proyecto (13 commands)
         ├── docs/                      ← Documentación Odoo 19 (654 .md)
         ├── plans/                     ← Planes de migración
@@ -46,7 +46,7 @@ Punto de referencia central para el workspace `docker-multi`. Odoo 19 (principal
 | Categoría | Cantidad |
 |-----------|----------|
 | skills/19.0/skills/ (161 dirs) | **161** |
-| skills/.opencode/skills/ (project: 135 dirs) | **135** |
+| skills/.opencode/skills/ (project: 137 dirs) | **137** |
 | skills/17.0/skills/ (325 dirs) | **325** |
 | skills/16.0/skills/ (100 dirs) | **100** |
 | skills/global (~/.config/opencode/skills/, 169 dirs) | **169** |
@@ -1189,6 +1189,10 @@ Reglas para sincronizar conocimiento entre Claude Code y OpenCode.
 315. **Regla "lean change" solo en el builder (plugin `sdd-lean-ruleset.js`)** — adaptacion propia de la idea de ponytail (MIT, analizada, NO instalada): `scripts/lean-change.md` (texto estatico, un solo nivel) se agrega al system prompt del agente `sdd-builder` y a su contexto de compactacion mediante `scripts/opencode-plugins/sdd-lean-ruleset.js`, cargado desde la clave `plugin` de `scripts/sdd-guardrails.json` (solo jobs de `sdd_opencode_run.sh`). Modo por job: `lean: on|off` en `Context {}` o `SDD_LEAN_MODE` (default `off`); se registra en el evento `dispatch` (`lean=`) y en `dispatch.handoff`. Lead, spec, architect, pm, qc y judge NO la reciben. La regla nunca desplaza al spec, a los tests ni a la cobertura > 90 %. No se activa por defecto hasta un A/B pre-registrado (`scripts/prereg.template.md`, seccion de reglas inyectadas) con tareas ya cerradas en worktree aislado; las cifras del autor (-53 % codigo, -45 % tokens, Claude Code + Opus 5.5) no se extrapolan.
 
 316. **Restricciones del plugin lean y de los hooks `experimental.*` de OpenCode** — el plugin no usa red, `child_process` ni archivo de estado global (se verifica en `scripts/tests/test_sdd_lean_plugin.py`); el modo viene solo del entorno del job. `experimental.chat.system.transform` recibe `sessionID` y NO el agente: el alcance al builder se resuelve con `chat.message` (que si trae `agent`, tambien en subagentes lanzados por `task`), verificado en OpenCode 1.19.3 el 2026-10-21; `experimental.session.compacting` NO se ejercito en vivo. Reverificar los hooks `experimental.*` al actualizar OpenCode. Excluidos de forma explicita: instalacion npm de ponytail, band/board/ledger, webhook, `band import`, comandos `/ponytail*`, niveles lite/ultra y modo global compartido. Un cambio del texto de `lean-change.md` = ronda nueva. Skill `sdd-lean-change` (long-tail).
+
+317. **Mapa del harness SDD (skill `sdd-harness-catalog`, long-tail)** — antes de crear un script, gate, plugin o variable `SDD_*` nuevo, o de dudar si ya existe una herramienta para despachar, vigilar, juzgar, medir, bloquear o diagnosticar, consultar la skill `sdd-harness-catalog` (tablas por necesidad con script, hook, variable y default) y `scripts/sdd-inventory.json`. Todo script nuevo necesita dueno en `scripts/sdd_inventory_check.py` (el pre-commit local lo exige). Al agregar o cambiar una herramienta del harness, actualizar la tabla correspondiente de la skill en el mismo cambio. `scripts/README.md` apunta a ella.
+
+318. **Investigaciones largas o profundas de codigo se delegan a OpenCode (skill `sdd-research-delegation`, long-tail)** — para barridos de mas de ~10 archivos o varios repos cuyo producto es un informe (overrides de un metodo, usos de un campo, mapas de dependencias, auditorias de un patron), despachar un job de solo lectura con `sdd_opencode_run.sh` con el agente `sdd-lead`, Context `environment: read-only-research` y `allowed_files` = un unico informe en `src/.sdd/reports/research/`, y leer solo ese informe. Motivo verificado el 2026-10-21 (`opencode models --verbose`): `opencode/minimax-m3.1-flash-free` tiene contexto de 1.000.000 y costo 0; `opencode-go/mimo-v2.5`, 1.000.000 a 0.14/0.28 USD por M tokens. Sonda real: 7 de 7 definiciones citadas con archivo:linea exacto contra `grep`. Obligatorio: muestrear con `grep` independiente y desconfiar de lo que el informe declara sin auditar. No usar para 1-3 archivos (usar `grep` o `codebase-memory-mcp`), ni para decisiones de seguridad. Datos de la empresa: solo codigo y documentacion; sin datos de clientes, volcados de BD ni credenciales (no se verifico la retencion del plan gratuito).
 
 ## Plugins (opencode.jsonc)
 
