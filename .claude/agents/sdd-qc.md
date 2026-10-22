@@ -111,7 +111,7 @@ no un bloqueo técnico — respetala igual.
 ## Validation checklist antes de entregar
 
 - [ ] Todos los tests pasan
-- [ ] Coverage > 90%
+- [ ] Coverage > 90% (solo Etapa B, post-PR; en Etapa A: tests TDD de los requisitos principales, regla 319)
 - [ ] Trazabilidad EARS→Código completa
 - [ ] Sin issues Critical/High abiertos
 

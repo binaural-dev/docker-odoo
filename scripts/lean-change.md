@@ -8,7 +8,7 @@ Take the first option that fully works:
 3. ORM or standard library before new code. An already-installed dependency before a new one.
 4. Otherwise the minimum code that works. No wrapper, option, abstraction or "for later" code nobody asked for.
 
-Never cut: spec requirements (EARS ids), tests and coverage > 90 %, security (`ir.model.access.csv`, record rules), validation at trust boundaries, `_()` with `.format()`, `ensure_one()`, manifest and data files Odoo requires.
+Never cut: spec requirements (EARS ids), tests of the main requirements (coverage > 90 % is a post-PR stage, rule 319), security (`ir.model.access.csv`, record rules), validation at trust boundaries, `_()` with `.format()`, `ensure_one()`, manifest and data files Odoo requires.
 
 Bug fix: grep every caller of the function you touch, then fix the root cause once in the shared code.
 A shortcut with a known limit gets a comment: `shortcut: <limit>, <when to upgrade>` (English).

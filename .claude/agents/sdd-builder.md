@@ -94,7 +94,7 @@ más antigua sin timestamp en `--db_name`).
 
 - [ ] Tests pasan
 - [ ] Pre-commit verde
-- [ ] Coverage > 90%
+- [ ] Coverage > 90% (solo Etapa B, post-PR; en Etapa A: tests TDD de los requisitos principales, regla 319)
 - [ ] Código version-aware para la versión detectada
 - [ ] No se tocó ningún archivo bajo `odoo-*.0/` o `enterprise-*.0/`
 

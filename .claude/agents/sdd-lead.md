@@ -163,7 +163,7 @@ Si el módulo vive en un repo sin `openspec/` inicializado, sigue el flujo norma
 | G1 | Spec | Todos los tipos EARS presentes, Out of Scope, Non-Functional |
 | G2 | Plan | Codebase Research, Version Analysis presentes |
 | G3 | Tasks | Atómicas, referenciadas a EARS, trazabilidad completa |
-| G4 | Build | Tests pasan, pre-commit verde, coverage > 90% |
+| G4 | Build | Tests pasan, pre-commit verde, en Etapa A tests TDD de requisitos principales; coverage > 90% solo en Etapa B post-PR (regla 319) |
 | G5 | QC | `qc-report.md` en PASS, sin issues Critical/High abiertos |
 
 ## Escalation Rules

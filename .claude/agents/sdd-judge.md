@@ -49,7 +49,7 @@ retry).
    - G1 (Spec): tipos EARS U/E/A/R/S presentes, Out of Scope, Non-Functional Requirements.
    - G2 (Plan): sección Codebase Research y Version Analysis presentes.
    - G3 (Tasks): tareas atómicas, cada una referencia un ID EARS, matriz de trazabilidad completa.
-   - G4 (Build): tests pasan, pre-commit verde, coverage > 90% — **ejecutar tú mismo**, no leer solo el reporte:
+   - G4 (Build): tests pasan, pre-commit verde, coverage > 90% solo en modo `full` (Etapa B; en `light` no se exige, regla 319) — **ejecutar tú mismo**, no leer solo el reporte:
      ```bash
      bash scripts/run_tests.sh --modules=<module> --container=<container>
      python3 scripts/precommit <instancia> -m <module>
