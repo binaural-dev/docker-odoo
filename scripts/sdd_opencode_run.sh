@@ -531,7 +531,8 @@ d = sys.argv[1]
 b = os.environ.get("ENGRAM_BIN") or os.path.expanduser("~/.local/bin/engram")
 print(json.dumps({"mcp": {"engram": {"enabled": True, "type": "local", "command": [b, "mcp", "--tools=agent"],
   "environment": {"ENGRAM_DATA_DIR": d, "ENGRAM_NO_UPDATE_CHECK": "1", "ENGRAM_CLOUD_AUTOSYNC": "0"}}}}))' "$SDD_MEMORY_DATA_DIR")"
-  printf -v MEM_EXPORT 'export OPENCODE_CONFIG_CONTENT=%q' "$MEM_CFG_JSON"
+  # ENGRAM_DATA_DIR too: the capture at the end of the job (ingest) and the MCP of any tool call read the same store.
+  printf -v MEM_EXPORT 'export OPENCODE_CONFIG_CONTENT=%q ENGRAM_DATA_DIR=%q' "$MEM_CFG_JSON" "$SDD_MEMORY_DATA_DIR"
 fi
 printf -v OC_ARGS_Q '%q ' "${OC_ARGS[@]}"
 INNER_CMD=$(cat <<EOF
