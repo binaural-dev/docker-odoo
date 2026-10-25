@@ -65,3 +65,14 @@ Restaura el backup `<archivo_backup>` en la base de datos `<base_de_datos>`, uti
 ## Harness SDD (scripts `sdd_*`)
 
 Los scripts `sdd_*`, los plugins de `opencode-plugins/` y los JSON de gobernanza son parte del flujo SDD → OpenCode. Mapa completo (que usar para cada necesidad, variables `SDD_*` y defaults): skill `sdd-harness-catalog` (`src/.opencode/skills/sdd-harness-catalog/SKILL.md`). Cada script debe tener dueno en `sdd-inventory.json`.
+
+### Memoria persistente (Engram)
+
+Memoria local y persistente para SDD, OpenCode y Claude Code. Convención de uso: skill `sdd-memory-protocol`.
+
+- Configuración local (sin nube, sin consultas de versión): `source scripts/engram-env.sh`. Sin ella, el CLI `engram` a mano consulta GitHub por actualizaciones.
+- Modo por job en OpenCode: `SDD_MEMORY_MODE=on|off` (default `off`) y `memory_ref:` en el `Context {}`. Ver `sdd_opencode_run.sh`.
+- Sembrar lecciones de la auto-memoria: `python3 scripts/sdd_memory_seed.py [--dry-run] [--no-project]`.
+- Captura de jobs terminados: `python3 scripts/sdd_memory_capture.py ingest JOB_DIR`; snapshot para un job: `snapshot --query Q --out P`.
+- Hooks de Claude Code (`.claude/settings.json`): `scripts/hooks/engram_claude_hook.py` registra la sesión (`SessionStart`), la cierra (`SessionEnd`) y guarda el cierre de los subagentes de escritura (`SubagentStop`).
+- Tests: `python3 -m unittest test_sdd_memory_capture test_sdd_memory_common test_engram_claude_hook` desde `scripts/`.
