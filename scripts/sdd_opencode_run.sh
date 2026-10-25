@@ -371,6 +371,23 @@ JOB_ID="sdd-$(date +%s%3N)"
 JOB_DIR="$JOBS_DIR/$JOB_ID"
 mkdir -p "$JOB_DIR"
 
+# Snapshot por job: with memory on and no memory_ref from the caller, the runner writes the snapshot into the job dir
+# and adds `memory_ref:` to the Context{} of the prompt, so the agent gets it through the prompt. Fail-open: if the
+# snapshot fails the job runs without it (memory is advisory) and the reason goes to memory-capture.log.
+if [[ "$MEMORY_MODE" == on && -z "$MEMORY_REF_CTX" ]]; then
+  SNAP_QUERY="$(extract_context_field memory_query)"
+  SNAP_QUERY="${SNAP_QUERY:-$(extract_context_field module)}"
+  SNAP_PATH="$JOB_DIR/memory-snapshot.md"
+  SNAP_CAPTURE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sdd_memory_capture.py"
+  SNAP_ARGS=(snapshot --query "${SNAP_QUERY:-docker-odoo}" --out "$SNAP_PATH")
+  [[ -n "${SDD_MEMORY_DATA_DIR:-}" ]] && SNAP_ARGS=(--data-dir "$SDD_MEMORY_DATA_DIR" "${SNAP_ARGS[@]}")
+  if python3 -I "$SNAP_CAPTURE_PY" "${SNAP_ARGS[@]}" >> "$JOB_DIR/memory-capture.log" 2>&1 && [[ -f "$SNAP_PATH" ]]; then
+    MEMORY_REF_CTX="$SNAP_PATH"
+    MEMORY_REF_SHA="$(sha256sum "$SNAP_PATH" | cut -d' ' -f1)"
+    PROMPT="$(awk -v ref="$SNAP_PATH" '{print} !done && /^[[:space:]]*Context[[:space:]]*\{/ {print "memory_ref: " ref; done=1}' <<<"$PROMPT")"
+  fi
+fi
+
 OUT="$JOB_DIR/output.log"
 STATUS_FILE="$JOB_DIR/status"
 EXIT_FILE="$JOB_DIR/exit_code"
