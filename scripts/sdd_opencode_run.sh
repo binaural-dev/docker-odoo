@@ -402,6 +402,7 @@ write_dispatch_handoff() {
     echo "lean: $LEAN_MODE"
     echo "memory: $MEMORY_MODE"
     if [[ -n "$MEMORY_REF_CTX" ]]; then echo "memory_ref: $MEMORY_REF_CTX"; echo "memory_ref_sha256: $MEMORY_REF_SHA"; fi
+    [[ -n "${SDD_MEMORY_DATA_DIR:-}" ]] && echo "memory_data_dir: $SDD_MEMORY_DATA_DIR"
     echo "priority: 50"
     echo "created_at: $(now_iso)"
     echo
@@ -520,6 +521,18 @@ OC_ARGS+=("$PROMPT")
 # its own exit code, then write status/exit_code/result.handoff — all inside
 # the detached session so it survives regardless of what happens to the shell
 # that launched tmux.
+# A/B isolation (optional SDD_MEMORY_DATA_DIR, unset = the global Engram store). The global OpenCode config fixes the
+# data dir of its engram MCP server; OPENCODE_CONFIG_CONTENT layers an override on top of it for this job only.
+MEM_EXPORT=""
+if [[ -n "${SDD_MEMORY_DATA_DIR:-}" ]]; then
+  [[ -d "$SDD_MEMORY_DATA_DIR" ]] || reject_dispatch "SDD_MEMORY_DATA_DIR not found: '${SDD_MEMORY_DATA_DIR}'"
+  MEM_CFG_JSON="$(python3 -c 'import json,os,sys
+d = sys.argv[1]
+b = os.environ.get("ENGRAM_BIN") or os.path.expanduser("~/.local/bin/engram")
+print(json.dumps({"mcp": {"engram": {"enabled": True, "type": "local", "command": [b, "mcp", "--tools=agent"],
+  "environment": {"ENGRAM_DATA_DIR": d, "ENGRAM_NO_UPDATE_CHECK": "1", "ENGRAM_CLOUD_AUTOSYNC": "0"}}}}))' "$SDD_MEMORY_DATA_DIR")"
+  printf -v MEM_EXPORT 'export OPENCODE_CONFIG_CONTENT=%q' "$MEM_CFG_JSON"
+fi
 printf -v OC_ARGS_Q '%q ' "${OC_ARGS[@]}"
 INNER_CMD=$(cat <<EOF
 # piped through tee (not "> \$OUT 2>&1") so the output is visible live in the
@@ -530,6 +543,7 @@ _start=\$(date +%s)
 export OPENCODE_CONFIG="$GUARD_CFG"
 export SDD_LEAN_MODE="$LEAN_MODE"
 export SDD_MEMORY_MODE="$MEMORY_MODE"
+$MEM_EXPORT
 # Inactivity watchdog: headless opencode can hang with no output (never-answered permission prompt, run that does
 # not exit, MCP startup hang). If $OUT has not been written for SDD_STALL_SECS, terminate opencode and flag the job
 # as stalled so the result carries cause=stalled instead of the job sitting in "running" until cleanup reaps it.
