@@ -108,6 +108,7 @@ Configurados en `~/.config/opencode/opencode.jsonc`; conectarse a ellos en vez d
 - **`postgres-db`**: solo lectura; si no conecta, ver AGENTS.md reglas 188 y 261.
 - **`openrag`**: búsqueda semántica y catálogo long-tail de skills (ver "Skills: where to look").
 - **Chatter de Odoo**: publicar SIEMPRE con la skill `core:escribir-en-chatter`, nunca `post_message` directo (AGENTS.md regla 228).
+- **`engram`**: memoria persistente local (binario v3.6.0, base `~/.local/share/binaural-engram`). Solo local, nunca Engram Cloud. Operación y copias: skill `engram-memory-operations` (long-tail). Reglas 321 y 323 de AGENTS.md.
 - **Detalle** (herramientas, caveats de `plugin:core:odoo` vs `claude_ai_Binaural_MCP`, módulo `mcp_server` que no es tooling): skill `docker-multi-mcp-servers`.
 
 ## Skills: where to look
@@ -138,6 +139,8 @@ skill `openrag`. `binaural-checker-kiosk` se excluyó del conjunto siempre carga
 `sdd-harness-catalog` (mapa de scripts `sdd_*`, plugins, hooks y variables `SDD_*` con sus defaults: que usar para despachar, vigilar, juzgar, medir, bloquear o diagnosticar) es long-tail (excluida en `skill-sync-exclude.txt`): se busca con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/sdd-harness-catalog/SKILL.md`. Regla 317 de AGENTS.md. Consultarla antes de crear un script o gate nuevo.
 
 **Busquedas largas o investigaciones profundas de codigo (mas de ~10 archivos o varios repos): delegarlas a OpenCode en vez de leerlas en esta sesion** (modelo de los agentes SDD con contexto de 1M y costo cero; verificado 2026-10-21). Job de solo lectura con `scripts/sdd_opencode_run.sh ... sdd-lead` (`environment: read-only-research`, `allowed_files` = un informe en `src/.sdd/reports/research/`), leer solo el informe y verificarlo por muestreo con `grep`. Para 1-3 archivos usar `grep`/`codebase-memory-mcp`. Solo codigo, nunca datos de clientes. Skill `sdd-research-delegation` (long-tail, excluida en `skill-sync-exclude.txt`: OpenRAG `odoo-skills-long-tail` o `src/.opencode/skills/sdd-research-delegation/SKILL.md`). Regla 318 de AGENTS.md.
+
+`engram-memory-operations` y `sdd-ab-round-method` son long-tail (excluidas en `skill-sync-exclude.txt`): se buscan con OpenRAG (`odoo-skills-long-tail`) o leyendo `src/.opencode/skills/<nombre>/SKILL.md`. Reglas 322 y 323 de AGENTS.md. Antes de correr una ronda A/B o de tocar la base de Engram, leerlas.
 
 ## SudoLang Cache Engine plugin (agent-prompt authoring, not user-facing)
 

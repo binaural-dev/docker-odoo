@@ -106,6 +106,11 @@ POS_PRODUCT_TPL = "src/odoo-19.0/addons/point_of_sale/static/src/app/models/prod
 # --------------------------------------------------------------------------------------
 CLASSIFY = {
     321: (PRESERVED, "scripts/engram-env.sh + scripts/sdd_memory_common.py + scripts/sdd_memory_capture.py + scripts/opencode-plugins/sdd-memory.js + scripts/hooks/engram_claude_hook.py", "redaccion, lista blanca de cabeceras, plugin con lista de agentes y hooks; pruebas en scripts/test_sdd_memory_*.py"),
+    322: (PRESERVED, "scripts/sdd_canary.sh + scripts/sdd_opencode_wait.sh + scripts/sdd_opencode_cleanup.sh", "rondas A/B: validez por celda y TTL de evidencia; método en skill sdd-ab-round-method"),
+    323: (PRESERVED, "scripts/engram-env.sh + scripts/sdd_memory_seed.py", "copias de base y ENGRAM_DATA_DIR fijado; detalle en skill engram-memory-operations"),
+    324: (UNKNOWN, "", "prompt por archivo `@<ruta>`, sin cadena inline; sin guardia de tamaño en el runner."),
+    325: (UNKNOWN, "", "limpieza fuera de dispatch y rondas; sin guardia en el cleanup."),
+    326: (UNKNOWN, "", "verificación literal manual de docs escritos por OpenCode."),
     3: (EXTERNAL, TOOLS_JSTRANS, "el transpilador JS de Odoo 19 es el que procesa `_t()`."),
     5: (PRESERVED, PRECOMMIT, ""),
     12: (

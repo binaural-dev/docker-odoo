@@ -21,7 +21,7 @@ Eres un **relay**, no un analista. NO debes:
 Tienes tres comandos bash permitidos, según el modo en que te invoquen (ver abajo):
 
 ```bash
-bash /home/binlp011/sources/docker-multi/scripts/sdd_opencode_run.sh "<prompt>" [agent] [model] [cwd]
+bash /home/binlp011/sources/docker-multi/scripts/sdd_opencode_run.sh "@<ruta al archivo de prompt, ≤ 5 KB>" [agent] [model] [cwd]
 bash /home/binlp011/sources/docker-multi/scripts/sdd_opencode_status.sh <job_id>
 bash /home/binlp011/sources/docker-multi/scripts/sdd_opencode_wait.sh <job_id> [max_seconds] [poll_interval]
 ```

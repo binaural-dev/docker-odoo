@@ -9,10 +9,10 @@
   "unknown"
  ],
  "counts": {
-  "preserved": 56,
+  "preserved": 58,
   "intentional-difference": 1,
   "bounded-external": 60,
-  "unknown": 204
+  "unknown": 207
  },
  "gaps": [],
  "families": {
@@ -913,7 +913,12 @@
     318,
     319,
     320,
-    321
+    321,
+    322,
+    323,
+    324,
+    325,
+    326
    ],
    "dispositions": {
     "bounded-external": [
@@ -973,7 +978,10 @@
      314,
      318,
      319,
-     320
+     320,
+     324,
+     325,
+     326
     ],
     "preserved": [
      264,
@@ -992,7 +1000,9 @@
      311,
      315,
      317,
-     321
+     321,
+     322,
+     323
     ]
    },
    "evidence": [
@@ -1006,12 +1016,16 @@
     "scripts/precommit",
     "scripts/run_tests.sh",
     "scripts/sdd-guardrails.json",
+    "scripts/sdd_canary.sh",
     "scripts/sdd_inventory_check.py",
     "scripts/sdd_judge_event.sh",
     "scripts/sdd_memory_capture.py",
     "scripts/sdd_memory_common.py",
+    "scripts/sdd_memory_seed.py",
+    "scripts/sdd_opencode_cleanup.sh",
     "scripts/sdd_opencode_config_sync_check.sh",
     "scripts/sdd_opencode_run.sh",
+    "scripts/sdd_opencode_wait.sh",
     "scripts/sdd_rules_check.py",
     "scripts/sdd_token_usage.py",
     "scripts/tests/test_sdd_lean_plugin.py",
@@ -2358,7 +2372,7 @@
    "evidence": "scripts/sdd_opencode_run.sh",
    "reason": "",
    "family": "### Testing l10n_ve & Controllers (2026-08-21)",
-   "title": "`scripts/sdd_opencode_run.sh` falla silenciosamente para prompts de dispatch mayores a ~15-18KB**: la línea `tmux -S \"$TMUX_SOCKET\" new-session -d -s \"$JOB_ID\" bash -c \"$INNER_CMD\"` tiene un límite duro de tmux sobre la longitud del comando (confirmado por binary search: falla con \"command too long\" desde ~18000 caracteres) — el job queda `status: running` para siempre, sin `output.log`, sin `exit_code`, sin ningún error visible (el fallo ocurre antes de que la sesión tmux exista). Mitigación actual: dividir el prompt en varios dispatches más pequeños (2-3 cambios de archivo por envío). Fix de raíz aplicado 2026-09-05: `scripts/sdd_opencode_run.sh` ahora soporta `\"@<ruta>\"` como primer argumento, leyendo el prompt de un archivo en vez de pasarlo como argumento posicional — ver regla 192 para el motivo adicional (independiente del límite de tmux) que terminó de justificar este fix. Skills `sdd-opencode-delegate-agent`, `sdd-opencode-guardrails`. Referencia: sesión `/crea-skills`, tarea 81463, 2026-09-03; fix aplicado en sesión de supervisión SDD/OpenCode, 2026-09-05."
+   "title": "Límite de tamaño del prompt de dispatch (medido 2026-10-25)** — `scripts/sdd_opencode_run.sh` escapa el prompt con `printf %q` y lo embebe en `INNER_CMD`, que viaja como argumento de `tmux new-session`. Medido: un `@<ruta>` de 10,6 KB falló con `command too long` y el job nunca arrancó; de 3,0 a 6,0 KB arrancaron y terminaron `done`. Regla: cada archivo de prompt ≤ 5 KB (`wc -c`); si la tarea no cabe, partirla en jobs por sección o archivo. Un fallo así deja el job en `running` hasta que `sdd_opencode_status.sh` lo marca `orphaned`; registrarlo con `sdd_error_report.py add --class infra`. Sustituye la cifra de ~15-18 KB de versiones anteriores. Detalle: regla 324 y skill `sdd-opencode-delegate-agent`."
   },
   "192": {
    "disposition": "preserved",
@@ -3037,7 +3051,7 @@
    "evidence": "scripts/sdd_opencode_run.sh",
    "reason": "",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
-   "title": "Un job de OpenCode puede colgarse en plena prueba de mutación dejando la mutación puesta en el árbol** — caso `sdd-1791555935028` (2026-10-09): su `./odoo test ... | rg ...` excedió el timeout del shell (1200000 ms) y el job quedó `running` sin avanzar con `return None  # MUTATION M1` en `controllers/main.py`; `sdd_opencode_wait.sh` no devuelve `exit_code` mientras el job no sea terminal. Protocolo: (1) si el `tail` del job no cambia entre dos `wait` de ~10 min, `pkill -f <job_id>` y tomar el control; (2) `grep -rn \"MUTATION\" <worktree>` antes de cualquier commit y restaurar el fix a mano; (3) en el prompt exigir que cada mutación se aplique y se revierta en UN solo comando (copia `.good` y `cp` de vuelta) y con `timeout`; (4) matar los `odoo test` huérfanos y borrar las BDs `test_*` colgadas (`pg_terminate_backend` + `DROP DATABASE`). Ver `sdd-opencode-delegate-agent` y `sdd-opencode-guardrails`."
+   "title": "Un job de OpenCode puede colgarse en plena prueba de mutación dejando la mutación puesta en el árbol** — caso `sdd-1791555935028` (2026-10-09): su `./odoo test ... | rg ...` excedió el timeout del shell (1200000 ms) y el job quedó `running` sin avanzar con `return None  # MUTATION M1` en `controllers/main.py`; `sdd_opencode_wait.sh` no devuelve `exit_code` mientras el job no sea terminal. Protocolo: (1) si el `tail` del job no cambia entre dos `wait` de ~10 min, matar solo el proceso `opencode` del job, por PID (no `pkill -f`: el argv de tmux y de tu propia shell contienen el job_id y puedes matarte a ti mismo; regla 302), y tomar el control; (2) `grep -rn \"MUTATION\" <worktree>` antes de cualquier commit y restaurar el fix a mano; (3) en el prompt exigir que cada mutación se aplique y se revierta en UN solo comando (copia `.good` y `cp` de vuelta) y con `timeout`; (4) matar los `odoo test` huérfanos y borrar las BDs `test_*` colgadas (`pg_terminate_backend` + `DROP DATABASE`). Ver `sdd-opencode-delegate-agent` y `sdd-opencode-guardrails`."
   },
   "289": {
    "disposition": "unknown",
@@ -3261,7 +3275,7 @@
    "evidence": "",
    "reason": "",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
-   "title": "Revisar jobs huérfanos antes de cada dispatch a OpenCode** — antes de despachar, recorrer `src/.sdd/logs/jobs/*/status` y buscar jobs en `running` sin proceso `opencode` ni sesión tmux viva (`tmux -S /tmp/sdd-tmux/sdd.sock ls`). Un job así se marca `orphaned` (escribir `orphaned` en su `status`) y se registra con `scripts/sdd_error_report.py add`; solo entonces se despacha. Un job `running` bloquea el dispatch de un prompt idéntico (bloqueo de duplicados), por eso el huérfano debe cerrarse antes. No usar `pkill -f` con rutas de job mientras hay un job activo."
+   "title": "Revisar jobs huérfanos antes de cada dispatch a OpenCode** — antes de despachar, recorrer `src/.sdd/logs/jobs/*/status` y buscar jobs en `running` sin proceso `opencode` ni sesión tmux viva (`tmux -S /tmp/sdd-tmux/sdd.sock ls`). Un job así se marca `orphaned` (lo escribe `sdd_opencode_status.sh` al consultarlo; no hace falta escribirlo a mano) y se registra con `scripts/sdd_error_report.py add`; solo entonces se despacha. Un job `running` bloquea el dispatch de un prompt idéntico (bloqueo de duplicados), por eso el huérfano debe cerrarse antes. No usar `pkill -f` con rutas de job mientras hay un job activo."
   },
   "321": {
    "disposition": "preserved",
@@ -3269,6 +3283,41 @@
    "reason": "redaccion, lista blanca de cabeceras, plugin con lista de agentes y hooks; pruebas en scripts/test_sdd_memory_*.py",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
    "title": "Memoria persistente Engram: local, redactada y sin volátiles en el system prompt** — Engram (binario v3.6.0 sin modificar, base `~/.local/share/binaural-engram`) guarda decisiones y avances del harness y nada sale de la máquina: `scripts/engram-env.sh` fija `ENGRAM_CLOUD_AUTOSYNC=0` y no define `ENGRAM_CLOUD_*`. Solo los editores del pipeline (`sdd-spec`, `sdd-architect`, `sdd-pm`, `sdd-builder`) reciben `scripts/memory-protocol.md` en el system prompt, por `scripts/opencode-plugins/sdd-memory.js`; `sdd-lead`, `sdd-judge`, `sdd-qc` y el runner no lo reciben nunca. El contexto volátil de un job (snapshot de memoria) va por `memory_ref:` y el agente lo lee con `Read`, nunca en el system prompt. `memory: on|off` se fija por job (default `SDD_MEMORY_MODE=off`) y se registra en `dispatch.handoff` y `metrics.jsonl` con el sha256 del snapshot. Todo lo que se persiste pasa por `redact()` (secretos, `<private>`, datos de clientes, tickets), la captura lee solo cabeceras en lista blanca (nunca `output.log` ni la cola del resultado) y las escrituras pasan un `session_id` explícito. Con `off` no se inyecta protocolo ni snapshot, pero las herramientas Engram siguen disponibles a los agentes que las declaran en `permission`/`tools`. Al terminar un subagente de escritura (`SubagentStop`), el hook guarda su mensaje de cierre redactado y acotado en bytes; los de solo lectura (`sdd-judge`, `sdd-pm`, `sdd-qc`) nunca. Ver `src/specs/engram-memory/spec.md`."
+  },
+  "322": {
+   "disposition": "preserved",
+   "evidence": "scripts/sdd_canary.sh + scripts/sdd_opencode_wait.sh + scripts/sdd_opencode_cleanup.sh",
+   "reason": "rondas A/B: validez por celda y TTL de evidencia; método en skill sdd-ab-round-method",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Rondas A/B del harness: pre-registro, validez por celda y medición verificable** — Antes de afirmar que un cambio del harness ahorra o no afecta tokens, tiempo o tests: pre-registro en `src/.sdd/reports/` antes de despachar; un worktree y una base de memoria por celda; cada celda `on` es válida solo si su builder hijo existe y leyó el snapshot; tokens sumados de `opencode export` (nunca desde `output.log`); rúbrica ejecutada por el orquestador. Con N menor que 3 no se propone adopción. Durante una ronda, `sdd_opencode_cleanup.sh --older-than 72` como mínimo. Método completo y errores conocidos: skill `sdd-ab-round-method` (long-tail)."
+  },
+  "323": {
+   "disposition": "preserved",
+   "evidence": "scripts/engram-env.sh + scripts/sdd_memory_seed.py",
+   "reason": "copias de base y ENGRAM_DATA_DIR fijado; detalle en skill engram-memory-operations",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Base de Engram: copias con `.backup`, `ENGRAM_DATA_DIR` fijado y conteo antes y después** — Ninguna prueba escribe en `~/.local/share/binaural-engram/engram.db`: se copia con `sqlite3 \".backup\"` y se fija `ENGRAM_DATA_DIR` en el mismo proceso. Sin esa variable el CLI escribe en `~/.engram`. Contar las filas de la base real antes y después de cualquier prueba. Las búsquedas no normalizan acentos: las observaciones llevan `keywords:` en ASCII. Detalle: skill `engram-memory-operations` (long-tail). Extiende la regla 321."
+  },
+  "324": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "prompt por archivo `@<ruta>`, sin cadena inline; sin guardia de tamaño en el runner.",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Dispatch a OpenCode: prompt por archivo `@<ruta>`, nunca inline ni con `$(cat)`** — la forma es `bash scripts/sdd_opencode_run.sh \"@<ruta>\" sdd-lead \"\" \"<raíz del repo>\"`. El texto inline lo retipea el relay, que puede truncarlo sin error, y `\"$(cat archivo)\"` vuelve a superar el límite de tmux (regla 191). Antes de despachar, `wc -c <archivo>` ≤ 5120 bytes. Tras despachar, `sdd_opencode_status.sh <job>` a los 30 s: `running` sin `output.log` ni sesión tmux es un fallo de arranque, no una espera. No reintentar el mismo prompt dentro de los 90 s del bloqueo de duplicados (`LOCK_WINDOW_S`). Checklist: skill `sdd-opencode-delegate-agent`, sección \"Checklist antes de cada dispatch\"."
+  },
+  "325": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "limpieza fuera de dispatch y rondas; sin guardia en el cleanup.",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "La limpieza de jobs no va antes de cada dispatch** — `sdd_opencode_cleanup.sh` tiene TTL por defecto de 6 h y borra job dirs vencidos, con lo que se pierde la evidencia de rondas A/B (regla 322) y de diagnósticos (regla 312). Ejecutarla solo cuando haga falta espacio, con `--older-than 72` como mínimo, y nunca mientras un prereg o un diagnóstico citen jobs del periodo. Los pasos `--older-than 6` de `/crea-skills` y de `sdd-research-delegation` quedan retirados. Incidente 2026-10-25: se borraron 36 job dirs con `--older-than 72` sin revisión previa; no es reversible."
+  },
+  "326": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "verificación literal manual de docs escritos por OpenCode.",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Verificar literal cada job que escribe skills, reglas o docs** — un job de OpenCode introduce errores mecánicos conocidos: comillas con barra invertida delante (rompen los ejemplos de shell), filas omitidas porque el grep encontró el nombre del script y no el comando completo con sus flags, y texto duplicado o cortado. Tras cada job: comparar cada bloque literal del prompt con el archivo (diff o grep de la línea exacta), corregir con Edit lo que falle y no redespachar por un typo. El prompt debe decir \"copia tal cual\" y dar el comando completo con sus flags. Checklist: skill `sdd-opencode-delegate-agent`."
   }
  }
 }

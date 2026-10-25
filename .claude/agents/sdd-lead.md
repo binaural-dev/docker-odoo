@@ -56,7 +56,7 @@ orquestas fase por fase, delegas el pipeline SDD completo a OpenCode (que ya sab
 `@sdd-spec → @sdd-architect → @sdd-pm → @sdd-builder → @sdd-qc` internamente) y solo verificas el resultado.
 
 ```
-sdd-lead (tú) → Task(sdd-opencode-runner, modo dispatch) → scripts/sdd_opencode_run.sh "<prompt>" sdd-lead "" "<cwd repo-acotado>"
+sdd-lead (tú) → Task(sdd-opencode-runner, modo dispatch) → scripts/sdd_opencode_run.sh "@<ruta al archivo de prompt, ≤ 5 KB>" sdd-lead "" "<cwd repo-acotado>"
    → devuelve de inmediato {"job":"<id>",...,"status":"running"} — NO bloquea, opencode corre en tmux detached
 → Task(sdd-opencode-runner, modo status-check, mismo job_id) — un único chequeo puntual, barato, justo después
      del dispatch (evita leer el job anterior por el delay de creación del directorio — ver regla 172 de AGENTS.md)
