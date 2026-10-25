@@ -171,9 +171,20 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile)
     if db_conf.get("create_container", True):
         depends.append(f"db-{db_name}")
 
+    # An instance can run the Odoo core from the workspace (e.g. "src/odoo-19.0")
+    # instead of the Debian package baked into the image. Running odoo-bin from
+    # that path puts the core dir first on sys.path, so `import odoo` picks it up.
+    # odoo-core-run also drops the Debian addons namespace entry (see the script).
+    # Falls back to the image's `odoo` command when not set.
+    odoo_core = inst_conf.get("odoo_core")
+    if odoo_core:
+        command = f"/usr/local/bin/odoo-core-run /home/odoo/src/{odoo_core.removeprefix('src/')}/odoo-bin --dev=all"
+    else:
+        command = "odoo --dev=all"
+
     lines = [
         f"  {container_name}:",
-        "    command: odoo --dev=all",
+        f"    command: {command}",
         "    restart: always",
         f"    container_name: {container_name}",
         "    build:",

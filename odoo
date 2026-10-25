@@ -472,7 +472,15 @@ def bash_update_modules(config, instance, dbname, modules="all", force_all=False
         force_flag = " --update-all" if force_all else ""
         cmd = f"docker exec -u root -it {container} click-odoo-update --if-exists{force_flag} -d {dbname}"
     else:
-        cmd = f"docker exec -u root -it {container} odoo --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
+        # Instances with odoo_core run the core's odoo-bin through odoo-core-run, same as the
+        # compose command and ./odoo test. A bare `odoo` can resolve to the dist-packages copy.
+        odoo_core = config["instances"][instance].get("odoo_core")
+        odoo_bin = (
+            f"/usr/local/bin/odoo-core-run /home/odoo/src/{odoo_core.removeprefix('src/')}/odoo-bin"
+            if odoo_core
+            else "odoo"
+        )
+        cmd = f"docker exec -u root -it {container} {odoo_bin} --stop-after-init -p 90 --workers=0 -u {modules} -d {dbname}"
     print(cmd)
     return os.system(cmd)
 
@@ -1976,6 +1984,9 @@ def main():
         ]
         if args.db:
             cmd += ["-d", args.db]
+        odoo_core = config["instances"][args.instance].get("odoo_core")
+        if odoo_core:
+            cmd += ["--odoo-bin", f"/home/odoo/src/{odoo_core.removeprefix('src/')}/odoo-bin"]
         if args.tags != "all":
             cmd += ["--tags", args.tags]
         if args.recursive:

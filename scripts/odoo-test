@@ -238,6 +238,7 @@ configurado (no lo requiere: no toca la config de logging de Odoo).
 import atexit
 import json
 import os
+import sys
 import threading
 import time
 import traceback
@@ -264,6 +265,13 @@ ENGAGED_MARKER = "===CICD_TEST_HOOK_ENGAGED==="
 # toda la cadena) identifica al proceso real de Odoo sin importar si llego a
 # engancharse con algun test.
 _IS_MAIN = os.environ.get("CICD_TEST_HOOK_ROLE") == "main"
+
+# El core del workspace debe ir primero en sys.path ANTES de importar odoo:
+# sin esto, este import resuelve odoo.tests/odoo.sql_db desde el paquete Debian
+# (dist-packages) y la corrida mezcla dos cores. ./odoo test exporta la ruta.
+_CORE_DIR = os.environ.get("ODOO_CORE_RUN_CORE_DIR")
+if _CORE_DIR and _CORE_DIR not in sys.path:
+    sys.path.insert(0, _CORE_DIR)
 
 try:
     import odoo.tests.loader as _loader
@@ -1180,8 +1188,12 @@ def execute_test_run(container, label, closure, test_tags, db_name, args, module
             "en vez de -i para forzar la recarga de codigo y tests."
         )
 
+    # Siempre el core del workspace (src/odoo-19.0), nunca el paquete Debian:
+    # odoo-core-run quita del namespace odoo.addons la copia de dist-packages.
+    odoo_bin = args.odoo_bin or "/home/odoo/src/odoo-19.0/odoo-bin"
+    odoo_entry = f"/usr/local/bin/odoo-core-run {odoo_bin}"
     odoo_cmd = (
-        f"odoo --test-tags {test_tags} -d {db_name} {install_flag} {modules_str} "
+        f"--test-tags {test_tags} -d {db_name} {install_flag} {modules_str} "
         "--without-demo=True --stop-after-init --workers 0 --no-http "
         f"--http-port={http_port} --gevent-port={gevent_port} "
         "-c /home/odoo/.config/odoo.conf"
@@ -1197,13 +1209,17 @@ def execute_test_run(container, label, closure, test_tags, db_name, args, module
     hook_env = (
         f"export PYTHONPATH={HOOK_CONTAINER_DIR}:$PYTHONPATH; "
         f"export CICD_TEST_REPORT_PATH={container_test_report_path}; "
+        f"export ODOO_CORE_RUN_CORE_DIR={os.path.dirname(odoo_bin)}; "
     )
     inner_cmd = (
         f"{hook_env}"
         "pip3 install --quiet coverage && python3 -m coverage erase && "
         "CICD_TEST_HOOK_ROLE=main "
+        # Sin dist-packages: el paquete Debian de odoo colaria addons en el namespace
+        # odoo.addons (y se recalcula al invalidar caches). Core en src/odoo-19.0.
+        "PYTHONPATH=\"$(printf %s \"$PYTHONPATH\" | tr : '\\n' | grep -v dist-packages | paste -sd:)\" "
         f"python3 -m coverage run --rcfile=/home/odoo/.coveragerc --source={source_paths} "
-        f"/usr/bin/{odoo_cmd}; "
+        f"{odoo_entry} {odoo_cmd}; "
         f"test_rc=$?; python3 -m coverage report -m; {json_step}exit $test_rc"
     )
     full_cmd = ["docker", "exec", "-u", "root", container, "bash", "-c", inner_cmd]
@@ -1219,7 +1235,7 @@ def execute_test_run(container, label, closure, test_tags, db_name, args, module
     print(f"    CICD_TEST_HOOK_ROLE=main \\")
     print(f"    python3 -m coverage run --rcfile=/home/odoo/.coveragerc \\")
     print(f"      --source={source_paths} \\")
-    print(f"      /usr/bin/{odoo_cmd};")
+    print(f"      {odoo_entry} {odoo_cmd};")
     print(f"    python3 -m coverage report -m")
     if coverage_json_dest:
         print(f"    python3 -m coverage json -o {container_json_path}")
@@ -1343,6 +1359,11 @@ def run_command():
              "uso en automatizacion/CI, donde no hay una terminal esperando "
              "un input() -- sin esto, --recursive se cuelga o revienta con "
              "EOFError al correr sin stdin interactivo."
+    )
+    parser.add_argument(
+        "--odoo-bin", default=None,
+        help="odoo-bin a ejecutar dentro del contenedor (instancias con odoo_core, "
+             "ej. /home/odoo/src/odoo-19.0/odoo-bin). Por defecto: /home/odoo/src/odoo-19.0/odoo-bin."
     )
     parser.add_argument(
         "--no-rm-db", action="store_true",

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Manual: Re-vincular cuentas contables (Odoo.sh)</title>
+<style>
+:root{--ink:#1f2933;--muted:#5f6c7b;--line:#dfe4ea;--bg:#f6f8fa;--brand:#1d4e89;--ok:#1e7b4b;--warn:#a15c00;--bad:#b3261e}
+*{box-sizing:border-box}body{font:16px/1.6 system-ui,Segoe UI,Roboto,sans-serif;color:var(--ink);margin:0;background:#fff}
+.wrap{max-width:860px;margin:0 auto;padding:32px 22px 64px}
+header{display:flex;align-items:center;gap:18px;border-bottom:3px solid var(--brand);padding-bottom:18px;margin-bottom:26px}
+header img{width:72px;height:72px;border-radius:10px}
+h1{font-size:26px;margin:0;color:var(--brand)}header p{margin:2px 0 0;color:var(--muted)}
+h2{font-size:21px;margin:38px 0 10px;color:var(--brand);border-bottom:1px solid var(--line);padding-bottom:6px}
+h3{font-size:17px;margin:22px 0 6px}
+.box{border-left:5px solid;border-radius:6px;padding:12px 16px;margin:16px 0;background:var(--bg)}
+.box.ok{border-color:var(--ok)}.box.warn{border-color:var(--warn)}.box.bad{border-color:var(--bad)}.box.info{border-color:var(--brand)}
+.box b.t{display:block;margin-bottom:2px}
+pre{background:#10202f;color:#e8eef5;padding:14px 16px;border-radius:8px;overflow:auto;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace}
+code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:.92em}pre code{background:none;padding:0}
+ol.steps{counter-reset:s;list-style:none;padding:0}
+ol.steps>li{counter-increment:s;position:relative;padding:4px 0 14px 46px}
+ol.steps>li:before{content:counter(s);position:absolute;left:0;top:2px;width:32px;height:32px;border-radius:50%;background:var(--brand);color:#fff;text-align:center;line-height:32px;font-weight:700}
+table{border-collapse:collapse;width:100%;margin:12px 0}th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}th{background:var(--bg)}
+footer{margin-top:44px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:12px}
+@media print{pre{white-space:pre-wrap}.wrap{padding:0}}
+</style></head><body><div class="wrap">
+
+<header><img alt="Binaural" src="data:image/jpeg;base64,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al9ORvlkLeaHEWDKbwdaKBPvSMFsFGA2ddpv0527OL1fSz1NS+nI3yyHt80OIsGU3g6vv063MRulPl59dpv0527OL1fSz1NS+nI3yyGr5ocRYMpvB9q1lYu7xjiPFmeu036c7dnF6vpZ6mpfTkb5ZDX80OIsGU3g2WsrF3eMcR4sz17z1bmeOU7ubwu9OXUiurRdCdsULcX/AEe4PT1CCSJ8Ra43yUz9nL55HPXTlDlBN1jFC3Fmcu5PT1CCSJ8Ra43yUzdnN/Bz1Ur+UI91jFA3Fmcu6NDPGssTYqwsX5OqOb/Kmw/W2ylEg81lX+7bxIqYebyX/tfZZqg++TjDSHQHw/GP/8QAKhABAAAFAQcEAwEBAAAAAAAAAQARIUFRMSAwYXGBsfAQQJGhweHxYNH/2gAIAQEAAT8h/wBYC95nIGVil7B/KS9CXGE2GCPzL2glnHcjBYDxrzadFeHtH06akEYn7lPOX5bCNnTEkjDin0m6PDO/PX2L6dNSCHiY0r5yLbUpECRKYmmfA++evsGvQkyfzDruFVOpJPqiXz9/I++eu/v/AJFA9vDaJdaVVW2q1Ko51/MaRL5+/kffPXf3/wAige3htEutKqrZUqjNzw9dIl8/fyPvnrv7/wCRQPbw2iXWlVV69tiv3HcLLjsaQ1qm1n/c9hf/ACKB7eG0S60qqo7bFfuO4WXHaZRmSC9x1JwYpNEx9hUWoxM7QMM2fiJHVFEvuEjrTfhv6ByobVZcDMOZf0FgsESI+ImRYgJNohKA4TdYF2RgOG+oHKhtVlwMw5l/QWCwesiPiJkWICTZP0nAqLXrtw576gcqG1WXAzDmX9BYLBsyI+ImRYgJPXlpD/Bwv33tA5UNqsuBmHMv6CwWDbkR8RMixASRy0h/g4X777Te+JYJLjHXcsbkyv4MF+Wu/NeEktxMPGK7yaf6G24eZXSf0L8tdPYmvCSW4mHjEiKehR7GyVyYUjpP6F+WunswkLKfDBHg1ro5GvyPOJH4O37DAIvEULWgdSl4X9f9j//aAAwDAQACAAMAAAAQ888888888888888888888888888884HPd888888888F88+Z88888888b+87OR88888888b/n8s488888885h988m8888885DCT97X888888CCCCSH8888888aLCGG888888888Nd888888888888888888888888888888888//EACkRAQAABQMCBQUBAAAAAAAAAAEAESExQRBRYTDBIHGBkfBAULHR4fH/2gAIAQMBAT8Q+ue0OeD49K2W1AKswFTERmTIHnZzmt+hfF9WTkCLrSX3rGQ1kzw87OfO/Qvi8MnIXiQigsd3n8ap2nKJ7jb1onQepIIdnRYN+XmERk6zWOh61fnn43qSCJFKGx3dDH+iERkwfPzcBuxg7u7uXxsj2Hd8CPRycS3flYPhXLlfljHQn0obPZ4h+Ek0AB/I9xDv0j5TOcwGzn7j9RS2PsP/xAAnEQEAAAQEBQUBAAAAAAAAAAABABEhQRAxUWEgMHGxwUCRodHwUP/aAAgBAgEBPxD1ucBL4IXJQc5ppyhJm9sRRmQyQoghbc21LdOT++lAzqYGc1gxOQSivOlzTc21LdOT++lAgZrE9NVm+DECMqstEz++QGKawJrNZumxtwSlyr24wxTWJ+avN8G3fCRRwRJ0LroRdayNDTjPoAq+Dz88D9qWLroQifoWDkS01eZ5N+8AHmsEr9C66Eex0sHKenK2t7QqSAbyfuKjT+9v4P8A/8QAJxABAAIABAYCAwEBAAAAAAAAAREhADFBsSBAUWFxgRAwkaHBYPD/2gAIAQEAAT8Q/wBY4+Y00lRQBauEvigycqZB6qtMFicZMe8B/DFr9imOslXtB6wP88tXWJdelQlHKBW6+GWriIUCZKaE01Sil6PkO0nATIiWI64NqxNEGv0aaOdJ5IFbr4ZauJ7OUkNov+Vt5cLvCB0RnAbtDpQhujIfB5EVj9sSUOprcAllk43ghQDdQYAGAHoBP0fB5AfA3CQljma8idRRehOGE3GkSkRFHjMuCQzFrMBUIojImZgAYAegE/R8HkB8DcJCWOZryJ1FF6E4YTcaRKREUeFwyRRXR769p7YCPgVCKIyJmYAGAHoBP0fB5AfA3CQljma8idRRehOGE3GkSkRFH5sW4XKPQ6rQwCk3tap1XgFQiiMiZmGFT/U6t1ql1EcxeQfA3CQljma8idRRehOGE3GkSkRFHFi3C5R6HVaGAUm9rVOq8RAHg0veD3gJhQMkbHkH+ATGi2JBUbkBMqA0XWF6q6vX6JzJifW773bwYcuwJ9CVxeWM5H2BG6ri9jPD/TfAECTqOJuCkBNAV2CV7GOx8kgQH4PudvBhy7An0JXF5YzkfYEbqvzexnh/pvgCBJ1HCcanEhLDRFdxdH3O3gw5dgT6Eri8sZyPsCN1XhvYzw/03wBAk6j5dxIjzAE+4u5rAAACA+128GHLsCfQlcXljOR9gRuq8d7GeH+m+AIEnUYdxIjzAE+4u5rAAACA+5WD2qiWBQdFJImWPoEW1iLMBy/suTAAACA+/InvNWjZg2CxxZdYajOigMzJLNQ4nUePbJD2XuchgAACAyDkcie81aNmDYLHD9j4qudVAaZISahwM+YQNWaHsvc5DAAAEBkHJw/yQP4ckbEsbLw2mUeNTIOgjrg5NGLR6/UYa6Gyw7Fz+POF0uCZeTMyOrdEB/2P/9k=">
+<div><h1>Manual: re-vincular cuentas contables</h1><p>Guía para consultores · Odoo 19 · Localización Venezuela (<code>ve</code>) · Odoo.sh</p></div></header>
+
+<h2>1. ¿Para qué sirve este script?</h2>
+<p>A veces una empresa en Odoo <b>pierde el "enlace" interno</b> entre sus cuentas contables y el plan de cuentas oficial de Venezuela. Las cuentas siguen visibles, pero Odoo ya no las reconoce como las del plan; por eso algunas funciones (impuestos, diarios, reportes) fallan o piden cargar el plan otra vez.</p>
+<p>El script <b>vuelve a conectar</b> esas cuentas con el plan. Si alguna cuenta del plan realmente no existe, la crea de nuevo.</p>
+<div class="box info"><b class="t">Una analogía sencilla</b>Piense en un archivador con carpetas (las cuentas) y un índice (los enlaces). Si el índice se borra, las carpetas siguen ahí, pero nadie las encuentra. El script reconstruye el índice y solo crea una carpeta nueva si de verdad falta.</div>
+
+<h2>2. ¿Es seguro? ¿Duplica cuentas?</h2>
+<p>En el caso normal <b>no duplica</b>. Antes de crear una cuenta, Odoo la busca de tres maneras:</p>
+<ol>
+<li>Por su identificador interno (el "enlace").</li>
+<li>Si no lo encuentra, por su <b>código</b> (por ejemplo <code>1.1.01.001</code>). Si hay una cuenta con ese código, la re-vincula en vez de crear otra.</li>
+<li>Como último respaldo, Odoo <b>prohíbe</b> tener dos cuentas con el mismo código en una empresa: si algo intentara duplicarla, el proceso falla con un error y no se guarda nada.</li>
+</ol>
+<div class="box ok"><b class="t">Condición para que esto aplique</b>La empresa debe tener ya instalado el plan <code>ve</code>. Se comprueba en el paso 4 de la sección 5.</div>
+<div class="box warn"><b class="t">Ojo: "force_create=True" no se limita a las cuentas</b>Esa opción también puede recrear <b>impuestos, grupos de impuestos, diarios y posiciones fiscales</b> que falten. Por eso se prueba primero en staging y se comparan los números antes y después (sección 5).</div>
+
+<h2>3. ¿Por qué a veces sí se duplican cuentas?</h2>
+<p>El análisis del caso Donarca detectó dos causas probables. Ambas rompen el enlace y el script entonces no reconoce la cuenta:</p>
+<table><tr><th>Causa</th><th>Qué pasa</th></tr>
+<tr><td><b>Instalar y desinstalar el módulo <code>l10n_ve_binaural</code></b></td><td>Al instalarlo crea cuentas propias. Al desinstalarlo <b>no las borra</b>; quedan en la base de datos.</td></tr>
+<tr><td><b>Borrar cuentas a mano</b></td><td>Al eliminar cuentas manualmente se pierde el enlace. Al correr el script, Odoo no las encuentra y vuelve a crearlas.</td></tr></table>
+<p>Lo más probable en el caso reportado: alguien eliminó cuentas contables en el ambiente de release y se perdió el enlace.</p>
+
+<h2>4. Antes de empezar (checklist)</h2>
+<ul>
+<li>☐ Tener acceso a <b>Odoo.sh</b> con permisos sobre la rama de staging.</li>
+<li>☐ Saber el <b>nombre de la empresa</b> a corregir (se corrige una por una).</li>
+<li>☐ Confirmar que nadie está <b>borrando cuentas ni instalando módulos</b> mientras se hace esto.</li>
+<li>☐ Tener un <b>respaldo reciente</b> de producción (Odoo.sh → Backups).</li>
+</ul>
+<div class="box bad"><b class="t">Regla de oro</b>Nunca ejecutar primero en producción. Siempre <b>primero en staging</b>, verificar, y solo entonces repetir en producción.</div>
+
+<h2>5. Paso a paso</h2>
+<ol class="steps">
+<li><b>Preparar staging con datos reales.</b> En Odoo.sh, abra la rama de <b>staging</b> y reconstruya la base desde un respaldo de producción (<i>Backups → Restore / Import</i>, o cree el staging desde producción). Así prueba con los mismos datos que tiene el cliente.</li>
+<li><b>Abrir la Shell.</b> En Odoo.sh entre a la rama de staging → build activo → pestaña <b>Shell</b>. Aparece una terminal; espere el símbolo <code>&gt;&gt;&gt;</code>.</li>
+<li><b>Encontrar el ID de la empresa.</b> Copie y pegue:
+<pre><code>for c in env['res.company'].search([]):
+    print(c.id, c.name, c.chart_template)</code></pre>
+Anote el <b>ID</b> de la empresa a corregir.</li>
+<li><b>Confirmar que usa el plan <code>ve</code>.</b> En la lista anterior, la tercera columna debe decir <code>ve</code>. Si dice otra cosa o está vacía, <b>detenga el proceso</b> y consulte al equipo técnico: el caso ya no es el "simple" descrito en este manual.</li>
+<li><b>Tomar una "foto" antes.</b> Cambie <code>2</code> por el ID de su empresa:
+<pre><code>company = env['res.company'].browse(2)   # ID de la empresa
+Model = {m: env[m].with_company(company) for m in
+         ('account.account','account.journal','account.tax','account.fiscal.position')}
+antes = {m: r.search_count([('company_ids', 'in', company.id)] if m == 'account.account'
+         else [('company_id', '=', company.id)]) for m, r in Model.items()}
+print(antes)</code></pre>
+Guarde el resultado (cópielo a un bloc de notas).</li>
+<li><b>Ejecutar el script del gist.</b>
+<pre><code>env['account.chart.template'].with_company(company)._load(
+    've', company, install_demo=False, force_create=True
+)</code></pre>
+<i>Todavía no guarde nada:</i> hasta aquí los cambios son temporales.</li>
+<li><b>Tomar la foto después y comparar.</b>
+<pre><code>despues = {m: r.search_count([('company_ids', 'in', company.id)] if m == 'account.account'
+           else [('company_id', '=', company.id)]) for m, r in Model.items()}
+print(antes); print(despues)
+
+# Códigos de cuenta repetidos (debe salir vacío)
+from collections import Counter
+codes = Counter(env['account.account'].with_company(company).search(
+    [('company_ids', 'in', company.id)]).mapped('code'))
+print([c for c, n in codes.items() if n &gt; 1])</code></pre></li>
+<li><b>Decidir.</b>
+<table><tr><th>Resultado</th><th>Qué hacer</th></tr>
+<tr><td>Números iguales o con pocas cuentas nuevas (las que faltaban) y <b>lista de repetidos vacía</b></td><td>Todo bien. Ejecute <code>env.cr.commit()</code> para guardar.</td></tr>
+<tr><td>Aparecen muchas cuentas nuevas, impuestos o diarios que no esperaba, o códigos repetidos</td><td>Ejecute <code>env.cr.rollback()</code> (descarta todo) y <b>no continúe</b>. Avise al equipo técnico con las dos "fotos".</td></tr></table></li>
+<li><b>Validar a mano en staging.</b> Revise en Contabilidad: <i>Plan de cuentas</i> (sin duplicados), <i>Diarios</i>, <i>Impuestos</i>, y cree una factura de prueba. Pida al cliente que confirme.</li>
+<li><b>Repetir en producción.</b> Solo si el staging salió bien: haga un respaldo de producción, <b>repita los pasos 2 a 9</b> con el ID de la empresa en producción, en un horario de poco uso.</li>
+<li><b>Si el cliente tiene varias empresas</b>, repita para <b>cada una</b>, una por una, cambiando el ID.</li>
+</ol>
+<div class="box info"><b class="t">Sobre el script original</b>El gist original ejecuta el <code>_load</code> y hace <code>env.cr.commit()</code> inmediatamente. Este manual separa el guardado para que usted pueda revisar antes de confirmar. Los pasos 5, 7 y 8 son lecturas de seguridad; no modifican datos.</div>
+
+<h2>6. Cómo evitar inconvenientes</h2>
+<table><tr><th>No haga</th><th>Haga</th></tr>
+<tr><td>Ejecutar directo en producción</td><td>Probar siempre en staging con una copia reciente</td></tr>
+<tr><td>Borrar cuentas contables a mano para "limpiar"</td><td>Archivar la cuenta, o consultar al equipo técnico</td></tr>
+<tr><td>Instalar/desinstalar <code>l10n_ve_binaural</code> repetidamente</td><td>Instalarlo una sola vez, planificado</td></tr>
+<tr><td>Correr el script en varias empresas a la vez</td><td>Una empresa por ejecución</td></tr>
+<tr><td>Guardar (<code>commit</code>) sin comparar números</td><td>Comparar antes/después y recién guardar</td></tr>
+<tr><td>Ignorar un error rojo</td><td>Hacer <code>env.cr.rollback()</code> y reportarlo con el texto completo del error</td></tr></table>
+
+<h2>7. Si algo sale mal</h2>
+<ul>
+<li><b>Aparece un error (<code>ValidationError</code>, código duplicado, etc.):</b> es la protección de Odoo funcionando. No se guardó nada. Ejecute <code>env.cr.rollback()</code> y envíe el mensaje completo al equipo técnico.</li>
+<li><b>Ya guardó y los números no son los esperados:</b> no intente borrar cuentas a mano. Restaure el respaldo de producción y avise al equipo técnico.</li>
+<li><b>La Shell se desconecta:</b> los cambios sin <code>commit</code> se pierden; vuelva a empezar en el paso 2.</li>
+</ul>
+
+<h2>8. Resumen para recordar</h2>
+<ol><li>Staging primero, con datos reales.</li><li>Confirmar que la empresa usa <code>ve</code>.</li><li>Foto antes → ejecutar → foto después.</li><li>Sin duplicados y números razonables → guardar; si no → <code>rollback</code>.</li><li>Recién entonces, producción con respaldo.</li></ol>
+
+<footer>Binaural · Documento interno de uso exclusivo del equipo y sus clientes · Basado en el informe "Donarca 19.0" y en el script del gist de referencia.</footer>
+</div></body></html>

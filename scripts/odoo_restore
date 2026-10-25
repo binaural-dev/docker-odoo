@@ -582,8 +582,32 @@ class DatabaseRestoreManager:
         subprocess.run(create_cmd, check=True)
 
     def _dump_needs_superuser(self):
+        """True only when the dump creates an extension that Postgres won't let
+        the instance role create: not marked trusted and not already installed
+        in the target database (e.g. pgvector, pre-installed in template1 so
+        new databases get it). Trusted ones like pg_trgm/unaccent never need it."""
         with open(self.local_dump_path, "r", errors="replace") as f:
-            return any(self.CREATE_EXTENSION_PATTERN.match(line) for line in f)
+            names = {
+                match.group("name")
+                for match in map(self.CREATE_EXTENSION_PATTERN.match, f)
+                if match
+            }
+        if not names:
+            return False
+
+        # Names come from the dump but are already restricted to identifier
+        # characters by CREATE_EXTENSION_PATTERN, so quoting them is enough.
+        quoted = ", ".join(f"'{name}'" for name in sorted(names))
+        sql = (
+            "SELECT DISTINCT name FROM pg_available_extension_versions "
+            f"WHERE trusted = false AND name IN ({quoted}) "
+            "AND name NOT IN (SELECT extname FROM pg_extension);"
+        )
+        result = subprocess.run(
+            self._psql_command("-d", self.db_name, "-tAc", sql),
+            capture_output=True, text=True, check=True,
+        )
+        return bool(result.stdout.strip())
 
     def _set_instance_superuser(self, enabled):
         """Grant or revoke SUPERUSER on the instance's own role, via the
@@ -696,10 +720,13 @@ class DatabaseRestoreManager:
         self._copy_dump_to_container()
 
         needs_superuser = self._dump_needs_superuser()
-        if needs_superuser:
-            self._set_instance_superuser(True)
+        granted = False
 
         try:
+            if needs_superuser:
+                self._set_instance_superuser(True)
+                granted = True
+
             cmd = [
                 "docker",
                 "exec",
@@ -736,9 +763,11 @@ class DatabaseRestoreManager:
                     print(exc.stdout.strip(), file=sys.stderr)
                 raise
         finally:
-            if needs_superuser:
+            if granted:
                 self._set_instance_superuser(False)
-                self._relock_bootstrap_if_needed()
+            # Relock even when the grant itself failed: the break-glass that
+            # enabled the bootstrap LOGIN may already have happened.
+            self._relock_bootstrap_if_needed()
 
         print(f"Restore de dump.sql finalizado para la base '{self.db_name}'")
         return True

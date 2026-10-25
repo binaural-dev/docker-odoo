@@ -1,0 +1,151 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""Run an Odoo core checked out in the workspace (instances with ``odoo_core``).
+
+The image installs the Debian ``odoo`` package in dist-packages, and both copies
+ship an ``odoo/addons`` directory. Odoo's ``odoo.addons`` namespace collects the
+Debian one first, so modules such as ``iap`` load from the older package even
+when the workspace core is newer. Drop that entry before Odoo starts; Odoo adds
+the workspace core's addons root itself during startup.
+
+``--dev=all`` enables Odoo's reloader, which re-executes the process with
+``os.execve`` (see ``odoo/service/server.py:_reexec``). That new interpreter no
+longer goes through this wrapper, so the filter above would be lost. Export the
+core dir and put a small ``sitecustomize.py`` on ``PYTHONPATH`` first: the
+environment survives the exec, so the hook re-applies the filter in the
+re-exec'd process (and chains to any other sitecustomize it shadows).
+
+Usage: odoo-core-run <core_dir>/odoo-bin [odoo args...]
+"""
+
+import hashlib
+import os
+import runpy
+import sys
+import tempfile
+
+DEBIAN_DIST_PACKAGES = '/usr/lib/python3/dist-packages'
+
+# Keep in sync with the filtering logic below. Runs in the re-exec'd process,
+# before odoo-bin starts, and is inherited via PYTHONPATH + ODOO_CORE_RUN_CORE_DIR.
+SITECUSTOMIZE_SOURCE = '''\
+"""Re-apply odoo-core-run's addons namespace filter after a re-exec.
+
+Odoo's --dev reloader calls os.execve(), which preserves the environment but
+starts a new interpreter that never runs odoo-core-run. This hook is injected
+through PYTHONPATH by odoo-core-run; it drops the Debian dist-packages addons
+entry again so the workspace core keeps winning.
+"""
+
+import os
+import runpy
+import sys
+
+_DIST_PACKAGES = "/usr/lib/python3/dist-packages"
+_CORE_DIR = os.environ.get("ODOO_CORE_RUN_CORE_DIR")
+
+
+def _reapply_filter():
+    if not _CORE_DIR:
+        return
+    core_abs = os.path.abspath(_CORE_DIR)
+    # Only act when the workspace core is on sys.path (the re-exec'd entrypoint
+    # has it as the script directory). Auxiliary python subprocesses inherit
+    # the environment but not this entry, so they are left untouched.
+    if not any(os.path.abspath(path or os.getcwd()) == core_abs for path in sys.path):
+        return
+    try:
+        import odoo
+        import odoo.addons
+    except Exception:
+        return
+    core_pkg = os.path.abspath(os.path.join(core_abs, "odoo"))
+    if not any(os.path.abspath(path) == core_pkg for path in odoo.__path__):
+        return
+    # Odoo recomputes the odoo.addons namespace from sys.path (e.g. after
+    # invalidate_caches), so drop the Debian entry from sys.path as well.
+    sys.path[:] = [path for path in sys.path if not path.startswith(_DIST_PACKAGES)]
+    namespace = odoo.addons.__path__._path
+    namespace[:] = [path for path in namespace if not path.startswith(_DIST_PACKAGES)]
+
+
+_reapply_filter()
+
+# Python imports only the first sitecustomize found on sys.path. This one is
+# prepended, so run the next match as well (e.g. scripts/odoo-test's test-result
+# hook, or Debian's apport hook) instead of silently disabling it.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+for _entry in sys.path:
+    _dir = os.path.abspath(_entry or os.getcwd())
+    if _dir == _HERE:
+        continue
+    _candidate = os.path.join(_dir, "sitecustomize.py")
+    if os.path.abspath(_candidate) == os.path.abspath(__file__):
+        continue
+    if os.path.isfile(_candidate):
+        try:
+            runpy.run_path(_candidate, run_name="sitecustomize")
+        except Exception:
+            pass
+        break
+'''
+
+
+def _install_reexec_hook(core_dir):
+    """Write the re-exec sitecustomize and return its directory (or None).
+
+    The directory name is stable per user and core checkout so the file is
+    rewritten in place instead of accumulating temp dirs on every restart.
+    Never changes permissions of an existing path.
+    """
+    digest = hashlib.sha256(core_dir.encode('utf-8')).hexdigest()[:12]
+    hook_dir = os.path.join(
+        tempfile.gettempdir(), f'odoo-core-run-{os.getuid()}-{digest}'
+    )
+    try:
+        os.makedirs(hook_dir, exist_ok=True)
+        if os.path.islink(hook_dir) or os.stat(hook_dir).st_uid != os.getuid():
+            raise OSError(f'unsafe hook directory: {hook_dir}')
+        hook_file = os.path.join(hook_dir, 'sitecustomize.py')
+        tmp_file = hook_file + '.tmp'
+        with open(tmp_file, 'w', encoding='utf-8') as handle:
+            handle.write(SITECUSTOMIZE_SOURCE)
+        os.replace(tmp_file, hook_file)
+    except OSError as exc:
+        print(
+            f'odoo-core-run: cannot install the re-exec filter hook ({exc}); '
+            'the filter will not be re-applied after an Odoo --dev reload',
+            file=sys.stderr,
+        )
+        return None
+    return hook_dir
+
+
+core_bin = os.path.abspath(sys.argv[1])
+core_dir = os.path.dirname(core_bin)
+# Same as running odoo-bin directly: the core dir goes first on sys.path.
+sys.path.insert(0, core_dir)
+# Same reason as in the hook: the namespace is recomputed from sys.path, so the
+# Debian dist-packages entry must not be there at all, not only in the namespace.
+sys.path[:] = [path for path in sys.path if not path.startswith(DEBIAN_DIST_PACKAGES)]
+
+import odoo.addons  # noqa: E402  (must follow the sys.path change)
+
+namespace = odoo.addons.__path__._path  # _NamespacePath keeps its list here
+namespace[:] = [path for path in namespace if not path.startswith(DEBIAN_DIST_PACKAGES)]
+
+# execve() preserves os.environ, so these survive Odoo's --dev re-exec.
+hook_dir = _install_reexec_hook(core_dir)
+if hook_dir:
+    os.environ['ODOO_CORE_RUN_CORE_DIR'] = core_dir
+    # Drop the Debian entry from the inherited PYTHONPATH too, so the re-exec'd
+    # interpreter never adds dist-packages to sys.path.
+    inherited = [
+        path for path in os.environ.get('PYTHONPATH', '').split(os.pathsep)
+        if path and not path.startswith(DEBIAN_DIST_PACKAGES)
+    ]
+    os.environ['PYTHONPATH'] = os.pathsep.join([hook_dir] + inherited)
+
+sys.argv = sys.argv[1:]
+runpy.run_path(core_bin, run_name='__main__')
