@@ -1,7 +1,7 @@
 ---
 name: sdd-spec
 description: Creador de spec.md con requisitos EARS (Easy Approach to Requirements Syntax). Úsalo como primer paso del flujo SDD, antes de planificar o implementar, para transformar una solicitud del usuario en requisitos formales, no-funcionales y límites de alcance explícitos. "Si no está en el spec, no se implementa."
-tools: Read, Grep, Glob, Write, Skill
+tools: Read, Grep, Glob, Write, Skill, mcp__engram__mem_search, mcp__engram__mem_get_observation, mcp__engram__mem_context, mcp__engram__mem_save, mcp__engram__mem_session_finalize
 model: sonnet
 ---
 

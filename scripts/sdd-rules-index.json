@@ -9,14 +9,12 @@
   "unknown"
  ],
  "counts": {
-  "preserved": 55,
+  "preserved": 56,
   "intentional-difference": 1,
   "bounded-external": 60,
-  "unknown": 201
+  "unknown": 204
  },
- "gaps": [
-  101
- ],
+ "gaps": [],
  "families": {
   "## Reglas Clave": {
    "rules": [
@@ -373,6 +371,7 @@
     98,
     99,
     100,
+    101,
     102,
     103,
     104,
@@ -392,6 +391,7 @@
     ],
     "unknown": [
      100,
+     101,
      102,
      103,
      104,
@@ -910,7 +910,10 @@
     315,
     316,
     317,
-    318
+    318,
+    319,
+    320,
+    321
    ],
    "dispositions": {
     "bounded-external": [
@@ -968,7 +971,9 @@
      312,
      313,
      314,
-     318
+     318,
+     319,
+     320
     ],
     "preserved": [
      264,
@@ -986,19 +991,25 @@
      309,
      311,
      315,
-     317
+     317,
+     321
     ]
    },
    "evidence": [
     "odoo",
     "scripts/coverage",
+    "scripts/engram-env.sh",
+    "scripts/hooks/engram_claude_hook.py",
     "scripts/opencode-plugins/sdd-lean-ruleset.js",
+    "scripts/opencode-plugins/sdd-memory.js",
     "scripts/opencode_model_switch.sh",
     "scripts/precommit",
     "scripts/run_tests.sh",
     "scripts/sdd-guardrails.json",
     "scripts/sdd_inventory_check.py",
     "scripts/sdd_judge_event.sh",
+    "scripts/sdd_memory_capture.py",
+    "scripts/sdd_memory_common.py",
     "scripts/sdd_opencode_config_sync_check.sh",
     "scripts/sdd_opencode_run.sh",
     "scripts/sdd_rules_check.py",
@@ -1711,6 +1722,13 @@
    "reason": "",
    "family": "### Testing Infrastructure & Scripts (2026-08-05)",
    "title": "Interpretación de coverage: SDD-specific vs total**: el coverage total de un módulo incluye código pre-existente NO modificado por la migración SDD. Ejemplo: `binaural_invoice` tiene 65% total, pero los archivos tocados por SDD (`res_company.py`, `account_journal.py`) tienen 100%. **Al reportar coverage SDD, desglosar**: (1) archivos modificados por SDD, (2) código pre-existente no cubierto. El SDD-specific coverage suele ser 95%+ aunque el total sea bajo por código legacy. Referencia: validación `binaural-mig-international-purchase` (2026-08-05)."
+  },
+  "101": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "",
+   "family": "### Testing Infrastructure & Scripts (2026-08-05)",
+   "title": "`run_tests.sh` Pass 2 grep filter oculta fallos de coverage**: el script pasa la salida por `grep -E \"(Starting|FAILED|ERROR|passed|failed|error\\(s\\)|TOTAL|Name|Stmts|Miss)\"`. Si el paso de coverage falla antes de imprimir el reporte (ej: `pip3 install coverage` falla, o `coverage run` aborta), el grep no muestra ningún error visible — el log simplemente termina sin sección de coverage. **Verificar manualmente**: `docker exec -u root <container> python3 -m coverage report -m --include='*/<module>/*'`. Si dice \"No data to report\", el `coverage run` no llegó a ejecutarse. Referencia: Skill `coverage-workflow` Anti-Pattern C11."
   },
   "102": {
    "disposition": "unknown",
@@ -3230,6 +3248,27 @@
    "reason": "",
    "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
    "title": "Investigaciones largas o profundas de codigo se delegan a OpenCode (skill `sdd-research-delegation`, long-tail)** — para barridos de mas de ~10 archivos o varios repos cuyo producto es un informe (overrides de un metodo, usos de un campo, mapas de dependencias, auditorias de un patron), despachar un job de solo lectura con `sdd_opencode_run.sh` con el agente `sdd-lead`, Context `environment: read-only-research` y `allowed_files` = un unico informe en `src/.sdd/reports/research/`, y leer solo ese informe. Motivo verificado el 2026-10-21 (`opencode models --verbose`): `opencode/minimax-m3.1-flash-free` tiene contexto de 1.000.000 y costo 0; `opencode-go/mimo-v2.5`, 1.000.000 a 0.14/0.28 USD por M tokens. Sonda real: 7 de 7 definiciones citadas con archivo:linea exacto contra `grep`. Obligatorio: muestrear con `grep` independiente y desconfiar de lo que el informe declara sin auditar. No usar para 1-3 archivos (usar `grep` o `codebase-memory-mcp`), ni para decisiones de seguridad. Datos de la empresa: solo codigo y documentacion; sin datos de clientes, volcados de BD ni credenciales (no se verifico la retencion del plan gratuito)."
+  },
+  "319": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Flujo SDD en 2 etapas: nucleo rapido pre-PR, endurecimiento post-PR (2026-10-22)** — Etapa A (antes del PR): `/crear_actualiza_documentacion` primero; spec→plan→tasks→build TDD solo de los requisitos EARS principales del ticket, SIN umbral de coverage, sin `code-reviewer` ni rondas proactivas; `sdd-judge` en modo `light` (una pasada: funcionalidades clave, scope/guardrails, tests de esos requisitos, docs); E2E con Playwright (`ejecutar-flujo`) corrigiendo errores; luego el Lead pide al usuario crear el PR. Etapa B (el usuario avisa \"PR creado #N\"): coverage >90% en background sobre la rama del PR y, en paralelo, `code-reviewer` + `sdd-judge` modo `full` con rondas (limite R5=3, mecanica de `sdd-pr-review-fix`) hasta quitar bloqueantes. Gate 4 = Etapa A; Gate 4B = Etapa B. `sdd_verdict_gate.sh` no cambia: el veredicto `light` se registra con `tree_sha` y motivo prefijado `[light]`. Skills: `sdd-lead-agent`, `sdd-judge-agent`, `sdd-qc-agent`, `sdd-builder-agent`."
+  },
+  "320": {
+   "disposition": "unknown",
+   "evidence": "",
+   "reason": "",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Revisar jobs huérfanos antes de cada dispatch a OpenCode** — antes de despachar, recorrer `src/.sdd/logs/jobs/*/status` y buscar jobs en `running` sin proceso `opencode` ni sesión tmux viva (`tmux -S /tmp/sdd-tmux/sdd.sock ls`). Un job así se marca `orphaned` (escribir `orphaned` en su `status`) y se registra con `scripts/sdd_error_report.py add`; solo entonces se despacha. Un job `running` bloquea el dispatch de un prompt idéntico (bloqueo de duplicados), por eso el huérfano debe cerrarse antes. No usar `pkill -f` con rutas de job mientras hay un job activo."
+  },
+  "321": {
+   "disposition": "preserved",
+   "evidence": "scripts/engram-env.sh + scripts/sdd_memory_common.py + scripts/sdd_memory_capture.py + scripts/opencode-plugins/sdd-memory.js + scripts/hooks/engram_claude_hook.py",
+   "reason": "redaccion, lista blanca de cabeceras, plugin con lista de agentes y hooks; pruebas en scripts/test_sdd_memory_*.py",
+   "family": "### Reglas — Vendor Override & Currency (Ticket 15386)",
+   "title": "Memoria persistente Engram: local, redactada y sin volátiles en el system prompt** — Engram (binario v3.6.0 sin modificar, base `~/.local/share/binaural-engram`) guarda decisiones y avances del harness y nada sale de la máquina: `scripts/engram-env.sh` fija `ENGRAM_CLOUD_AUTOSYNC=0` y no define `ENGRAM_CLOUD_*`. Solo los editores del pipeline (`sdd-spec`, `sdd-architect`, `sdd-pm`, `sdd-builder`) reciben `scripts/memory-protocol.md` en el system prompt, por `scripts/opencode-plugins/sdd-memory.js`; `sdd-lead`, `sdd-judge`, `sdd-qc` y el runner no lo reciben nunca. El contexto volátil de un job (snapshot de memoria) va por `memory_ref:` y el agente lo lee con `Read`, nunca en el system prompt. `memory: on|off` se fija por job (default `SDD_MEMORY_MODE=off`) y se registra en `dispatch.handoff` y `metrics.jsonl` con el sha256 del snapshot. Todo lo que se persiste pasa por `redact()` (secretos, `<private>`, datos de clientes, tickets), la captura lee solo cabeceras en lista blanca (nunca `output.log` ni la cola del resultado) y las escrituras pasan un `session_id` explícito. Con `off` el harness se comporta igual que antes. Ver `src/specs/engram-memory/spec.md`."
   }
  }
 }

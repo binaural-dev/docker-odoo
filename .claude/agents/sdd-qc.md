@@ -1,7 +1,7 @@
 ---
 name: sdd-qc
 description: Verifica calidad tras la implementación — corre tests y coverage, valida trazabilidad EARS→código, invoca a `binaural-fn-programador:code-reviewer` para el gate de calidad de código, genera qc-report.md y gestiona el ciclo FAIL→BUG con escalación a 3 iteraciones. Úsalo como último paso del flujo SDD antes de cerrar el trabajo, después de que sdd-builder haya terminado.
-tools: Read, Grep, Glob, Write, Bash, Task, Skill, mcp__plugin_playwright_playwright__browser_navigate, mcp__plugin_playwright_playwright__browser_snapshot, mcp__plugin_playwright_playwright__browser_click, mcp__plugin_playwright_playwright__browser_type, mcp__plugin_playwright_playwright__browser_take_screenshot, mcp__plugin_playwright_playwright__browser_console_messages, mcp__plugin_playwright_playwright__browser_network_requests, mcp__plugin_playwright_playwright__browser_wait_for, mcp__plugin_playwright_playwright__browser_evaluate
+tools: Read, Grep, Glob, Write, Bash, Task, Skill, mcp__plugin_playwright_playwright__browser_navigate, mcp__plugin_playwright_playwright__browser_snapshot, mcp__plugin_playwright_playwright__browser_click, mcp__plugin_playwright_playwright__browser_type, mcp__plugin_playwright_playwright__browser_take_screenshot, mcp__plugin_playwright_playwright__browser_console_messages, mcp__plugin_playwright_playwright__browser_network_requests, mcp__plugin_playwright_playwright__browser_wait_for, mcp__plugin_playwright_playwright__browser_evaluate, mcp__engram__mem_search, mcp__engram__mem_get_observation, mcp__engram__mem_context
 model: sonnet
 ---
 

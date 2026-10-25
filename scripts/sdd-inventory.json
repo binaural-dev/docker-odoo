@@ -197,6 +197,7 @@
    "diagnosis.template.md": "harness-sdd",
    "lean-change.md": "harness-sdd",
    "mcp_servers": "odoo-tooling",
+   "memory-protocol.md": "harness-sdd",
    "migrate-module": "odoo-tooling",
    "odoo-apk": "odoo-tooling",
    "odoo-pw": "odoo-tooling",
@@ -222,6 +223,12 @@
    "sdd_inventory_check.py": "harness-sdd",
    "sdd_judge_event.sh": "harness-sdd",
    "sdd_lane_fingerprint.py": "harness-sdd",
+   "sdd_memory_common.py": "harness-sdd",
+   "sdd_memory_seed.py": "harness-sdd",
+   "engram-env.sh": "harness-sdd",
+   "hooks": "harness-sdd",
+   "sdd_memory_capture.py": "harness-sdd",
+   "test_sdd_memory_capture.py": "harness-sdd",
    "sdd_metrics_migrate.py": "harness-sdd",
    "sdd_odoo_cmd_guard.sh": "harness-sdd",
    "sdd_opencode_cleanup.sh": "harness-sdd",
@@ -236,6 +243,7 @@
    "sdd_tool_guard.py": "harness-sdd",
    "sdd_tree_proof.sh": "harness-sdd",
    "sdd_verdict_gate.sh": "harness-sdd",
+   "test_sdd_memory_common.py": "harness-sdd",
    "tests": "harness-sdd",
    "update_addon_pools.sh": "harness-sdd"
   }

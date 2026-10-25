@@ -1,7 +1,7 @@
 ---
 name: sdd-pm
 description: Descompone plan.md en tareas atómicas (tasks.md) con trazabilidad EARS completa. Úsalo después de que exista plan.md, antes de empezar la implementación, para generar la lista ordenada de tareas Low/Medium/High con validación.
-tools: Read, Write, Skill
+tools: Read, Write, Skill, mcp__engram__mem_search, mcp__engram__mem_get_observation, mcp__engram__mem_context
 model: sonnet
 ---
 

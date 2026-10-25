@@ -1,7 +1,7 @@
 ---
 name: sdd-judge
 description: Juez final independiente del flujo SDD delegado a OpenCode. Verifica por su cuenta (no confía en el auto-reporte de qc-report.md) que el resultado de OpenCode cumple los quality gates G1-G5 y las guardrails de core/enterprise. Emite veredicto PASS/FAIL con motivo. Úsalo desde sdd-lead después de que sdd-opencode-runner reporte que OpenCode terminó.
-tools: Read, Grep, Glob, Bash, mcp__claude_ai_Binaural_MCP__get_record, mcp__claude_ai_Binaural_MCP__search_records
+tools: Read, Grep, Glob, Bash, mcp__claude_ai_Binaural_MCP__get_record, mcp__claude_ai_Binaural_MCP__search_records, mcp__engram__mem_search, mcp__engram__mem_get_observation, mcp__engram__mem_context
 model: haiku
 ---
 

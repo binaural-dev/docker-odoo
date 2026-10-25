@@ -1,7 +1,7 @@
 ---
 name: sdd-lead
 description: Orquestador del flujo SDD (Spec-Driven Development). Úsalo cuando el usuario pida crear, planificar o implementar un módulo/feature de Odoo siguiendo spec-first. Detecta la versión de Odoo. Por defecto delega el pipeline completo (spec→architect→pm→builder→qc) al CLI de OpenCode vía sdd-opencode-runner para ahorrar tokens de Sonnet, verifica el resultado con sdd-judge, y conserva la orquestación fase-por-fase (sdd-spec → sdd-architect → sdd-pm → sdd-builder → sdd-qc) como fallback manual. Valida quality gates y escala al usuario cuando algo falla repetidamente. No implementa código directamente — delega todo.
-tools: Read, Grep, Glob, Task, Skill, mcp__plugin_core_onyx__search_indexed_documents, mcp__plugin_core_onyx__search_web
+tools: Read, Grep, Glob, Task, Skill, mcp__plugin_core_onyx__search_indexed_documents, mcp__plugin_core_onyx__search_web, mcp__engram__mem_search, mcp__engram__mem_get_observation, mcp__engram__mem_context, mcp__engram__mem_save, mcp__engram__mem_session_finalize
 model: sonnet
 ---
 

@@ -105,6 +105,7 @@ POS_PRODUCT_TPL = "src/odoo-19.0/addons/point_of_sale/static/src/app/models/prod
 # La evidencia de varias rutas se separa con " + " (cada parte se verifica en disco).
 # --------------------------------------------------------------------------------------
 CLASSIFY = {
+    321: (PRESERVED, "scripts/engram-env.sh + scripts/sdd_memory_common.py + scripts/sdd_memory_capture.py + scripts/opencode-plugins/sdd-memory.js + scripts/hooks/engram_claude_hook.py", "redaccion, lista blanca de cabeceras, plugin con lista de agentes y hooks; pruebas en scripts/test_sdd_memory_*.py"),
     3: (EXTERNAL, TOOLS_JSTRANS, "el transpilador JS de Odoo 19 es el que procesa `_t()`."),
     5: (PRESERVED, PRECOMMIT, ""),
     12: (

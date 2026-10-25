@@ -24,6 +24,7 @@
   },
   "plugin": [
     "./opencode-plugins/sdd-odoo-guard.js",
-    "./opencode-plugins/sdd-lean-ruleset.js"
+    "./opencode-plugins/sdd-lean-ruleset.js",
+    "./opencode-plugins/sdd-memory.js"
   ]
 }

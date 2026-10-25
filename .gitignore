@@ -25,3 +25,6 @@ __pycache__
 
 # Runtime de OpenCode generado al ejecutar scripts
 scripts/.opencode/
+
+# Base local de Engram por desarrollador: fuera del repo (ver regla 321).
+.engram/

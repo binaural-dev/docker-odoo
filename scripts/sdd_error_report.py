@@ -77,6 +77,18 @@ def append(rows):
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def mirror_to_memory(rows):
+    """Mirror new rows into Engram when SDD_MEMORY_MODE=on (rule 321). Fail-open: the registry is already written."""
+    if os.environ.get("SDD_MEMORY_MODE", "off").strip().lower() != "on" or not rows:
+        return
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import sdd_memory_capture
+        sdd_memory_capture.capture_error_rows(rows)
+    except Exception as exc:  # noqa: BLE001 - never block the error registry on memory
+        print("memory capture skipped: %s" % exc, file=sys.stderr)
+
+
 def build_row(existing, **kw):
     cls = kw["error_class"]
     fp = fingerprint(cls, kw["symptom"])
@@ -120,6 +132,7 @@ def cmd_add(args):
                     odoo_version=args.odoo_version, module=args.module, resolved_in_job=args.resolved_in_job,
                     source_key="")
     append([row])
+    mirror_to_memory([row])
     print("registered %s class=%s repeat_count=%d" % (row["fingerprint"], row["error_class"], row["repeat_count"]))
     return 0
 
@@ -141,6 +154,7 @@ def cmd_ingest(_args):
         new.append(build_row(existing, ts=d.get("ts"), job_id=d.get("job", ""), role=role, phase=d.get("event"),
                              error_class=cls, symptom=symptom, source_key=key))
     append(new)
+    mirror_to_memory(new)
     print("ingested %d new, corrupt metrics lines: %d" % (len(new), corrupt))
     return 0
 

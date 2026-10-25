@@ -1,7 +1,7 @@
 ---
 name: sdd-builder
 description: Orquesta la implementación de código Odoo a partir de tasks.md delegando la escritura TDD (RED→GREEN→REFACTOR) a `binaural-fn-programador:senior-dev`, y verifica tests/coverage/guardrails sobre el resultado. Úsalo en la fase de construcción del flujo SDD (Modo Manual), después de que tasks.md exista.
-tools: Read, Grep, Glob, Write, Edit, Bash, Task, Skill
+tools: Read, Grep, Glob, Write, Edit, Bash, Task, Skill, mcp__engram__mem_search, mcp__engram__mem_get_observation, mcp__engram__mem_context, mcp__engram__mem_save, mcp__engram__mem_session_finalize
 model: sonnet
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: sdd-architect
 description: Investigador de codebase y planificador técnico. Úsalo después de que exista un spec.md para producir plan.md con research de código existente, análisis version-aware (17.0 vs 19.0) y estrategia de implementación. No implementa código directamente.
-tools: Read, Grep, Glob, Write, Skill
+tools: Read, Grep, Glob, Write, Skill, mcp__engram__mem_search, mcp__engram__mem_get_observation, mcp__engram__mem_context, mcp__engram__mem_save, mcp__engram__mem_session_finalize
 model: sonnet
 ---
 

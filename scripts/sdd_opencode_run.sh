@@ -353,6 +353,20 @@ LEAN_CTX="$(extract_context_field lean)"
 LEAN_MODE="${LEAN_CTX:-${SDD_LEAN_MODE:-off}}"
 [[ "$LEAN_MODE" == on || "$LEAN_MODE" == off ]] || reject_dispatch "lean must be on|off, got '${LEAN_MODE}'"
 
+# --- memory protocol (plugin scripts/opencode-plugins/sdd-memory.js): optional `memory: on|off` in Context{} ----
+# Same rule as lean: default = env SDD_MEMORY_MODE, then off; fixed per job and recorded in the handoff and metric.
+# `memory_ref:` points at a memory snapshot file for this job (volatile content: read by the agent, never injected
+# into the system prompt). Its sha256 is recorded so a rerun can prove it saw the same memory.
+MEMORY_CTX="$(extract_context_field memory)"
+MEMORY_MODE="${MEMORY_CTX:-${SDD_MEMORY_MODE:-off}}"
+[[ "$MEMORY_MODE" == on || "$MEMORY_MODE" == off ]] || reject_dispatch "memory must be on|off, got '${MEMORY_MODE}'"
+MEMORY_REF_CTX="$(extract_context_field memory_ref)"
+MEMORY_REF_SHA=""
+if [[ -n "$MEMORY_REF_CTX" ]]; then
+  [[ -f "$MEMORY_REF_CTX" ]] || reject_dispatch "memory_ref not found: '${MEMORY_REF_CTX}'"
+  MEMORY_REF_SHA="$(sha256sum "$MEMORY_REF_CTX" | cut -d' ' -f1)"
+fi
+
 JOB_ID="sdd-$(date +%s%3N)"
 JOB_DIR="$JOBS_DIR/$JOB_ID"
 mkdir -p "$JOB_DIR"
@@ -386,6 +400,8 @@ write_dispatch_handoff() {
     echo "allowed_files: $allowed_files"
     [[ -n "$SPEC_PATH_CTX" ]] && { echo "spec_path: $SPEC_PATH_CTX"; echo "spec_sha256: $SPEC_SHA_ACTUAL"; }
     echo "lean: $LEAN_MODE"
+    echo "memory: $MEMORY_MODE"
+    if [[ -n "$MEMORY_REF_CTX" ]]; then echo "memory_ref: $MEMORY_REF_CTX"; echo "memory_ref_sha256: $MEMORY_REF_SHA"; fi
     echo "priority: 50"
     echo "created_at: $(now_iso)"
     echo
@@ -473,7 +489,8 @@ DISPATCH_BRANCH="$(extract_context_field branch)"
 DISPATCH_PHASE="$(extract_context_field phase)"; DISPATCH_PHASE="${DISPATCH_PHASE:-pipeline}"
 append_metric "dispatch" \
   "agent=$AGENT" "model=$(resolve_model)" "repo=$DISPATCH_REPO" "module=$DISPATCH_MODULE" \
-  "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH" "phase=$DISPATCH_PHASE" "lean=$LEAN_MODE"
+  "environment=$DISPATCH_ENV" "branch=$DISPATCH_BRANCH" "phase=$DISPATCH_PHASE" "lean=$LEAN_MODE" \
+  "memory=$MEMORY_MODE" "memory_ref_sha256=$MEMORY_REF_SHA"
 [[ -n "$RETRY_OF_CTX" ]] && append_metric "diagnosis_check" "retry_of=$RETRY_OF_CTX" "state=$DIAGNOSIS_STATE"
 
 # Project agents (src/.opencode/agents/*.md, with their deny lists) are only loaded when --dir sits inside
@@ -481,6 +498,7 @@ append_metric "dispatch" \
 # the model-only agent entries of the JSON config (`* allow`) and --auto leaves bash wide open. Injecting the
 # deny list through OPENCODE_CONFIG applies it regardless of --dir.
 GUARD_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sdd-guardrails.json"
+MEMORY_CAPTURE_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/sdd_memory_capture.py"
 [[ -f "$GUARD_CFG" ]] || reject_dispatch "guardrails config not found: $GUARD_CFG"
 
 # Seconds without any output before the in-session watchdog kills a stalled job (0 = disabled).
@@ -511,6 +529,7 @@ INNER_CMD=$(cat <<EOF
 _start=\$(date +%s)
 export OPENCODE_CONFIG="$GUARD_CFG"
 export SDD_LEAN_MODE="$LEAN_MODE"
+export SDD_MEMORY_MODE="$MEMORY_MODE"
 # Inactivity watchdog: headless opencode can hang with no output (never-answered permission prompt, run that does
 # not exit, MCP startup hang). If $OUT has not been written for SDD_STALL_SECS, terminate opencode and flag the job
 # as stalled so the result carries cause=stalled instead of the job sitting in "running" until cleanup reaps it.
@@ -584,6 +603,9 @@ tail_body="\$(tail -n 40 "$OUT" 2>/dev/null || true)"
   echo "--- tail (last 40 lines) ---"
   printf '%s\n' "\$tail_body"
 } > "$RESULT_FILE"
+# Memory capture (memory: on only): header fields of the two handoffs become one Engram observation. Its messages go
+# to memory-capture.log, never to output.log, and a failure here never changes the job's status.
+if [[ "$MEMORY_MODE" == on ]]; then python3 "$MEMORY_CAPTURE_PY" ingest "$JOB_DIR" >> "$JOB_DIR/memory-capture.log" 2>&1 || true; fi
 _ses="\$("$OC_BIN" session list -n 30 --format json 2>/dev/null | python3 -c 'import json,sys
 try:
     print(next((s["id"] for s in json.load(sys.stdin) if s.get("title")=="$JOB_ID"), ""))

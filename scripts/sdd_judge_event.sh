@@ -40,3 +40,10 @@ print(json.dumps({"v": 1, "ts": datetime.datetime.now(datetime.timezone.utc).str
                   **({"error_class": os.environ["SDD_ERROR_CLASS"]}
                      if verdict == "FAIL" and os.environ.get("SDD_ERROR_CLASS") in CLASSES else {})}))
 PY
+
+# Memory capture (SDD_MEMORY_MODE=on only, rule 321): the round becomes one Engram observation (upsert per job and
+# round). Its messages go to memory-capture.log; a failure never changes the verdict that was just recorded.
+if [[ "${SDD_MEMORY_MODE:-off}" == on ]]; then
+  SDD_ERROR_CLASS="${SDD_ERROR_CLASS:-}" python3 "$REPO_ROOT/scripts/sdd_memory_capture.py" verdict \
+    "$JOB_ID" "$VERDICT" "$ITERATION" "$TREE_SHA" "$REASON" >> "$SDD_LOG_ROOT/memory-capture.log" 2>&1 || true
+fi
