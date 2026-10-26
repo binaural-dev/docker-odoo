@@ -7,6 +7,7 @@ import os
 import sys
 import re
 import shlex
+import zipfile
 from pathlib import Path
 
 BASE_PATH = str(Path(__file__).resolve().parent.parent)
@@ -14,6 +15,7 @@ sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 from generators.config_loader import (
     load_config,
     resolve_db_config,
+    resolve_instance_db_creds,
     get_db_host,
     get_db_internal_port,
 )
@@ -437,18 +439,40 @@ class ZipManager:
         base_dir = self._get_base_dir(content_paths)
         relative_paths = [os.path.relpath(path, base_dir) for path in content_paths]
 
-        cmd = ["zip", "-r", self.zip_path] + relative_paths
-
         if not self.verbose:
             print("Modo silencioso activado: no se mostrarán los archivos siendo agregados al ZIP. \n")
-            cmd.insert(1, "-q")
-
-        print(f"Commando ZIP: \n\n{' '.join(cmd)}\n\n")
 
         print(f"Actualizando ZIP {self.zip_name} con contenido: {content_paths}")
-        subprocess.run(cmd, check=True, cwd=base_dir)
+
+        # Se usa zipfile en vez del binario `zip` para no depender de que
+        # esté instalado en el host. Mismo layout que `zip -r` desde
+        # base_dir: dump.sql y filestore/ en la raíz del ZIP.
+        mode = "a" if os.path.isfile(self.zip_path) else "w"
+        with zipfile.ZipFile(
+            self.zip_path, mode, zipfile.ZIP_DEFLATED, allowZip64=True
+        ) as zip_file:
+            for relative_path in relative_paths:
+                self._write_path(zip_file, base_dir, relative_path)
 
         return self.zip_path
+
+    def _write_path(self, zip_file, base_dir, relative_path):
+        absolute_path = os.path.join(base_dir, relative_path)
+
+        if not os.path.isdir(absolute_path):
+            if self.verbose:
+                print(f"  adding: {relative_path}")
+            zip_file.write(absolute_path, relative_path)
+            return
+
+        for root, _dirs, files in os.walk(absolute_path):
+            relative_root = os.path.relpath(root, base_dir)
+            zip_file.write(root, f"{relative_root}/")
+            for file_name in sorted(files):
+                relative_file = os.path.join(relative_root, file_name)
+                if self.verbose:
+                    print(f"  adding: {relative_file}")
+                zip_file.write(os.path.join(root, file_name), relative_file)
 
     def create_zip(self):
         return self.add_paths_to_zip(self.content_paths)
@@ -1025,8 +1049,10 @@ def main():
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     db_host = get_db_host(inst_conf["database"], db_conf)
-    db_user = db_conf["user"]
-    db_password = db_conf["password"]
+    # Rol propio de la instancia (si tiene uno): el rol compartido del
+    # servicio ya no puede conectarse a sus bases tras `provision-role`, y
+    # pg_dump corre dentro del contenedor con el PGPASSWORD de ese rol.
+    db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
     db_port = get_db_internal_port(db_conf)
     container_name = f"odoo-{instance}"
 
