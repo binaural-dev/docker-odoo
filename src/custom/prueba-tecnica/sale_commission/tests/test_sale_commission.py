@@ -97,6 +97,18 @@ class TestSaleCommission(TransactionCase):
         order.action_confirm()
         self.assertEqual(order.state, "sale")
 
+    def test_t200_manager_confirms_uses_salesman_percent(self):
+        """Si el gerente confirma por el vendedor, la comisión es la del vendedor, no la del gerente."""
+        manager = new_test_user(
+            self.env, login="commission_manager_pct", groups="sales_team.group_sale_manager",
+            name="Gerente con comisión",
+        )
+        manager.commission_percent = 12.0
+        order = self._create_order(self.salesman).with_user(manager)
+        order.action_confirm()
+        self.assertEqual(order.order_line.commission_percent, 5.0)
+        self.assertAlmostEqual(order.order_line.commission_amount, 10.0)
+
     def test_t200_salesman_cannot_manage_rules(self):
         self.category.commission_percent = 8.0
         rule = self.category.commission_rule_ids.with_user(self.salesman)
