@@ -1,3 +1,4 @@
+from odoo.exceptions import AccessError
 from odoo.tests import tagged
 from odoo.tests.common import TransactionCase, new_test_user
 
@@ -64,3 +65,58 @@ class TestSaleCommission(TransactionCase):
         order = self._create_order(self.salesman)
         order.action_confirm()
         self.assertEqual(order.order_line.commission_percent, 10.0)
+
+    # T-200: los vendedores no podían confirmar pedidos (AccessError sobre sale.commission.rule).
+    # Estas pruebas corren con el usuario vendedor, no como administrador.
+
+    def _create_order_as(self, user, qty=2):
+        return self.env["sale.order"].with_user(user).create({
+            "partner_id": self.partner.id,
+            "user_id": user.id,
+            "order_line": [(0, 0, {"product_id": self.product.id, "product_uom_qty": qty})],
+        })
+
+    def test_t200_salesman_confirms_own_order(self):
+        order = self._create_order_as(self.salesman)
+        order.action_confirm()
+        self.assertEqual(order.state, "sale")
+        self.assertEqual(order.order_line.commission_percent, 5.0)
+
+    def test_t200_salesman_confirm_uses_category_rule(self):
+        self.category.commission_percent = 8.0
+        order = self._create_order_as(self.salesman)
+        order.action_confirm()
+        self.assertEqual(order.order_line.commission_percent, 8.0)
+
+    def test_t200_manager_still_confirms(self):
+        manager = new_test_user(
+            self.env, login="commission_manager", groups="sales_team.group_sale_manager",
+            name="Gerente de prueba",
+        )
+        order = self._create_order(self.salesman).with_user(manager)
+        order.action_confirm()
+        self.assertEqual(order.state, "sale")
+
+    def test_t200_manager_confirms_uses_salesman_percent(self):
+        """Si el gerente confirma por el vendedor, la comisión es la del vendedor, no la del gerente."""
+        manager = new_test_user(
+            self.env, login="commission_manager_pct", groups="sales_team.group_sale_manager",
+            name="Gerente con comisión",
+        )
+        manager.commission_percent = 12.0
+        order = self._create_order(self.salesman).with_user(manager)
+        order.action_confirm()
+        self.assertEqual(order.order_line.commission_percent, 5.0)
+        self.assertAlmostEqual(order.order_line.commission_amount, 10.0)
+
+    def test_t200_salesman_cannot_manage_rules(self):
+        self.category.commission_percent = 8.0
+        rule = self.category.commission_rule_ids.with_user(self.salesman)
+        with self.assertRaises(AccessError):
+            rule.percent = 50.0
+        with self.assertRaises(AccessError):
+            self.env["sale.commission.rule"].with_user(self.salesman).create({
+                "categ_id": self.category.id, "percent": 50.0,
+            })
+        with self.assertRaises(AccessError):
+            rule.unlink()
