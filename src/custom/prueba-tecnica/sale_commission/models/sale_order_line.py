@@ -31,4 +31,8 @@ class SaleOrderLine(models.Model):
         ])
         if rules:
             return rules.sorted(lambda r: len(r.categ_id.parent_path or ""), reverse=True)[0].percent
-        return self.env.user.commission_percent
+        # Corrección T-200: Usar el vendedor asignado al pedido (order_id.user_id),
+        # en lugar de self.env.user (usuario en sesión), para evitar que confirmaciones
+        # hechas por un gerente u otro usuario apliquen un porcentaje equivocado.
+        return self.order_id.user_id.commission_percent if self.order_id.user_id else 0.0
+
