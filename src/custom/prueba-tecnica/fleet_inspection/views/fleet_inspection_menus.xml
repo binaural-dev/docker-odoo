@@ -6,4 +6,6 @@
               action="fleet_inspection_action" sequence="10"/>
     <menuitem id="menu_fleet_inspection_item" name="Puntos del checklist" parent="fleet.fleet_configuration"
               action="fleet_inspection_item_action" sequence="50" groups="group_fleet_inspection_manager"/>
+    <menuitem id="menu_fleet_inspection_vehicle_type" name="Tipos de vehículo (inspecciones)" parent="fleet.fleet_configuration"
+              action="fleet_inspection_vehicle_type_action" sequence="51" groups="group_fleet_inspection_manager"/>
 </odoo>
