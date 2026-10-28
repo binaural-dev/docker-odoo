@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Nivel inicial para que el flujo funcione al instalar; el cliente lo ajusta en Configuración. -->
+    <record id="approval_level_default" model="payment.approval.level">
+        <field name="company_id" ref="base.main_company"/>
+        <field name="min_amount">0</field>
+        <field name="approver_id" ref="base.user_admin"/>
+    </record>
+</odoo>

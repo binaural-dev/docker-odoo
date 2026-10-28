@@ -1,0 +1,329 @@
+openapi: 3.1.0
+info:
+  title: API de Odoo para la tienda en línea
+  version: 1.2.0
+  description: |
+    Consulta de productos con stock y creación de pedidos de venta en Odoo 18 (módulo `shop_integration_api`).
+
+    **Autenticación:** API key nativa de Odoo del usuario de la integración, en
+    `Authorization: Bearer <API key>`. La clave se crea en Odoo con ese usuario: *Mi perfil › Seguridad de la
+    cuenta › Nueva API key*. Cada llamada (también las que fallan) queda en el registro de llamadas de Odoo,
+    sin la clave.
+
+    **Errores:** siempre con el formato `{"error": {"code", "field", "message"}}`. `field` indica el dato a
+    corregir; las líneas del pedido se numeran desde 0 (`lines[1].default_code`).
+
+    **Avisos:** cuando se valida una entrega de un pedido creado por la API, Odoo envía el webhook
+    `order.delivered` (ver `webhooks`).
+servers:
+  - url: https://{servidor}
+    variables:
+      servidor:
+        default: odoo.ejemplo.com
+security:
+  - apiKey: []
+
+paths:
+  /api/v1/products:
+    get:
+      operationId: listProducts
+      summary: Productos vendibles con su stock disponible
+      description: |
+        Productos activos y vendibles, ordenados por código, paginados. Los filtros son opcionales y combinables.
+        El número de consultas a la base no depende de la cantidad de productos.
+      parameters:
+        - name: category_id
+          in: query
+          description: Solo productos de esta categoría y de sus subcategorías.
+          schema: {type: integer, minimum: 1}
+          example: 5
+        - name: in_stock
+          in: query
+          description: "`true`: solo productos con cantidad disponible mayor que cero. Acepta true/false/1/0."
+          schema: {type: string, enum: ["true", "false", "1", "0"]}
+        - name: updated_since
+          in: query
+          description: |
+            Solo productos modificados desde ese momento (variante o plantilla: nombre, precio, código…).
+            Fecha o fecha y hora ISO 8601; sin zona se toma como UTC. Un `+` de zona va como `%2B`.
+            Un cambio de stock NO cuenta como modificación.
+          schema: {type: string}
+          examples:
+            fecha: {value: "2026-10-27"}
+            utc: {value: "2026-10-27T14:30:00Z"}
+            venezuela: {value: "2026-10-27T10:30:00-04:00"}
+        - name: page
+          in: query
+          description: Página (desde 1).
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          description: Productos por página.
+          schema: {type: integer, minimum: 1, maximum: 200, default: 50}
+      responses:
+        "200":
+          description: Una página de productos.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ProductPage"}
+              example:
+                currency: USD
+                count: 2
+                total: 5
+                page: 1
+                page_size: 2
+                next: /api/v1/products?category_id=5&page_size=2&page=2
+                data:
+                  - {id: 11, default_code: PAG-1, name: Mouse, price: 25.0, available_qty: 4.0}
+                  - {id: 12, default_code: PAG-2, name: "Camisa (Rojo, M)", price: 18.5, available_qty: 0.0}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "500": {$ref: "#/components/responses/InternalError"}
+
+  /api/v1/orders:
+    post:
+      operationId: createOrder
+      summary: Crear un pedido de venta confirmado
+      description: |
+        Crea el pedido para un cliente que ya existe en Odoo (por su RIF) y lo confirma: Odoo genera la entrega.
+        Los precios son los de Odoo (lista de precios del cliente). Si la llamada falla, no se crea nada.
+
+        **Reintentos seguros:** envíe `Idempotency-Key` (por ejemplo un UUID por pedido).
+        - Misma clave y mismo contenido → `200` con el mismo pedido y la cabecera `Idempotent-Replayed: true`.
+        - Misma clave y otro contenido → `409 IDEMPOTENCY_KEY_REUSED`.
+        - Una llamada que falló no consume la clave.
+        Sin la cabecera, repetir la misma `external_ref` da `409 DUPLICATE_EXTERNAL_REF`.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: Clave del intento (1 a 255 caracteres), única por pedido y por usuario de la integración.
+          schema: {type: string, minLength: 1, maxLength: 255}
+          example: 3f0c2d9e-7a51-4c1b-9a0e-2b6f8f3c1d42
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OrderRequest"}
+            example:
+              customer_vat: J-12345678-9
+              external_ref: WEB-1001
+              lines:
+                - {default_code: SHOP-001, quantity: 2}
+                - {default_code: SHOP-003, quantity: 1}
+      responses:
+        "201":
+          description: Pedido creado y confirmado.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Order"}
+        "200":
+          description: Reintento con la misma Idempotency-Key y el mismo contenido; devuelve el pedido ya creado.
+          headers:
+            Idempotent-Replayed:
+              schema: {type: string, enum: ["true"]}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Order"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthorized"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409":
+          description: |
+            `DUPLICATE_EXTERNAL_REF` (ya existe un pedido con esa referencia), `IDEMPOTENCY_KEY_REUSED` (la clave
+            se usó con otro contenido) o `IDEMPOTENCY_KEY_IN_USE` (otra petición con la misma clave se procesó al
+            mismo tiempo: reintente para recibir el pedido).
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Error"}
+              example:
+                error: {code: IDEMPOTENCY_KEY_REUSED, field: Idempotency-Key, message: Esa Idempotency-Key ya se usó con otro contenido.}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "500": {$ref: "#/components/responses/InternalError"}
+
+webhooks:
+  orderDelivered:
+    post:
+      summary: "order.delivered: Odoo validó una entrega de un pedido creado por la API"
+      description: |
+        Odoo lo envía a la URL configurada (parámetro del sistema `shop_integration_api.webhook_url`) **después**
+        de validar la entrega, desde una cola: validar nunca espera a la tienda.
+        - Responda `2xx` para confirmar. Cualquier otro código, un error de conexión o más de 10 s de espera
+          cuentan como fallo y se reintenta a los 1, 5, 15, 30, 60, 120 y 240 minutos (8 intentos); después
+          el aviso queda «fallido» en Odoo y se puede reenviar a mano.
+        - Un aviso puede llegar más de una vez: ignore un `X-Shop-Event-Id` que ya procesó.
+        - Verifique la firma: `X-Shop-Signature` = `sha256=` + HMAC-SHA256 del cuerpo exacto con el secreto
+          compartido (`shop_integration_api.webhook_secret`).
+        - Una entrega parcial genera un aviso por cada entrega validada (`is_partial`, `is_backorder`).
+      parameters:
+        - {name: X-Shop-Event, in: header, required: true, schema: {type: string, enum: [order.delivered]}}
+        - {name: X-Shop-Event-Id, in: header, required: true, schema: {type: string}}
+        - {name: X-Shop-Signature, in: header, required: true, schema: {type: string, pattern: "^sha256=[0-9a-f]{64}$"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OrderDeliveredEvent"}
+            example:
+              event: order.delivered
+              event_id: 42
+              occurred_at: "2026-10-28T15:04:05Z"
+              order: {id: 17, name: S00017, external_ref: WEB-1001}
+              delivery: {id: 23, name: WH/OUT/00023, is_partial: false, is_backorder: false}
+              lines:
+                - {default_code: SHOP-001, quantity: 2.0}
+      responses:
+        "2XX": {description: Aviso recibido.}
+        default: {description: Fallo; Odoo reintentará.}
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      description: API key nativa de Odoo (res.users.apikeys) del usuario de la integración.
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string, examples: [PRODUCT_NOT_FOUND]}
+            field: {type: [string, "null"], description: "Dato a corregir, p. ej. lines[1].default_code", examples: ["lines[1].default_code"]}
+            message: {type: string, examples: ["No existe un producto con el código ABC-123."]}
+
+    Product:
+      type: object
+      required: [id, default_code, name, price, available_qty]
+      properties:
+        id: {type: integer, description: Id de la variante en Odoo.}
+        default_code: {type: [string, "null"], description: Código del producto (el que se usa en los pedidos).}
+        name: {type: string, description: Nombre con los valores de la variante.}
+        price: {type: number, description: Precio de venta de la ficha, sin impuestos, en `currency`.}
+        available_qty: {type: number, description: Disponible para vender (a mano menos reservado) en los almacenes de la compañía.}
+
+    ProductPage:
+      type: object
+      required: [currency, count, total, page, page_size, next, data]
+      properties:
+        currency: {type: string, description: Código ISO de la moneda de los precios., examples: [USD]}
+        count: {type: integer, description: Productos en esta página.}
+        total: {type: integer, description: Productos que cumplen los filtros (todas las páginas).}
+        page: {type: integer}
+        page_size: {type: integer}
+        next: {type: [string, "null"], description: "Ruta de la página siguiente (con los mismos filtros), o null si es la última."}
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Product"}
+
+    OrderRequest:
+      type: object
+      required: [customer_vat, external_ref, lines]
+      properties:
+        customer_vat: {type: string, description: "RIF del cliente; se comparan solo letras y números (J-12345678-9 = J123456789)."}
+        external_ref: {type: string, description: Número del pedido en la tienda; único.}
+        lines:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [default_code, quantity]
+            properties:
+              default_code: {type: string}
+              quantity: {type: number, exclusiveMinimum: 0}
+
+    Order:
+      type: object
+      properties:
+        id: {type: integer}
+        name: {type: string, examples: [S00042]}
+        external_ref: {type: string}
+        state: {type: string, description: "Estado del pedido en Odoo; «sale» = confirmado.", examples: [sale]}
+        customer:
+          type: object
+          properties:
+            id: {type: integer}
+            name: {type: string}
+            vat: {type: string}
+        amount_untaxed: {type: number}
+        amount_tax: {type: number}
+        amount_total: {type: number}
+        currency: {type: string}
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              default_code: {type: string}
+              quantity: {type: number}
+              price_unit: {type: number}
+              subtotal: {type: number}
+
+    OrderDeliveredEvent:
+      type: object
+      required: [event, event_id, occurred_at, order, delivery, lines]
+      properties:
+        event: {type: string, enum: [order.delivered]}
+        event_id: {type: integer, description: Igual a X-Shop-Event-Id; úselo para no procesar dos veces.}
+        occurred_at: {type: string, format: date-time, description: Fecha y hora de validación (UTC).}
+        order:
+          type: object
+          properties:
+            id: {type: integer}
+            name: {type: string}
+            external_ref: {type: string}
+        delivery:
+          type: object
+          properties:
+            id: {type: integer}
+            name: {type: string}
+            is_partial: {type: boolean, description: Quedó pendiente otra entrega (backorder).}
+            is_backorder: {type: boolean, description: Esta entrega es el resto de una parcial anterior.}
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              default_code: {type: string}
+              quantity: {type: number}
+
+  responses:
+    BadRequest:
+      description: "Parámetro o cuerpo inválido: INVALID_DATE, INVALID_PARAMETER, INVALID_JSON, INVALID_IDEMPOTENCY_KEY."
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+          example:
+            error: {code: INVALID_DATE, field: updated_since, message: "La fecha «27/10/2026» no es válida. Use AAAA-MM-DD o AAAA-MM-DDTHH:MM:SS (UTC), por ejemplo 2026-10-27T14:30:00."}
+    Unauthorized:
+      description: "UNAUTHORIZED (falta Authorization: Bearer) o INVALID_API_KEY (clave inválida, vencida o usuario archivado)."
+      headers:
+        WWW-Authenticate: {schema: {type: string}}
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Forbidden:
+      description: "FORBIDDEN: el usuario de la integración no tiene permisos suficientes (por ejemplo, de inventario)."
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+    Unprocessable:
+      description: |
+        Datos que no se pueden procesar: CATEGORY_NOT_FOUND, MISSING_FIELD, CUSTOMER_NOT_FOUND, AMBIGUOUS_CUSTOMER,
+        INVALID_LINE, PRODUCT_NOT_FOUND, AMBIGUOUS_PRODUCT, INVALID_QUANTITY, BUSINESS_RULE.
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}
+          example:
+            error: {code: PRODUCT_NOT_FOUND, field: "lines[1].default_code", message: No existe un producto con el código ABC-123.}
+    InternalError:
+      description: "INTERNAL_ERROR: error inesperado de Odoo; queda en el registro de llamadas."
+      content:
+        application/json:
+          schema: {$ref: "#/components/schemas/Error"}

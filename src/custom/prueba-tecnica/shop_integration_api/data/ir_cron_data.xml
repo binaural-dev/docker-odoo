@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Envía los avisos pendientes a la tienda. Además de cada 5 minutos, se dispara al encolar un aviso. -->
+    <record id="ir_cron_shop_webhook_send" model="ir.cron">
+        <field name="name">Tienda en línea: enviar avisos (webhook)</field>
+        <field name="model_id" ref="model_shop_webhook_event"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_send_pending()</field>
+        <field name="interval_number">5</field>
+        <field name="interval_type">minutes</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>
