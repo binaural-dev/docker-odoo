@@ -10,6 +10,10 @@
      el formato de error que pide el tramo B, para no cambiar el contrato con la tienda más adelante.
 2. Pruebas `HttpCase` de cada filtro solo y combinados, más fechas inválidas, permisos y método HTTP.
 3. Prueba en vivo con `curl` del flujo que hará la tienda: login, consulta y errores.
+4. «Sigue con el 1-B: API keys, POST /api/v1/orders y log de llamadas.»
+   - Revisó en Odoo 18 `auth='bearer'` y `res.users.apikeys._check_credentials`. Descartó el `auth='bearer'`
+     nativo porque acepta también la sesión del navegador y responde con su propio formato de error. Propuso
+     un único punto de entrada que autentica, ejecuta en un savepoint y registra la llamada.
 
 ## Lo que la IA hizo mal
 - **Usuario de prueba sin permisos de inventario:** las pruebas usaban un usuario interno básico y 8 de 13
@@ -21,6 +25,13 @@
   agregó un caso con zona `-04:00`.
 - En la documentación, la llamada sin sesión parecía redirigir siempre al login. La prueba en vivo con
   `curl` mostró un 404 cuando hay varias bases sin `dbfilter`; quedó documentado.
+
+- **Tramo B: rutas ejecutadas dos veces sin que las pruebas fallaran.** Las 33 pruebas pasaron, pero el
+  registro mostraba «cannot execute INSERT in a read-only transaction, retrying with a read/write cursor».
+  Odoo 18 abre los `GET` con un cursor de solo lectura y, al escribir el log, repetía la petición entera. En
+  el `POST`, además, la captura genérica de errores convertía ese primer intento en un «Error inesperado».
+  Se detectó leyendo el registro de las pruebas, no por un fallo. Se corrigió con `readonly=False` y se agregó
+  `test_each_call_runs_once`, que falla si vuelve a aparecer el reintento o un error de SQL.
 
 ## Lo que escribiste tú sin IA
 - (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)
