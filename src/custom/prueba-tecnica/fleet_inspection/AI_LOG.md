@@ -14,12 +14,24 @@
      `Invalid field 'numbercall'` y, en una segunda corrida, `Invalid view type: 'tree'`. Esto demuestra que
      el registro de la versión migrada (sin advertencias) es una verificación real.
 
+3. «Sigue con el 2-B: catálogo de tipo de vehículo y script de migración.»
+   - Antes de cambiar el código, preparó la base del escenario real (versión del tramo A con 26
+     inspecciones) para poder actualizarla después con `-u`. Separó la lógica en `migration_utils.py` para
+     probarla, y respaldó la selección en una columna propia porque Odoo borra la columna del campo
+     eliminado al terminar la actualización.
+
 ## Lo que la IA hizo mal
 - Asumió que la categoría `base.module_category_human_resources_fleet` estaba en los datos de `base`. Al
   buscarla no apareció ahí; resultó que la genera la categoría del módulo `fleet`, y `fleet` mismo la usa. No
   hubo que cambiar nada, pero el supuesto inicial era incorrecto y se detectó al verificar.
 - La primera contraprueba se detuvo en el cron y no llegó a las vistas. Hubo que repetirla quitando solo
   `numbercall` y `doall` para tener evidencia del error de `<tree>`.
+
+- En la actualización real aparecieron avisos `<string>:19: (WARNING/2)` y `Undefined substitution
+  referenced: "---"`. No eran de la migración: Odoo interpreta el README.md como reStructuredText para la
+  descripción del módulo, y las tablas Markdown le parecen sustituciones. Se resolvió con una `description`
+  corta en el manifiesto. Lo mismo pasaba desde antes en `sale_commission`, que no se tocó por ser el módulo
+  del hotfix.
 
 ## Lo que escribiste tú sin IA
 - (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)
