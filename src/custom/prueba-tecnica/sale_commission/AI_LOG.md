@@ -29,4 +29,6 @@
   `res_lang_data.xml`. Se resolvió con `./odoo fix-files`.
 
 ## Lo que escribiste tú sin IA
-- (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)
+- Todo el código, las pruebas y la documentación de este módulo los generó la IA (Claude Code); no escribí código a mano.
+- El proceso de decisión técnico y de arquitectura estuvo de mi lado: la IA proponía enfoques y alternativas, y yo decidía cuál seguir, el alcance y el orden de trabajo, y aprobaba cada tramo antes de pasar al siguiente.
+- Validé el resultado manualmente en Odoo: confirmé pedidos como vendedor sin permisos de gerente y como gerente en nombre de un vendedor, y corrí el script de solo lectura sobre la base del incidente.
