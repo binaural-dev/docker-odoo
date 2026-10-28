@@ -49,4 +49,6 @@
   consultarlo. Quedó validado como YAML y revisado a mano, y así se dice en el README.
 
 ## Lo que escribiste tú sin IA
-- (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)
+- Todo el código, las pruebas y la documentación de este módulo los generó la IA (Claude Code); no escribí código a mano.
+- El proceso de decisión técnico y de arquitectura estuvo de mi lado: la IA proponía enfoques y alternativas, y yo decidía cuál seguir, el alcance y el orden de trabajo, y aprobaba cada tramo antes de pasar al siguiente.
+- Validé el resultado manualmente en Odoo: probé los endpoints con una API key real (filtros, paginación, errores, idempotencia), el registro de llamadas y la cola del webhook con la tienda caída.
