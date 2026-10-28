@@ -1,12 +1,16 @@
 from markupsafe import Markup
+from psycopg2.errors import LockNotAvailable
 
 from odoo import _, api, fields, models
 from odoo.exceptions import AccessError, UserError, ValidationError
+from odoo.tools import mute_logger
 
 # Datos de la solicitud que ya no se pueden cambiar después de enviarla.
 LOCKED_FIELDS = {"partner_id", "requester_id", "amount", "currency_id", "date", "concept", "company_id"}
 # Estado y datos que registra el sistema: solo cambian a través de los métodos del flujo (_set_state).
-FLOW_FIELDS = {"state", "approver_id", "approved_by_id", "approval_date", "rejection_reason", "payment_id"}
+FLOW_FIELDS = {
+    "state", "approver_id", "approved_by_id", "approval_date", "rejection_reason", "payment_id", "payment_rate",
+}
 # Estado actual -> estados a los que se puede pasar.
 STATE_TRANSITIONS = {
     "draft": {"submitted"},
@@ -64,6 +68,15 @@ class PaymentRequest(models.Model):
     approval_date = fields.Datetime(string="Fecha de aprobación", readonly=True, copy=False)
     rejection_reason = fields.Text(string="Motivo del rechazo", readonly=True, copy=False)
     payment_id = fields.Many2one("account.payment", string="Pago", readonly=True, copy=False)
+    payment_amount = fields.Monetary(
+        related="payment_id.amount", string="Monto pagado", currency_field="payment_currency_id",
+    )
+    payment_currency_id = fields.Many2one(related="payment_id.currency_id", string="Moneda del pago")
+    payment_rate = fields.Float(
+        string="Tasa aplicada", digits=(16, 6), readonly=True, copy=False,
+        help="Unidades de la moneda del pago por cada unidad de la moneda de la solicitud, "
+             "a la fecha del pago. 1 si se pagó en la misma moneda.",
+    )
 
     @api.constrains("amount")
     def _check_amount(self):
@@ -98,9 +111,31 @@ class PaymentRequest(models.Model):
 
     # Flujo
 
+    def _lock_for_update(self):
+        """Bloquea las filas en la base (SELECT ... FOR UPDATE NOWAIT) hasta el fin de la transacción.
+
+        Si dos personas actúan a la vez sobre la misma solicitud (aprobar y rechazar, o dos pagos), la
+        segunda no puede tomar el bloqueo y recibe un aviso. Si la primera ya terminó, la segunda ve el
+        estado nuevo (se releen los campos) y la transición deja de ser válida. Un chequeo solo en Python
+        no alcanza: las dos transacciones leerían «enviada» antes de que cualquiera escriba.
+        """
+        try:
+            # mute_logger: que otro tenga el bloqueo es un caso esperado, no un error del servidor.
+            with mute_logger("odoo.sql_db"), self.env.cr.savepoint(flush=False):
+                self.env.cr.execute(
+                    "SELECT id FROM payment_request WHERE id IN %s FOR UPDATE NOWAIT", [tuple(self.ids)]
+                )
+        except LockNotAvailable:
+            raise UserError(_(
+                "Otra persona está procesando esta solicitud en este momento. Recargue la página y revise "
+                "su estado antes de intentarlo de nuevo."
+            )) from None
+        self.invalidate_recordset()
+
     def _check_state_change(self, new_state):
         """Quién puede llevar cada solicitud a new_state. Se llama SIEMPRE antes de _set_state()."""
         self.check_access("write")  # registro visible y editable para este usuario (reglas de registro)
+        self._lock_for_update()
         group = STATE_GROUPS.get(new_state)
         if group and not self.env.user.has_group(group):
             raise AccessError(_("No tiene permiso para dejar la solicitud en ese estado."))
@@ -187,28 +222,74 @@ class PaymentRequest(models.Model):
                 ["mail.mail_activity_data_todo"], user_id=request.approver_id.id, feedback=feedback,
             )
 
-    def _create_payment(self, journal, payment_date):
-        """Crea y publica el pago a proveedor y deja la solicitud en «pagada». Una sola vez por solicitud."""
+    def _get_payment_conversion(self, journal, payment_date):
+        """Moneda, monto y tasa del pago desde `journal` en `payment_date`.
+
+        Si el diario paga en otra moneda (p. ej. solicitud en USD, diario en VES), se convierte a la tasa de
+        la FECHA DEL PAGO. Se exige una tasa cargada para ese día: sin ella Odoo usaría la última disponible
+        (o 1 si no hay ninguna) y se pagaría un monto equivocado.
+        """
         self.ensure_one()
-        self._check_state_change("paid")
+        company = self.company_id
+        pay_currency = journal.currency_id or company.currency_id
+        if pay_currency == self.currency_id:
+            return pay_currency, self.amount, 1.0
+        for currency in (self.currency_id | pay_currency) - company.currency_id:
+            has_rate = self.env["res.currency.rate"].sudo().search_count([
+                ("currency_id", "=", currency.id), ("name", "=", payment_date),
+                ("company_id", "in", [False, company.root_id.id, company.id]),
+            ])
+            if not has_rate:
+                raise UserError(_(
+                    "No hay tasa de %(currency)s cargada para el %(date)s. Cárguela en Contabilidad › "
+                    "Configuración › Monedas antes de registrar el pago.",
+                    currency=currency.name, date=fields.Date.to_string(payment_date),
+                ))
+        rate = self.env["res.currency"]._get_conversion_rate(self.currency_id, pay_currency, company, payment_date)
+        amount = self.currency_id._convert(self.amount, pay_currency, company, payment_date)
+        return pay_currency, amount, rate
+
+    def _create_payment(self, journal, payment_date):
+        """Crea y publica el pago a proveedor y deja la solicitud en «pagada». Una sola vez por solicitud.
+
+        Todo o nada: el pago se crea y publica dentro de un savepoint y la solicitud pasa a «pagada» solo
+        después. Si la creación o la publicación fallan, se deshace el pago y la solicitud sigue aprobada.
+        """
+        self.ensure_one()
+        self._check_state_change("paid")  # incluye el bloqueo de la fila: no hay dos pagos simultáneos
         if self.payment_id:
             raise UserError(_("La solicitud %s ya tiene un pago registrado.", self.name))
         if journal.company_id != self.company_id or journal.type not in ("bank", "cash"):
             raise UserError(_("Elija un diario de banco o efectivo de la compañía %s.", self.company_id.name))
-        payment = self.env["account.payment"].create({
-            "payment_type": "outbound",
-            "partner_type": "supplier",
-            "partner_id": self.partner_id.id,
-            "amount": self.amount,
-            "currency_id": self.currency_id.id,
-            "journal_id": journal.id,
-            "date": payment_date,
-            "memo": self.name,
-            "company_id": self.company_id.id,
-        })
-        payment.action_post()
-        self._set_state({"state": "paid", "payment_id": payment.id})
-        self.message_post(body=Markup(_("Pago registrado: %s")) % payment._get_html_link())
+        pay_currency, pay_amount, rate = self._get_payment_conversion(journal, payment_date)
+        try:
+            with self.env.cr.savepoint():
+                payment = self.env["account.payment"].create({
+                    "payment_type": "outbound",
+                    "partner_type": "supplier",
+                    "partner_id": self.partner_id.id,
+                    "amount": pay_amount,
+                    "currency_id": pay_currency.id,
+                    "journal_id": journal.id,
+                    "date": payment_date,
+                    "memo": self.name,
+                    "company_id": self.company_id.id,
+                })
+                payment.action_post()
+        except (UserError, ValidationError) as error:
+            raise UserError(_(
+                "No se pudo registrar el pago de %(name)s; la solicitud sigue aprobada. Detalle: %(error)s",
+                name=self.name, error=error.args[0] if error.args else error,
+            )) from error
+        self._set_state({"state": "paid", "payment_id": payment.id, "payment_rate": rate})
+        body = Markup(_("Pago registrado: %s")) % payment._get_html_link()
+        if pay_currency != self.currency_id:
+            body += Markup("<br/>") + _(
+                "%(amount)s %(from_cur)s pagados en %(paid)s %(to_cur)s a la tasa del %(date)s (%(rate)s).",
+                amount=self.amount, from_cur=self.currency_id.name, paid=pay_amount, to_cur=pay_currency.name,
+                date=fields.Date.to_string(payment_date), rate=round(rate, 6),
+            )
+        self.message_post(body=body)
         return payment
 
     # Botones

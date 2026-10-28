@@ -25,8 +25,8 @@ Solicitudes de pago a proveedores con aprobación (Ejercicio 4 de la prueba téc
 | Tramo | Estado |
 |---|---|
 | A — modelo, estados, grupos, vistas, menú y pruebas | ✅ |
-| B — niveles de aprobación, actividad, wizards de rechazo y pago, `account.payment`, reporte PDF | ✅ 29 pruebas en total, cobertura 95 %, sin advertencias al instalar |
-| C — USD pagado en VES, multicompañía completa, concurrencia, ARCHITECTURE.md | ⏳ Pendiente (ya hay `company_id` en solicitudes y niveles, y una regla de registro por compañía en las solicitudes) |
+| B — niveles de aprobación, actividad, wizards de rechazo y pago, `account.payment`, reporte PDF | ✅ |
+| C — USD pagado en VES, multicompañía, concurrencia con bloqueo en la base, pago todo o nada, [ARCHITECTURE.md](ARCHITECTURE.md) | ✅ 42 pruebas en total (2 de concurrencia con conexiones reales), cobertura 96 %, sin advertencias |
 
 ## Cómo probarlo
 
@@ -74,8 +74,21 @@ Todas corren con usuarios de cada grupo (`with_user`), no como administrador.
 | **B** · **No se puede pagar dos veces** (wizard y método); queda un solo pago | `test_cannot_pay_twice` |
 | **B** · El aprobador no paga | `test_approver_cannot_pay` |
 | **B** · El PDF muestra quién aprobó y cuándo; si se rechazó, el motivo | `test_report_shows_who_approved_and_when`, `test_report_rejected_shows_reason` |
+| **C** · 100 USD pagados desde un diario en VES a la tasa del día del pago (36,5): 3.650 Bs; asiento: 3.650 Bs = 100 USD en la cuenta por pagar | `test_usd_request_paid_in_ves_at_payment_date_rate` |
+| **C** · Manda la fecha del pago, no la de la solicitud; misma moneda sin conversión | `test_payment_on_other_date_uses_that_date_rate`, `test_same_currency_has_no_conversion` |
+| **C** · Sin tasa cargada para el día del pago, no se paga (sigue aprobada) | `test_missing_rate_blocks_payment` |
+| **C** · El wizard muestra moneda, tasa y monto antes de confirmar; el PDF muestra la tasa | `test_wizard_previews_converted_amount`, `test_report_shows_rate` |
+| **C** · Si falla la creación del pago, la solicitud sigue aprobada y no queda ningún pago | `test_failed_payment_leaves_request_approved` |
+| **C** · Un usuario de la compañía B no ve ni lee nada de la A (solicitudes y niveles) | `test_user_of_b_sees_nothing_of_a` |
+| **C** · La solicitud de B usa los niveles de B; el aprobador de un nivel debe tener acceso a su compañía; no se paga con un diario de otra compañía | `test_request_of_b_uses_levels_of_b`, `test_level_approver_must_belong_to_company`, `test_cannot_pay_from_journal_of_other_company` |
+| **C** · Aprobar y rechazar a la vez: solo una gana (dos conexiones reales a la base) | `test_approve_and_reject_at_the_same_time` |
+| **C** · Dos tesoreros pagan a la vez: un solo pago | `test_two_treasurers_pay_at_the_same_time` |
 
 ## Decisiones de diseño
+
+Resumen; el detalle del tramo C (concurrencia, pago todo o nada, monedas, multicompañía) está en
+[ARCHITECTURE.md](ARCHITECTURE.md).
+
 
 - **El estado y los datos del flujo nunca se escriben directamente.** `write()` rechaza a cualquier usuario
   que intente cambiar `state`, `approver_id`, `approved_by_id`, `approval_date`, `rejection_reason` o
@@ -115,11 +128,11 @@ sin su respuesta:
 | 6 | ¿El empleado puede anular una solicitud que ya envió? | No: se le pide al aprobador que la rechace |
 | 7 | ¿Una solicitud se paga siempre completa, o puede haber pagos parciales? | Un solo pago por el monto completo |
 | 8 | ¿El pago debe ir contra una factura del proveedor ya registrada (para conciliarla)? | Pago a proveedor independiente, vinculado a la solicitud. La conciliación con la factura la hace contabilidad como hoy |
-| 9 | «Facturan en dólares y les pagamos en bolívares»: ¿la solicitud se hace en dólares? ¿Qué tasa se usa (BCV del día del pago, de la aprobación, otra)? | La solicitud se registra en la moneda de la factura. Tramo C: se paga desde un diario en VES a la tasa de la **fecha del pago** |
+| 9 | «Facturan en dólares y les pagamos en bolívares»: ¿la solicitud se hace en dólares? ¿Qué tasa se usa (BCV del día del pago, de la aprobación, otra)? ¿Quién carga la tasa cada día? | La solicitud se registra en la moneda de la factura y se paga desde un diario en VES a la tasa de la **fecha del pago**, que debe estar cargada en Odoo para ese día (si no, el pago no se registra) |
 | 10 | ¿Hay que adjuntar la factura o un soporte para poder enviar? | Se puede adjuntar en el chatter, pero no es obligatorio |
 | 11 | ¿Quiénes son «todos los empleados»: solo usuarios internos de Odoo? | Sí, todo usuario interno. Los usuarios del portal no |
 | 12 | ¿Qué debe llevar la solicitud impresa para la carpeta del proveedor (firmas, sello, datos bancarios)? | Número, estado, proveedor y RIF, monto, fecha, concepto, solicitante, aprobador asignado, quién aprobó y cuándo (o el motivo del rechazo) y los datos del pago |
-| 13 | ¿Trabajan con más de una empresa en el mismo Odoo? | Solicitudes y niveles tienen compañía; regla de registro por compañía en las solicitudes. El resto en el tramo C |
+| 13 | ¿Trabajan con más de una empresa en el mismo Odoo? | Solicitudes y niveles por compañía, con reglas de registro globales; cada compañía con sus aprobadores y diarios |
 | 14 | ¿Al empleado le llega un correo cuando le aprueban o rechazan? | Lo sigue por el chatter (como creador es seguidor). Al rechazar se le notifica con el motivo |
 | 15 | ¿Quién define y mantiene los niveles de aprobación? | Los administradores de Odoo (*Ajustes*). Los aprobadores pueden verlos, no cambiarlos |
 
@@ -130,6 +143,8 @@ sin su respuesta:
 - Si el aprobador asignado no está disponible (vacaciones), no hay delegación ni reasignación desde la
   interfaz: solo el aprobador asignado puede aprobar o rechazar, también frente a un administrador. Mejora
   propuesta: un botón «Reasignar aprobador» para administradores, que quede en el chatter.
-- Pago en otra moneda distinta a la de la solicitud, multicompañía completa y concurrencia: tramo C.
+- La tasa del día se carga en Odoo (manual o con el servicio de tasas); el módulo no la trae del BCV.
+- Las pruebas de concurrencia confirman datos en la base de pruebas (para tener dos transacciones reales) y
+  los borran o archivan al terminar.
 - Las vistas se validan al instalar y la visibilidad de los botones se prueba sobre la vista de cada usuario,
   pero las pantallas no se revisaron una por una en el navegador.

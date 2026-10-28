@@ -33,8 +33,14 @@
                     <group>
                         <field name="journal_id" options="{'no_create': True}"/>
                         <field name="payment_date"/>
+                        <field name="payment_currency_id" invisible="1"/>
+                        <field name="payment_amount" invisible="not payment_amount"/>
+                        <field name="payment_rate" invisible="not payment_rate or payment_currency_id == currency_id"/>
                     </group>
                 </group>
+                <div class="alert alert-warning" role="alert" invisible="not preview_warning">
+                    <field name="preview_warning"/>
+                </div>
                 <footer>
                     <button name="action_confirm" string="Registrar pago" type="object" class="btn-primary"/>
                     <button string="Cancelar" special="cancel" class="btn-secondary"/>
