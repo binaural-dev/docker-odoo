@@ -36,6 +36,12 @@ Compatible con Linux y macOS (AMD y ARM).
    ./odoo test prueba-tecnica shop_integration_api,fleet_inspection,sale_commission,payment_request -d prueba_limpia
    ```
 
+   Equivale al comando del enunciado (`./odoo test -d prueba_limpia -m ...`). Escrito así, sin la instancia,
+   el CLI pregunta cuál usar (elegir `1. prueba-tecnica`).
+
+   Resultado en la rama `integration/entrega`: **4 módulos instalados, 50 pruebas, 0 fallos, cobertura 93 %**,
+   sin advertencias en el registro.
+
 **En Windows:** correr el CLI desde WSL2 (Ubuntu) con Docker Desktop y la integración de WSL activa.
 El repo fuerza finales de línea LF con `.gitattributes`; sin eso los scripts quedan con CRLF y el
 build de la imagen falla.
