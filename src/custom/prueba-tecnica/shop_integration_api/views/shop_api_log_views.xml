@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="shop_api_log_view_list" model="ir.ui.view">
+        <field name="name">shop.api.log.list</field>
+        <field name="model">shop.api.log</field>
+        <field name="arch" type="xml">
+            <list create="0" edit="0" decoration-danger="not success" decoration-muted="success">
+                <field name="create_date" string="Fecha"/>
+                <field name="method"/>
+                <field name="endpoint"/>
+                <field name="user_id"/>
+                <field name="status_code"/>
+                <field name="error_code"/>
+                <field name="duration_ms" sum="Total" optional="show"/>
+                <field name="external_ref" optional="show"/>
+                <field name="order_id" optional="show"/>
+                <field name="remote_addr" optional="hide"/>
+                <field name="success" column_invisible="True"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="shop_api_log_view_form" model="ir.ui.view">
+        <field name="name">shop.api.log.form</field>
+        <field name="model">shop.api.log</field>
+        <field name="arch" type="xml">
+            <form create="0" edit="0">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="create_date" string="Fecha"/>
+                            <field name="method"/>
+                            <field name="endpoint"/>
+                            <field name="user_id"/>
+                            <field name="remote_addr"/>
+                        </group>
+                        <group>
+                            <field name="status_code"/>
+                            <field name="error_code"/>
+                            <field name="duration_ms"/>
+                            <field name="external_ref"/>
+                            <field name="order_id"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="shop_api_log_view_search" model="ir.ui.view">
+        <field name="name">shop.api.log.search</field>
+        <field name="model">shop.api.log</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="endpoint"/>
+                <field name="external_ref"/>
+                <field name="error_code"/>
+                <field name="user_id"/>
+                <filter name="errors" string="Con error" domain="[('success', '=', False)]"/>
+                <filter name="ok" string="Correctas" domain="[('success', '=', True)]"/>
+                <separator/>
+                <filter name="filter_date" string="Fecha" date="create_date"/>
+                <group string="Agrupar por">
+                    <filter name="group_endpoint" string="Endpoint" context="{'group_by': 'endpoint'}"/>
+                    <filter name="group_status" string="Código HTTP" context="{'group_by': 'status_code'}"/>
+                    <filter name="group_day" string="Día" context="{'group_by': 'create_date:day'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="shop_api_log_action" model="ir.actions.act_window">
+        <field name="name">Llamadas de la tienda en línea</field>
+        <field name="res_model">shop.api.log</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_empty_folder">Todavía no hay llamadas a la API</p>
+            <p>Cada llamada de la tienda (también las que fallan) queda aquí con su usuario, código y duración.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_shop_api_log" name="Llamadas de la tienda en línea" parent="sale.menu_sale_config"
+              action="shop_api_log_action" sequence="90"
+              groups="base.group_system,sales_team.group_sale_manager"/>
+</odoo>
