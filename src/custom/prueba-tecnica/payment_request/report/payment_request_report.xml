@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_report_payment_request" model="ir.actions.report">
+        <field name="name">Solicitud de pago</field>
+        <field name="model">payment.request</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">payment_request.report_payment_request</field>
+        <field name="report_file">payment_request.report_payment_request</field>
+        <field name="print_report_name">'Solicitud de pago - %s' % object.name</field>
+        <field name="binding_model_id" ref="model_payment_request"/>
+        <field name="binding_type">report</field>
+    </record>
+
+    <template id="report_payment_request">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="o">
+                <t t-call="web.external_layout">
+                    <div class="page">
+                        <h2>Solicitud de pago <span t-field="o.name"/></h2>
+                        <p><strong>Estado:</strong> <span t-field="o.state"/></p>
+
+                        <table class="table table-sm o_main_table">
+                            <tbody>
+                                <tr><th class="w-25">Proveedor</th>
+                                    <td><span t-field="o.partner_id"/>
+                                        <t t-if="o.partner_id.vat"> · RIF <span t-field="o.partner_id.vat"/></t></td></tr>
+                                <tr><th>Monto</th>
+                                    <td><span t-field="o.amount" t-options="{'widget': 'monetary', 'display_currency': o.currency_id}"/></td></tr>
+                                <tr><th>Fecha de la solicitud</th><td><span t-field="o.date"/></td></tr>
+                                <tr><th>Concepto</th><td><span t-field="o.concept"/></td></tr>
+                                <tr><th>Solicitante</th><td><span t-field="o.requester_id"/></td></tr>
+                                <tr t-if="o.approver_id"><th>Aprobador asignado</th><td><span t-field="o.approver_id"/></td></tr>
+                            </tbody>
+                        </table>
+
+                        <h4>Aprobación</h4>
+                        <table class="table table-sm">
+                            <tbody>
+                                <t t-if="o.approved_by_id">
+                                    <tr><th class="w-25">Aprobada por</th><td><span t-field="o.approved_by_id"/></td></tr>
+                                    <tr><th>Fecha de aprobación</th><td><span t-field="o.approval_date"/></td></tr>
+                                </t>
+                                <tr t-elif="o.state == 'rejected'">
+                                    <th class="w-25">Rechazada</th><td><span t-field="o.rejection_reason"/></td>
+                                </tr>
+                                <tr t-else=""><td colspan="2">Pendiente de aprobación.</td></tr>
+                            </tbody>
+                        </table>
+
+                        <t t-if="o.payment_id">
+                            <h4>Pago</h4>
+                            <table class="table table-sm">
+                                <tbody>
+                                    <tr><th class="w-25">Pago</th><td><span t-field="o.payment_id.name"/></td></tr>
+                                    <tr><th>Fecha del pago</th><td><span t-field="o.payment_id.date"/></td></tr>
+                                    <tr><th>Diario</th><td><span t-field="o.payment_id.journal_id"/></td></tr>
+                                    <tr><th>Monto pagado</th>
+                                        <td><span t-field="o.payment_id.amount" t-options="{'widget': 'monetary', 'display_currency': o.payment_id.currency_id}"/></td></tr>
+                                </tbody>
+                            </table>
+                        </t>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+</odoo>
