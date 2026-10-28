@@ -21,7 +21,7 @@ Módulo escrito originalmente para **Odoo 16**, migrado a **Odoo 18** (Ejercicio
 |---|---|
 | A — migración a Odoo 18 | ✅ Instala en una base nueva, sin advertencias de obsolescencia |
 | B — tipo de vehículo como catálogo + script en `migrations/` | ✅ Probado con una prueba de la lógica y con una actualización real con `-u` (sección «Tramo B») |
-| C — script idempotente por lotes, 10.000 registros, MIGRATION_PLAN.md | ⏳ Pendiente (el script ya es idempotente; faltan los lotes, la medición y el plan) |
+| C — script idempotente por lotes, 10.000 inspecciones medidas, MIGRATION_PLAN.md | ✅ Lotes de 1.000 con paginación por id; 10.000 en ~0,5 s de script (~4,6 s el `-u`) y 100.000 en ~5 s, con memoria constante (133 MB); plan con reversión ensayada. Ver [MIGRATION_PLAN.md](MIGRATION_PLAN.md) |
 
 ## Cómo probarlo
 
@@ -29,7 +29,7 @@ Módulo escrito originalmente para **Odoo 16**, migrado a **Odoo 18** (Ejercicio
 ./odoo test prueba-tecnica fleet_inspection -d fleet_prueba
 ```
 
-Resultado: `0 failed, 0 error(s) of 16 tests`, cobertura 96 % (100 % en `migration_utils.py`). El registro
+Resultado: `0 failed, 0 error(s) of 18 tests`, cobertura 96 % (100 % en `migration_utils.py`). El registro
 de la instalación no tiene ninguna línea `WARNING` ni `ERROR`, y la palabra «deprecat» no aparece. La única
 advertencia del registro de las pruebas es la que provoca a propósito la prueba de un valor fuera del
 catálogo («valor «trailer» fuera del catálogo; se creó como tipo nuevo»).
@@ -66,6 +66,8 @@ simula la tabla de la 18.0.1.0.0 (columna de selección con valores y many2one v
 | Prueba | Qué demuestra |
 |---|---|
 | `test_every_inspection_keeps_its_type` | Moto, carro, camión y **otro** quedan con su tipo del catálogo (sin duplicarlo); un valor desconocido se crea como tipo y ninguna inspección queda sin tipo |
+| `test_small_batches_give_the_same_result` | (C) Con lotes de 2 filas, 3 lotes por paso y el mismo resultado |
+| `test_resumes_after_a_partial_run` | (C) Si una corrida quedó a medias, la siguiente completa solo lo que faltaba |
 | `test_running_twice_changes_nothing` | Correr pre y post otra vez no respalda ni asigna nada ni crea tipos |
 | `test_rerun_does_not_overwrite_manual_corrections` | Una corrección manual posterior se respeta |
 | `test_aborts_if_an_inspection_would_stay_without_type` | Si una inspección quedaría sin tipo, la migración aborta |
@@ -96,11 +98,26 @@ fleet_inspection: 26 inspecciones con tipo asignado; tipos creados: ninguno
 | Columnas | `vehicle_type` eliminada por Odoo; quedan `vehicle_type_id` y `legacy_vehicle_type` (respaldo) |
 | Segunda corrida de pre y post sobre esa base | 0 respaldadas, 0 asignadas, ningún cambio |
 
-### Reversión
+## Tramo C — por lotes, 10.000 inspecciones y plan de producción
 
-Si hubiera que volver a la 18.0.1.0.0, `legacy_vehicle_type` conserva el valor original de cada inspección.
-El procedimiento completo (respaldo previo, verificaciones y reversión) queda para `MIGRATION_PLAN.md` del
-tramo C.
+- **Lotes:** cada paso procesa 1.000 inspecciones por sentencia, recorriendo la tabla por id desde el último
+  lote. Solo los ids del lote pasan por Python, así que la memoria no depende del volumen. El avance queda en
+  el registro (`respaldo: lote 7, 1000 filas (acumulado 7000, 0.07 s)`).
+- **Idempotente:** cada paso toca solo lo pendiente. Correrlo dos veces, o retomarlo después de una corrida a
+  medias, deja el mismo resultado (pruebas `test_running_twice_changes_nothing` y
+  `test_resumes_after_a_partial_run`).
+- **Datos de prueba:** [`scripts/generate_inspections.py`](scripts/generate_inspections.py) genera
+  inspecciones con el ORM (con su checklist), con semilla fija, más 10 con un valor fuera del catálogo.
+- **Medido, no supuesto** (detalle en [MIGRATION_PLAN.md](MIGRATION_PLAN.md#mediciones)):
+
+| Inspecciones | `-u` completo | Respaldo | Asignación | Memoria máx. |
+|---|---|---|---|---|
+| 10.000 (3 corridas) | 4,50–4,66 s | 0,10–0,11 s | 0,38–0,43 s | 133 MB |
+| 100.000 (2 corridas) | 9,46–9,64 s | 1,17–1,19 s | 3,95–4,16 s | 133–134 MB |
+
+- **[MIGRATION_PLAN.md](MIGRATION_PLAN.md):** respaldo, verificación previa con criterios para seguir o no,
+  ejecución, verificación posterior (SQL y en la interfaz) y reversión en dos casos: antes o después de que
+  los usuarios vuelvan a trabajar. La reversión del segundo caso se ensayó sobre una copia migrada.
 
 **Contraprueba** (para demostrar que el registro sí habría mostrado los problemas): se instaló el código de
 Odoo 16 tal cual, solo movido a la carpeta de addons y con la versión subida. Odoo 18 mostró:

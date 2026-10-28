@@ -33,5 +33,14 @@
   corta en el manifiesto. Lo mismo pasaba desde antes en `sale_commission`, que no se tocó por ser el módulo
   del hotfix.
 
+- **Tramo C, lotes que no escalaban:** la primera versión por lotes buscaba en cada lote las filas pendientes
+  desde el principio de la tabla. Con 10.000 parecía bien, pero con 100.000 tardó 15 veces más en lugar de
+  10. Se detectó porque se midió con dos volúmenes, y se cambió a paginación por id.
+- **Primer borrador de MIGRATION_PLAN.md con un paso que no funcionaba:** detenía la instancia
+  (`./odoo stop`) antes de `./odoo update`, pero ese comando corre Odoo dentro del contenedor de la instancia.
+  Se detectó al leer `docs/comandos-odoo.md`, y el plan ahora cierra el acceso deteniendo el proxy. También
+  afirmaba que al revertir Odoo borraba la tabla del catálogo: el ensayo de la reversión mostró que la tabla
+  queda (Odoo no borra tablas de modelos eliminados).
+
 ## Lo que escribiste tú sin IA
 - (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)
