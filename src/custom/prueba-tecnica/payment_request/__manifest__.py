@@ -13,6 +13,7 @@
         "data/payment_approval_level_data.xml",
         "views/payment_request_views.xml",
         "views/payment_approval_level_views.xml",
+        "wizard/payment_request_wizard_views.xml",
         "views/payment_request_menus.xml",
     ],
     "installable": True,
