@@ -1,7 +1,7 @@
 {
     "name": "Comisiones de vendedores",
     "summary": "Comisión del vendedor por línea de pedido y análisis mensual",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "category": "Sales/Sales",
     "author": "Binaural",
     "license": "LGPL-3",

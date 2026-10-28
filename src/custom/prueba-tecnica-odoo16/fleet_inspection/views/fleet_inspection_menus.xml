@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<odoo>
-    <menuitem id="menu_fleet_inspection_root" name="Inspecciones" parent="fleet.menu_root" sequence="5"
-              groups="group_fleet_inspection_user"/>
-    <menuitem id="menu_fleet_inspection" name="Inspecciones" parent="menu_fleet_inspection_root"
-              action="fleet_inspection_action" sequence="10"/>
-    <menuitem id="menu_fleet_inspection_item" name="Puntos del checklist" parent="fleet.fleet_configuration"
-              action="fleet_inspection_item_action" sequence="50" groups="group_fleet_inspection_manager"/>
-</odoo>
