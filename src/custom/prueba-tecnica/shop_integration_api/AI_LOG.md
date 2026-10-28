@@ -15,6 +15,12 @@
      nativo porque acepta también la sesión del navegador y responde con su propio formato de error. Propuso
      un único punto de entrada que autentica, ejecuta en un savepoint y registra la llamada.
 
+5. «Sigue con el 1-C: paginación, Idempotency-Key, stock eficiente, webhook y openapi.yaml.»
+   - Movió la consulta paginada a un método del modelo, para que la prueba de cantidad de consultas mida lo
+     mismo que ejecuta el endpoint: 17 consultas con 5 y con 60 productos.
+   - Para el webhook propuso una cola: validar la entrega solo encola, y una acción planificada envía con
+     tiempo de espera y reintentos. Así quien valida nunca depende de la tienda.
+
 ## Lo que la IA hizo mal
 - **Usuario de prueba sin permisos de inventario:** las pruebas usaban un usuario interno básico y 8 de 13
   fallaron con `AccessError` sobre `stock.move` al calcular el stock. Se descartó `sudo()`: el usuario de la
@@ -32,6 +38,15 @@
   el `POST`, además, la captura genérica de errores convertía ese primer intento en un «Error inesperado».
   Se detectó leyendo el registro de las pruebas, no por un fallo. Se corrigió con `readonly=False` y se agregó
   `test_each_call_runs_once`, que falla si vuelve a aparecer el reintento o un error de SQL.
+
+- **Tramo C, formato de fecha del webhook:** el primer borrador enviaba `occurred_at` como
+  `2026-10-28 15:04:05Z` (con un espacio), que no es ISO 8601 estricto, aunque `openapi.yaml` lo documentaba
+  como fecha y hora. Se detectó al releer la especificación contra el código, se corrigió y se agregó una
+  aserción en la prueba.
+- Usó `werkzeug.urls.url_encode`, que no existe en las versiones nuevas de Werkzeug. Se cambió por
+  `urllib.parse.urlencode` antes de correr las pruebas.
+- Propuso validar `openapi.yaml` con `openapi-spec-validator`, pero no está instalado y no se descargó nada sin
+  consultarlo. Quedó validado como YAML y revisado a mano, y así se dice en el README.
 
 ## Lo que escribiste tú sin IA
 - (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)
