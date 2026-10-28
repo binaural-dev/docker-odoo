@@ -24,18 +24,18 @@
         <field name="arch" type="xml">
             <form string="Inspección">
                 <header>
-                    <button name="action_start" string="Iniciar" type="object" class="oe_highlight" states="draft"/>
+                    <button name="action_start" string="Iniciar" type="object" class="oe_highlight"
+                            invisible="state != 'draft'"/>
                     <button name="action_approve" string="Aprobar" type="object" class="oe_highlight"
-                            states="in_progress" groups="fleet_inspection.group_fleet_inspection_manager"/>
-                    <button name="action_reject" string="Rechazar" type="object" states="in_progress"
-                            groups="fleet_inspection.group_fleet_inspection_manager"/>
+                            invisible="state != 'in_progress'" groups="fleet_inspection.group_fleet_inspection_manager"/>
+                    <button name="action_reject" string="Rechazar" type="object"
+                            invisible="state != 'in_progress'" groups="fleet_inspection.group_fleet_inspection_manager"/>
                     <button name="action_reset_draft" string="Volver a borrador" type="object"
-                            states="rejected" groups="fleet_inspection.group_fleet_inspection_manager"/>
+                            invisible="state != 'rejected'" groups="fleet_inspection.group_fleet_inspection_manager"/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,in_progress,approved"/>
                 </header>
                 <sheet>
-                    <div class="alert alert-warning" role="alert"
-                         attrs="{'invisible': [('is_overdue', '=', False)]}">
+                    <div class="alert alert-warning" role="alert" invisible="not is_overdue">
                         Esta inspección lleva más de 7 días en curso.
                     </div>
                     <div class="oe_title">
@@ -43,26 +43,26 @@
                     </div>
                     <group>
                         <group>
-                            <field name="vehicle_id"/>
-                            <field name="vehicle_type"/>
-                            <field name="odometer" attrs="{'readonly': [('state', 'in', ('approved', 'rejected'))]}"/>
+                            <field name="vehicle_id" readonly="state != 'draft'"/>
+                            <field name="vehicle_type" readonly="state != 'draft'"/>
+                            <field name="odometer" readonly="state in ('approved', 'rejected')"/>
                         </group>
                         <group>
                             <field name="inspector_id"/>
-                            <field name="date" attrs="{'readonly': [('state', '!=', 'draft')]}"/>
+                            <field name="date" readonly="state != 'draft'"/>
                             <field name="failed_count"/>
                             <field name="is_overdue" invisible="1"/>
                         </group>
                     </group>
                     <notebook>
                         <page string="Checklist" name="checklist">
-                            <field name="line_ids" attrs="{'readonly': [('state', 'in', ('approved', 'rejected'))]}">
+                            <field name="line_ids" readonly="state in ('approved', 'rejected')">
                                 <tree editable="bottom" create="0" decoration-danger="result == 'fail'">
                                     <field name="sequence" invisible="1"/>
                                     <field name="item_id" readonly="1" force_save="1"/>
                                     <field name="critical"/>
                                     <field name="state" invisible="1"/>
-                                    <field name="result" attrs="{'required': [('state', '=', 'in_progress')]}"/>
+                                    <field name="result" required="state == 'in_progress'"/>
                                     <field name="comment"/>
                                 </tree>
                             </field>
