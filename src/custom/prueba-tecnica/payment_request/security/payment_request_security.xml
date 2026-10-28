@@ -21,7 +21,8 @@
     <record id="group_payment_request_treasury" model="res.groups">
         <field name="name">Tesorería</field>
         <field name="category_id" ref="module_category_payment_request"/>
-        <field name="implied_ids" eval="[(4, ref('group_payment_request_user'))]"/>
+        <!-- Registrar el pago crea un account.payment: requiere el grupo Facturación de Contabilidad. -->
+        <field name="implied_ids" eval="[(4, ref('group_payment_request_user')), (4, ref('account.group_account_invoice'))]"/>
         <field name="comment">Ve todas las solicitudes y registra el pago de las aprobadas.</field>
     </record>
 

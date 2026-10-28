@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="payment_approval_level_view_list" model="ir.ui.view">
+        <field name="name">payment.approval.level.list</field>
+        <field name="model">payment.approval.level</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="company_id" groups="base.group_multi_company"/>
+                <field name="min_amount"/>
+                <field name="currency_id" column_invisible="True"/>
+                <field name="approver_id" widget="many2one_avatar_user"/>
+                <field name="active" column_invisible="True"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="payment_approval_level_action" model="ir.actions.act_window">
+        <field name="name">Niveles de aprobación</field>
+        <field name="res_model">payment.approval.level</field>
+        <field name="view_mode">list</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Define quién aprueba cada rango de montos</p>
+            <p>Por ejemplo: desde 0 aprueba el jefe del área; desde 5.000 aprueba gerencia.
+               Cada solicitud se asigna al nivel de mayor monto que no supere el de la solicitud.</p>
+        </field>
+    </record>
+</odoo>
