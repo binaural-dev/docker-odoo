@@ -43,4 +43,6 @@
   queda (Odoo no borra tablas de modelos eliminados).
 
 ## Lo que escribiste tú sin IA
-- (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)
+- Todo el código, las pruebas y la documentación de este módulo los generó la IA (Claude Code); no escribí código a mano.
+- El proceso de decisión técnico y de arquitectura estuvo de mi lado: la IA proponía enfoques y alternativas, y yo decidía cuál seguir, el alcance y el orden de trabajo, y aprobaba cada tramo antes de pasar al siguiente.
+- Validé el resultado manualmente en Odoo: recorrí el flujo de inspección con el bloqueo por punto crítico, el catálogo de tipos y el reporte, y validé la migración de 10.000 inspecciones con las consultas del MIGRATION_PLAN.
