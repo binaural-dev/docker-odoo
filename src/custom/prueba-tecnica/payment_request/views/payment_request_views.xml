@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="payment_request_view_list" model="ir.ui.view">
+        <field name="name">payment.request.list</field>
+        <field name="model">payment.request</field>
+        <field name="arch" type="xml">
+            <list decoration-muted="state == 'rejected'" decoration-info="state == 'submitted'"
+                  decoration-success="state == 'paid'">
+                <field name="name"/>
+                <field name="date"/>
+                <field name="partner_id"/>
+                <field name="requester_id" widget="many2one_avatar_user"/>
+                <field name="concept" optional="hide"/>
+                <field name="amount" sum="Total"/>
+                <field name="currency_id" column_invisible="True"/>
+                <field name="company_id" groups="base.group_multi_company" optional="show"/>
+                <field name="state" widget="badge"
+                       decoration-info="state == 'submitted'" decoration-warning="state == 'approved'"
+                       decoration-success="state == 'paid'" decoration-danger="state == 'rejected'"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="payment_request_view_form" model="ir.ui.view">
+        <field name="name">payment.request.form</field>
+        <field name="model">payment.request</field>
+        <field name="arch" type="xml">
+            <form string="Solicitud de pago">
+                <header>
+                    <button name="action_submit" string="Enviar" type="object" class="oe_highlight"
+                            invisible="state != 'draft'"
+                            confirm="Después de enviarla ya no podrá modificar la solicitud. ¿Desea continuar?"/>
+                    <button name="action_approve" string="Aprobar" type="object" class="oe_highlight"
+                            invisible="state != 'submitted'"
+                            groups="payment_request.group_payment_request_approver"/>
+                    <button name="action_reject" string="Rechazar" type="object"
+                            invisible="state != 'submitted'"
+                            groups="payment_request.group_payment_request_approver"/>
+                    <button name="action_mark_paid" string="Registrar pago" type="object" class="oe_highlight"
+                            invisible="state != 'approved'"
+                            groups="payment_request.group_payment_request_treasury"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,submitted,approved,paid"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="partner_id" readonly="state != 'draft'"
+                                   context="{'res_partner_search_mode': 'supplier'}"/>
+                            <label for="amount"/>
+                            <div class="o_row">
+                                <field name="amount" readonly="state != 'draft'"/>
+                                <field name="currency_id" readonly="state != 'draft'"
+                                       options="{'no_create': True}"/>
+                            </div>
+                            <field name="date" readonly="state != 'draft'"/>
+                        </group>
+                        <group>
+                            <field name="requester_id" widget="many2one_avatar_user"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                            <field name="approved_by_id" invisible="not approved_by_id"/>
+                            <field name="approval_date" invisible="not approval_date"/>
+                        </group>
+                    </group>
+                    <field name="concept" readonly="state != 'draft'"
+                           placeholder="¿Qué se le paga al proveedor y por qué? (factura, servicio, anticipo…)"/>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="payment_request_view_search" model="ir.ui.view">
+        <field name="name">payment.request.search</field>
+        <field name="model">payment.request</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="partner_id"/>
+                <field name="requester_id"/>
+                <field name="concept"/>
+                <filter name="my_requests" string="Mis solicitudes" domain="[('requester_id', '=', uid)]"/>
+                <separator/>
+                <filter name="draft" string="Borrador" domain="[('state', '=', 'draft')]"/>
+                <filter name="submitted" string="Enviadas" domain="[('state', '=', 'submitted')]"/>
+                <filter name="approved" string="Aprobadas" domain="[('state', '=', 'approved')]"/>
+                <filter name="paid" string="Pagadas" domain="[('state', '=', 'paid')]"/>
+                <filter name="rejected" string="Rechazadas" domain="[('state', '=', 'rejected')]"/>
+                <separator/>
+                <filter name="filter_date" string="Fecha" date="date"/>
+                <group string="Agrupar por">
+                    <filter name="group_partner" string="Proveedor" context="{'group_by': 'partner_id'}"/>
+                    <filter name="group_state" string="Estado" context="{'group_by': 'state'}"/>
+                    <filter name="group_requester" string="Solicitante" context="{'group_by': 'requester_id'}"/>
+                    <filter name="group_date" string="Fecha" context="{'group_by': 'date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="payment_request_action" model="ir.actions.act_window">
+        <field name="name">Solicitudes de pago</field>
+        <field name="res_model">payment.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Crea tu primera solicitud de pago</p>
+            <p>Indica el proveedor, el monto y el concepto, y envíala para que la aprueben.</p>
+        </field>
+    </record>
+
+    <record id="payment_request_action_to_approve" model="ir.actions.act_window">
+        <field name="name">Por aprobar</field>
+        <field name="res_model">payment.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_submitted': 1}</field>
+    </record>
+
+    <record id="payment_request_action_to_pay" model="ir.actions.act_window">
+        <field name="name">Por pagar</field>
+        <field name="res_model">payment.request</field>
+        <field name="view_mode">list,form</field>
+        <field name="context">{'search_default_approved': 1}</field>
+    </record>
+</odoo>
