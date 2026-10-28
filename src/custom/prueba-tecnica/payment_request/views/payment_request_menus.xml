@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Menú Raíz -->
+    <menuitem id="menu_payment_request_root"
+              name="Solicitudes de Pago"
+              web_icon="payment_request,static/description/icon.png"
+              sequence="55"/>
+
+    <!-- Submenú Operaciones -->
+    <menuitem id="menu_payment_request_operations"
+              name="Operaciones"
+              parent="menu_payment_request_root"
+              sequence="10"/>
+
+    <!-- Acción de Solicitudes -->
+    <menuitem id="menu_payment_request_act"
+              name="Todas las Solicitudes"
+              parent="menu_payment_request_operations"
+              action="action_payment_request"
+              sequence="10"/>
+</odoo>
