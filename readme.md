@@ -39,7 +39,7 @@ Compatible con Linux y macOS (AMD y ARM).
    Equivale al comando del enunciado (`./odoo test -d prueba_limpia -m ...`). Escrito así, sin la instancia,
    el CLI pregunta cuál usar (elegir `1. prueba-tecnica`).
 
-   Resultado en la rama `integration/entrega`: **4 módulos instalados, 63 pruebas, 0 fallos, cobertura 93 %**,
+   Resultado en la rama `integration/entrega`: **4 módulos instalados, 83 pruebas, 0 fallos, cobertura 92 %**,
    sin advertencias en el registro.
 
 **En Windows:** correr el CLI desde WSL2 (Ubuntu) con Docker Desktop y la integración de WSL activa.
