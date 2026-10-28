@@ -4,6 +4,8 @@ import re
 import time
 from datetime import datetime, timezone
 
+from urllib.parse import urlencode
+
 from psycopg2 import IntegrityError
 
 from odoo import http
@@ -12,6 +14,8 @@ from odoo.http import request
 
 _logger = logging.getLogger(__name__)
 
+DEFAULT_PAGE_SIZE = 50
+MAX_PAGE_SIZE = 200
 TRUE_VALUES = {"1", "true", "yes"}
 FALSE_VALUES = {"0", "false", "no", ""}
 BEARER_RE = re.compile(r"^bearer\s+(\S+)\s*$", re.IGNORECASE)
@@ -64,6 +68,21 @@ def _parse_bool(value, field):
     raise ShopApiError(400, "INVALID_PARAMETER", f"«{value}» no es válido. Use true o false.", field)
 
 
+def _parse_positive_int(value, field, default, maximum=None):
+    if value is None or value == "":
+        return default
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number < 1 or (maximum and number > maximum):
+        limit = f" y {maximum}" if maximum else ""
+        raise ShopApiError(
+            400, "INVALID_PARAMETER", f"«{value}» no es válido: debe ser un entero entre 1{limit}.", field
+        )
+    return number
+
+
 def _parse_category(value, field):
     try:
         category_id = int(value)
@@ -84,15 +103,32 @@ def _require_text(payload, key):
     return value.strip()
 
 
-def _parse_order_payload(body):
-    """Valida el JSON del pedido y lo traduce a registros. Devuelve (cliente, referencia, [(producto, cantidad)])."""
+def _load_json_object(body):
     try:
         payload = json.loads(body or b"")
     except (ValueError, UnicodeDecodeError):
         raise ShopApiError(400, "INVALID_JSON", "El cuerpo de la petición no es un JSON válido.") from None
     if not isinstance(payload, dict):
         raise ShopApiError(400, "INVALID_JSON", "El cuerpo debe ser un objeto JSON.")
+    return payload
 
+
+def _get_idempotency_key():
+    """Cabecera Idempotency-Key (opcional): texto de 1 a 255 caracteres, por ejemplo un UUID."""
+    key = request.httprequest.headers.get("Idempotency-Key")
+    if key is None:
+        return None
+    key = key.strip()
+    if not key or len(key) > 255:
+        raise ShopApiError(
+            400, "INVALID_IDEMPOTENCY_KEY", "La cabecera Idempotency-Key debe tener entre 1 y 255 caracteres.",
+            "Idempotency-Key",
+        )
+    return key
+
+
+def _parse_order_payload(payload):
+    """Valida el JSON del pedido y lo traduce a registros. Devuelve (cliente, referencia, [(producto, cantidad)])."""
     vat = _require_text(payload, "customer_vat")
     external_ref = _require_text(payload, "external_ref")
     customers = request.env["res.partner"]._shop_api_find_by_vat(vat)
@@ -190,7 +226,7 @@ class ShopApiController(http.Controller):
     # readonly=False: Odoo 18 abre los GET con un cursor de solo lectura. Como cada llamada escribe su log,
     # Odoo reintentaría la petición completa con otro cursor (se ejecutaría dos veces).
     @http.route("/api/v1/products", type="http", auth="none", methods=["GET"], csrf=False, readonly=False)
-    def products(self, category_id=None, in_stock=None, updated_since=None, **_kwargs):
+    def products(self, category_id=None, in_stock=None, updated_since=None, page=None, page_size=None, **_kwargs):
         def handler(_log_vals):
             Product = request.env["product.product"]
             domain = Product._shop_api_domain(
@@ -198,11 +234,22 @@ class ShopApiController(http.Controller):
                 in_stock=_parse_bool(in_stock, "in_stock") if in_stock is not None else False,
                 updated_since=_parse_datetime(updated_since, "updated_since") if updated_since else None,
             )
-            products = Product.search(domain, order="default_code, id")
+            page_number = _parse_positive_int(page, "page", default=1)
+            size = _parse_positive_int(page_size, "page_size", default=DEFAULT_PAGE_SIZE, maximum=MAX_PAGE_SIZE)
+            result = Product._shop_api_page(domain, page_number, size)
+            next_url = None
+            if result.pop("has_next"):
+                query = {k: v for k, v in request.httprequest.args.items() if k != "page"}
+                query["page"] = page_number + 1
+                next_url = f"{request.httprequest.path}?{urlencode(query)}"
             return request.make_json_response({
                 "currency": request.env.company.currency_id.name,
-                "count": len(products),
-                "data": products._shop_api_serialize(),
+                "count": len(result["data"]),
+                "total": result["total"],
+                "page": result["page"],
+                "page_size": result["page_size"],
+                "next": next_url,
+                "data": result["data"],
             })
 
         return self._handle("/api/v1/products", handler)
@@ -210,7 +257,28 @@ class ShopApiController(http.Controller):
     @http.route("/api/v1/orders", type="http", auth="none", methods=["POST"], csrf=False, readonly=False)
     def create_order(self, **_kwargs):
         def handler(log_vals):
-            customer, external_ref, lines = _parse_order_payload(request.httprequest.get_data())
+            payload = _load_json_object(request.httprequest.get_data())
+            idempotency_key = _get_idempotency_key()
+            # sudo(): tabla técnica de la API; siempre filtrada por el usuario autenticado.
+            Idempotency = request.env["shop.api.idempotency"].sudo()
+            payload_hash = Idempotency._hash_payload(payload)
+            if idempotency_key:
+                previous = Idempotency.search([("key", "=", idempotency_key), ("user_id", "=", request.env.uid)])
+                if previous:
+                    if previous.request_hash != payload_hash:
+                        raise ShopApiError(
+                            409, "IDEMPOTENCY_KEY_REUSED",
+                            "Esa Idempotency-Key ya se usó con otro contenido. Use una clave nueva para un pedido nuevo.",
+                            "Idempotency-Key",
+                        )
+                    # Reintento: mismo pedido, sin crear otro.
+                    order = request.env["sale.order"].browse(previous.order_id.id)
+                    log_vals.update(external_ref=order.shop_external_ref, order_id=order.id)
+                    return request.make_json_response(
+                        order._shop_api_serialize(), headers=[("Idempotent-Replayed", "true")], status=200,
+                    )
+
+            customer, external_ref, lines = _parse_order_payload(payload)
             log_vals["external_ref"] = external_ref
             SaleOrder = request.env["sale.order"]
             existing = SaleOrder.search([
@@ -238,6 +306,20 @@ class ShopApiController(http.Controller):
                     "external_ref",
                 ) from None
             order.action_confirm()
+            if idempotency_key:
+                try:
+                    with request.env.cr.savepoint():
+                        Idempotency.create({
+                            "key": idempotency_key, "user_id": request.env.uid,
+                            "request_hash": payload_hash, "order_id": order.id,
+                        }).flush_recordset()
+                except IntegrityError:
+                    # Otra petición con la misma clave terminó primero: esta se deshace entera (savepoint de _handle).
+                    raise ShopApiError(
+                        409, "IDEMPOTENCY_KEY_IN_USE",
+                        "Otra petición con la misma Idempotency-Key se procesó al mismo tiempo. Reintente para "
+                        "recibir el pedido creado.", "Idempotency-Key",
+                    ) from None
             log_vals["order_id"] = order.id
             return request.make_json_response(order._shop_api_serialize(), status=201)
 
