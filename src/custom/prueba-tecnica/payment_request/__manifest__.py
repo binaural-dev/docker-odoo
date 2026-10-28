@@ -1,0 +1,23 @@
+{
+    "name": "Solicitudes de pago",
+    "summary": "Solicitudes de pago a proveedores con aprobación y registro del pago",
+    "description": "Solicitudes de pago con niveles de aprobación, rechazo con motivo, pago a proveedor y reporte. Detalle en README.md.",
+    "version": "18.0.1.2.0",
+    "category": "Accounting/Accounting",
+    "author": "Candido Marcano",
+    "license": "LGPL-3",
+    "depends": ["mail", "account"],
+    "data": [
+        "security/payment_request_security.xml",
+        "security/ir.model.access.csv",
+        "data/ir_sequence_data.xml",
+        "data/payment_approval_level_data.xml",
+        "views/payment_request_views.xml",
+        "views/payment_approval_level_views.xml",
+        "wizard/payment_request_wizard_views.xml",
+        "report/payment_request_report.xml",
+        "views/payment_request_menus.xml",
+    ],
+    "installable": True,
+    "application": True,
+}

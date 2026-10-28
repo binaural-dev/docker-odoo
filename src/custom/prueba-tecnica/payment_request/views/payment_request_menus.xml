@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_payment_request_root" name="Solicitudes de pago" sequence="45"
+              web_icon="account,static/description/icon.png"
+              groups="group_payment_request_user"/>
+    <menuitem id="menu_payment_request" name="Solicitudes" parent="menu_payment_request_root"
+              action="payment_request_action" sequence="10"/>
+    <menuitem id="menu_payment_request_to_approve" name="Por aprobar" parent="menu_payment_request_root"
+              action="payment_request_action_to_approve" sequence="20"
+              groups="group_payment_request_approver"/>
+    <menuitem id="menu_payment_request_to_pay" name="Por pagar" parent="menu_payment_request_root"
+              action="payment_request_action_to_pay" sequence="30"
+              groups="group_payment_request_treasury"/>
+    <menuitem id="menu_payment_request_config" name="Configuración" parent="menu_payment_request_root"
+              sequence="90" groups="base.group_system"/>
+    <menuitem id="menu_payment_approval_level" name="Niveles de aprobación" parent="menu_payment_request_config"
+              action="payment_approval_level_action" sequence="10"/>
+</odoo>
