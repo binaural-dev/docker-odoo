@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="payment_request_reject_wizard_view_form" model="ir.ui.view">
+        <field name="name">payment.request.reject.wizard.form</field>
+        <field name="model">payment.request.reject.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Rechazar solicitud">
+                <group>
+                    <field name="request_id"/>
+                    <field name="reason" placeholder="Explique por qué se rechaza, para que el solicitante pueda corregirlo."/>
+                </group>
+                <footer>
+                    <button name="action_confirm" string="Rechazar" type="object" class="btn-danger"/>
+                    <button string="Cancelar" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="payment_request_payment_wizard_view_form" model="ir.ui.view">
+        <field name="name">payment.request.payment.wizard.form</field>
+        <field name="model">payment.request.payment.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Registrar pago">
+                <group>
+                    <group>
+                        <field name="request_id"/>
+                        <field name="partner_id"/>
+                        <field name="amount"/>
+                        <field name="currency_id" invisible="1"/>
+                        <field name="company_id" invisible="1"/>
+                    </group>
+                    <group>
+                        <field name="journal_id" options="{'no_create': True}"/>
+                        <field name="payment_date"/>
+                    </group>
+                </group>
+                <footer>
+                    <button name="action_confirm" string="Registrar pago" type="object" class="btn-primary"/>
+                    <button string="Cancelar" special="cancel" class="btn-secondary"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>

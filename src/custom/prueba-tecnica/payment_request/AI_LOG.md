@@ -10,6 +10,11 @@
      estaba en el pedido: nadie aprueba su propia solicitud. Quedó documentada como supuesto.
 2. Pruebas de «lo que no se debe poder hacer»: aprobar por método y por `write`, editar una enviada, montos
    inválidos, transiciones inválidas y botones por grupo (inspeccionando la vista que recibe cada usuario).
+3. «Sigue con el 4-B: niveles, actividad, wizards de rechazo y pago, account.payment y reporte PDF.»
+   - Antes de programar, revisó en Odoo 18 los campos de `account.payment` (`memo` en lugar de `ref`),
+     cuándo se genera el asiento y qué grupo hace falta para crear pagos. Agregó a la prueba del pago la
+     verificación del asiento contra la cuenta por pagar, porque «registrado en contabilidad» no se cumplía
+     solo con crear el pago.
 
 ## Lo que la IA hizo mal
 - **Referencia circular de grupos:** el primer borrador hacía que *Solicitante* implicara `base.group_user`
@@ -20,6 +25,16 @@
 - **Prueba del chatter mal planteada, dos veces:** primero asumió que el seguimiento se publica con
   `flush_all()` (se publica en el *precommit*), y luego leyó `mail.tracking.value` con el empleado, que no
   tiene permiso de lectura. Se detectó al correr las pruebas.
+
+- **Hueco de seguridad en el primer borrador del tramo B:** las reglas estaban repartidas en `write()` y
+  permitían `write({"state": "submitted", "approver_id": <cualquiera>})`, con lo que el solicitante elegía
+  su propio aprobador. Del mismo modo, `write({"state": "paid"})` marcaba como pagada sin crear el pago. Se
+  detectó al releer el código antes de probarlo. Se cambió a una regla única: los campos del flujo no se
+  escriben nunca directamente, solo a través de los métodos, que validan y luego escriben con un `sudo()`
+  acotado. Ahora hay una prueba con cuatro `write` directos de distintos roles.
+- En el README del tramo B afirmó que «un administrador puede rechazar» una solicitud cuyo aprobador no está
+  disponible, lo que contradice la regla que acababa de implementar (solo el aprobador asignado). Se corrigió
+  al releer el README.
 
 ## Lo que escribiste tú sin IA
 - (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)

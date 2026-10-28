@@ -11,4 +11,8 @@
     <menuitem id="menu_payment_request_to_pay" name="Por pagar" parent="menu_payment_request_root"
               action="payment_request_action_to_pay" sequence="30"
               groups="group_payment_request_treasury"/>
+    <menuitem id="menu_payment_request_config" name="Configuración" parent="menu_payment_request_root"
+              sequence="90" groups="base.group_system"/>
+    <menuitem id="menu_payment_approval_level" name="Niveles de aprobación" parent="menu_payment_request_config"
+              action="payment_approval_level_action" sequence="10"/>
 </odoo>
