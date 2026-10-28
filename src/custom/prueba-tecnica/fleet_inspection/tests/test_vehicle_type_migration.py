@@ -58,6 +58,31 @@ class TestVehicleTypeMigration(TransactionCase):
         self.env.cr.execute("SELECT count(*) FROM fleet_inspection WHERE vehicle_type_id IS NULL")
         self.assertEqual(self.env.cr.fetchone()[0], 0)
 
+    def test_small_batches_give_the_same_result(self):
+        """Con lotes de 2 filas, las 6 inspecciones se procesan en 3 lotes por paso y el resultado no cambia."""
+        self._simulate_v1_0_0()
+        with self.assertLogs("odoo.addons.fleet_inspection.migration_utils", level="INFO") as logs:
+            self.assertEqual(save_legacy_vehicle_type(self.env.cr, batch_size=2), len(self.OLD_VALUES))
+            result = assign_vehicle_types(self.env, batch_size=2)
+        self.assertEqual(result["assigned"], len(self.OLD_VALUES))
+        self.assertEqual(self._type_codes(), self.OLD_VALUES)
+        self.assertEqual(sum("respaldo: lote" in line for line in logs.output), 3)
+        self.assertEqual(sum("asignación: lote" in line for line in logs.output), 3)
+
+    def test_resumes_after_a_partial_run(self):
+        """Si una corrida anterior quedó a medias, la siguiente completa solo lo que faltaba."""
+        self._simulate_v1_0_0()
+        save_legacy_vehicle_type(self.env.cr)
+        # Simula que solo se alcanzaron a procesar las dos primeras inspecciones.
+        self.env.cr.execute(
+            "UPDATE fleet_inspection i SET vehicle_type_id = t.id FROM fleet_inspection_vehicle_type t"
+            f" WHERE t.code = i.{LEGACY_COLUMN} AND i.id = ANY(%s)",
+            (self.inspections[:2].ids,),
+        )
+        result = assign_vehicle_types(self.env)
+        self.assertEqual(result["assigned"], len(self.OLD_VALUES) - 2)
+        self.assertEqual(self._type_codes(), self.OLD_VALUES)
+
     def test_running_twice_changes_nothing(self):
         self._simulate_v1_0_0()
         save_legacy_vehicle_type(self.env.cr)
