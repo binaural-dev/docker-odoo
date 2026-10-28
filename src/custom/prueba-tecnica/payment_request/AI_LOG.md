@@ -16,6 +16,14 @@
      verificación del asiento contra la cuenta por pagar, porque «registrado en contabilidad» no se cumplía
      solo con crear el pago.
 
+4. «Sigue con el 4-C: USD pagado en VES, multicompañía, concurrencia y ARCHITECTURE.md.»
+   - Propuso `SELECT ... FOR UPDATE NOWAIT` al inicio de cada transición y probarlo con dos conexiones reales
+     a la base, porque con un solo cursor de prueba no hay concurrencia real. En ARCHITECTURE.md explicó por
+     qué el aislamiento `REPEATABLE READ` de Odoo no alcanza solo (protege al final, después de crear el
+     segundo pago).
+   - Advirtió que `_convert` usa la última tasa disponible, o 1 si no hay ninguna. Por eso se exige una tasa
+     cargada para el día del pago: si no, una solicitud de 100 USD se podría pagar como 100 Bs.
+
 ## Lo que la IA hizo mal
 - **Referencia circular de grupos:** el primer borrador hacía que *Solicitante* implicara `base.group_user`
   y, a la vez, que `base.group_user` implicara *Solicitante*. Odoo rechaza esa recursión. Se corrigió antes
@@ -35,6 +43,11 @@
 - En el README del tramo B afirmó que «un administrador puede rechazar» una solicitud cuyo aprobador no está
   disponible, lo que contradice la regla que acababa de implementar (solo el aprobador asignado). Se corrigió
   al releer el README.
+
+- **Tramo C:** el primer intento de bloqueo dejaba un `ERROR odoo.sql_db: bad query ... FOR UPDATE NOWAIT`
+  en el registro cada vez que dos personas coincidían. Las pruebas pasaban, pero en producción habría
+  parecido un error del servidor. Se detectó leyendo el registro de las pruebas y se silenció con
+  `mute_logger`, como hace Odoo en su propio código.
 
 ## Lo que escribiste tú sin IA
 - (Completar por Candido: qué partes decidiste o escribiste por tu cuenta y por qué.)
