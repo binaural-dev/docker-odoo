@@ -1,0 +1,16 @@
+{
+    "name": "Solicitudes de pago",
+    "summary": "Solicitudes de pago a proveedores con aprobación y registro del pago",
+    "version": "18.0.1.0.0",
+    "category": "Accounting/Accounting",
+    "author": "Candido Marcano",
+    "license": "LGPL-3",
+    "depends": ["mail", "account"],
+    "data": [
+        "security/payment_request_security.xml",
+        "security/ir.model.access.csv",
+        "data/ir_sequence_data.xml",
+    ],
+    "installable": True,
+    "application": True,
+}
