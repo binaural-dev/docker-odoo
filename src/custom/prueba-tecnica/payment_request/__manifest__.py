@@ -1,6 +1,7 @@
 {
     "name": "Solicitudes de pago",
     "summary": "Solicitudes de pago a proveedores con aprobación y registro del pago",
+    "description": "Solicitudes de pago con niveles de aprobación, rechazo con motivo, pago a proveedor y reporte. Detalle en README.md.",
     "version": "18.0.1.1.0",
     "category": "Accounting/Accounting",
     "author": "Candido Marcano",
