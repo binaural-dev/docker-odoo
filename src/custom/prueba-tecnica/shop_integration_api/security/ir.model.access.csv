@@ -1,3 +1,6 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_shop_api_log_system,shop.api.log.system,model_shop_api_log,base.group_system,1,0,0,1
 access_shop_api_log_sale_manager,shop.api.log.sale.manager,model_shop_api_log,sales_team.group_sale_manager,1,0,0,0
+access_shop_api_idempotency_system,shop.api.idempotency.system,model_shop_api_idempotency,base.group_system,1,0,0,1
+access_shop_webhook_event_system,shop.webhook.event.system,model_shop_webhook_event,base.group_system,1,1,0,1
+access_shop_webhook_event_sale_manager,shop.webhook.event.sale.manager,model_shop_webhook_event,sales_team.group_sale_manager,1,0,0,0
