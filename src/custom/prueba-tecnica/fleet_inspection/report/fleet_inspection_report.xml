@@ -19,7 +19,7 @@
                         <h2>Inspección <span t-out="o.name"/></h2>
                         <p>
                             <strong>Vehículo:</strong> <span t-out="o.vehicle_id.display_name"/><br/>
-                            <strong>Tipo:</strong> <span t-field="o.vehicle_type"/><br/>
+                            <strong>Tipo:</strong> <span t-field="o.vehicle_type_id"/><br/>
                             <strong>Inspector:</strong> <span t-out="o.inspector_id.name"/><br/>
                             <strong>Fecha:</strong> <span t-field="o.date"/><br/>
                             <strong>Estado:</strong> <span t-field="o.state"/>

@@ -8,7 +8,7 @@
                   decoration-warning="is_overdue">
                 <field name="name"/>
                 <field name="vehicle_id"/>
-                <field name="vehicle_type"/>
+                <field name="vehicle_type_id"/>
                 <field name="inspector_id" widget="many2one_avatar_user"/>
                 <field name="date"/>
                 <field name="failed_count"/>
@@ -47,7 +47,7 @@
                     <group>
                         <group>
                             <field name="vehicle_id" readonly="state != 'draft'"/>
-                            <field name="vehicle_type" readonly="state != 'draft'"/>
+                            <field name="vehicle_type_id" readonly="state != 'draft'" options="{'no_create': True}"/>
                             <field name="odometer" readonly="state in ('approved', 'rejected')"/>
                         </group>
                         <group>
@@ -94,7 +94,7 @@
                 <filter name="overdue" string="Vencidas" domain="[('is_overdue', '=', True)]"/>
                 <filter name="with_failures" string="Con fallas" domain="[('failed_count', '>', 0)]"/>
                 <group string="Agrupar por">
-                    <filter name="group_vehicle_type" string="Tipo de vehículo" context="{'group_by': 'vehicle_type'}"/>
+                    <filter name="group_vehicle_type" string="Tipo de vehículo" context="{'group_by': 'vehicle_type_id'}"/>
                     <filter name="group_state" string="Estado" context="{'group_by': 'state'}"/>
                     <filter name="group_date" string="Fecha" context="{'group_by': 'date:month'}"/>
                 </group>
