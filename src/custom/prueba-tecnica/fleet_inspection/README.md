@@ -7,7 +7,9 @@ Módulo escrito originalmente para **Odoo 16**, migrado a **Odoo 18** (Ejercicio
 - Registra inspecciones de los vehículos de Flota con un checklist de puntos (frenos, luces, cauchos…) que se
   carga solo al crear la inspección.
 - Estados: borrador → en curso → aprobada / rechazada. Un punto crítico con falla impide aprobar.
-- Tipo de vehículo como campo de selección: moto, carro, camión u otro.
+- Tipo de vehículo como **catálogo** (`fleet.inspection.vehicle.type`): moto, carro, camión y otro vienen de
+  fábrica, y el supervisor puede agregar más en *Flota › Configuración › Tipos de vehículo (inspecciones)*.
+  Hasta la versión 18.0.1.0.0 era un campo de selección (ver «Tramo B»).
 - Grupos: *Inspector* (ve solo sus inspecciones) y *Supervisor de inspecciones* (ve todas, aprueba y rechaza).
 - Acción planificada diaria que marca las inspecciones con más de 7 días en curso y le crea una actividad al
   inspector.
@@ -17,9 +19,9 @@ Módulo escrito originalmente para **Odoo 16**, migrado a **Odoo 18** (Ejercicio
 
 | Tramo | Estado |
 |---|---|
-| A — migración a Odoo 18 | ✅ Instala en una base nueva, 11/11 pruebas y ninguna advertencia de obsolescencia al instalar |
-| B — tipo de vehículo como catálogo + script de migración | ⏳ Pendiente |
-| C — script idempotente por lotes, 10.000 registros, MIGRATION_PLAN.md | ⏳ Pendiente |
+| A — migración a Odoo 18 | ✅ Instala en una base nueva, sin advertencias de obsolescencia |
+| B — tipo de vehículo como catálogo + script en `migrations/` | ✅ Probado con una prueba de la lógica y con una actualización real con `-u` (sección «Tramo B») |
+| C — script idempotente por lotes, 10.000 registros, MIGRATION_PLAN.md | ⏳ Pendiente (el script ya es idempotente; faltan los lotes, la medición y el plan) |
 
 ## Cómo probarlo
 
@@ -27,8 +29,78 @@ Módulo escrito originalmente para **Odoo 16**, migrado a **Odoo 18** (Ejercicio
 ./odoo test prueba-tecnica fleet_inspection -d fleet_prueba
 ```
 
-Resultado: `0 failed, 0 error(s) of 11 tests`, cobertura 94 %. El registro de la instalación no tiene ninguna
-línea `WARNING` ni `ERROR`, y la palabra «deprecat» no aparece.
+Resultado: `0 failed, 0 error(s) of 16 tests`, cobertura 96 % (100 % en `migration_utils.py`). El registro
+de la instalación no tiene ninguna línea `WARNING` ni `ERROR`, y la palabra «deprecat» no aparece. La única
+advertencia del registro de las pruebas es la que provoca a propósito la prueba de un valor fuera del
+catálogo («valor «trailer» fuera del catálogo; se creó como tipo nuevo»).
+
+## Tramo B — tipo de vehículo como catálogo
+
+### Qué cambia (versión 18.0.1.0.0 → 18.0.1.1.0)
+
+- Modelo nuevo `fleet.inspection.vehicle.type` (nombre traducible, código único, secuencia, activo). Los 4
+  tipos iniciales vienen en datos y su **código es el valor de la antigua selección** (`motorcycle`, `car`,
+  `truck`, `other`). Eso es lo que permite relacionarlos al migrar.
+- `fleet.inspection.vehicle_type` (selección) se reemplaza por `vehicle_type_id` (many2one, obligatorio, por
+  defecto «Carro» como antes, `ondelete="restrict"` para que no se pueda borrar un tipo en uso). Se cambia en
+  vistas, búsqueda (agrupar por tipo) y reporte.
+- Lectura del catálogo para inspectores; alta y edición para supervisores.
+
+### Script de migración
+
+`migrations/18.0.1.1.0/` llama a funciones de `migration_utils.py`, separadas para poder probarlas:
+
+| Paso | Cuándo corre | Qué hace |
+|---|---|---|
+| `pre-migrate.py` → `save_legacy_vehicle_type` | Antes de cargar el modelo nuevo | Copia `vehicle_type` a una columna propia, `legacy_vehicle_type`. Hace falta porque, al terminar la actualización, **Odoo borra la columna de un campo que ya no está en el modelo**. La copia sobrevive y sirve para verificar y para revertir |
+| `post-migrate.py` → `assign_vehicle_types` | Con el catálogo ya cargado | `vehicle_type_id` = el tipo cuyo `code` es el valor respaldado. Si aparece un valor que no está en el catálogo, **lo crea como tipo nuevo** en lugar de perderlo o convertirlo en «otro». Al final verifica que ninguna inspección quede sin tipo; si queda alguna, **aborta la actualización** (Odoo deshace todo) |
+
+Ambas funciones son **idempotentes**: solo respaldan filas sin respaldo y solo asignan tipo a inspecciones
+que no lo tienen. Por eso tampoco pisan una corrección hecha a mano.
+
+### Cómo se probó
+
+**1. Prueba de la lógica** (`tests/test_vehicle_type_migration.py`). Dentro de la transacción de la prueba
+simula la tabla de la 18.0.1.0.0 (columna de selección con valores y many2one vacío) y verifica:
+
+| Prueba | Qué demuestra |
+|---|---|
+| `test_every_inspection_keeps_its_type` | Moto, carro, camión y **otro** quedan con su tipo del catálogo (sin duplicarlo); un valor desconocido se crea como tipo y ninguna inspección queda sin tipo |
+| `test_running_twice_changes_nothing` | Correr pre y post otra vez no respalda ni asigna nada ni crea tipos |
+| `test_rerun_does_not_overwrite_manual_corrections` | Una corrección manual posterior se respeta |
+| `test_aborts_if_an_inspection_would_stay_without_type` | Si una inspección quedaría sin tipo, la migración aborta |
+| `test_fresh_install_has_nothing_to_migrate` | En una base nueva los scripts no hacen nada |
+
+**2. Actualización real con `-u`**, el escenario que pide el enunciado:
+
+1. Base `fleet_upg` con la versión del tramo A (18.0.1.0.0) y 26 inspecciones: 7 moto, 11 carro, 5 camión y
+   3 otro.
+2. Código del tramo B (manifiesto 18.0.1.1.0) y
+   `odoo -d fleet_upg -u fleet_inspection --stop-after-init`.
+3. Resultado:
+
+```
+module fleet_inspection: Running upgrade [>18.0.1.1.0] pre-migrate
+fleet_inspection: 26 inspecciones respaldadas en legacy_vehicle_type
+module fleet_inspection: Running upgrade [18.0.1.1.0>] post-migrate
+fleet_inspection: 26 inspecciones con tipo asignado; tipos creados: ninguno
+```
+
+| Verificación después de actualizar | Resultado |
+|---|---|
+| Versión instalada | 18.0.1.1.0 |
+| Inspecciones por tipo | car (Carro) 11 · motorcycle (Moto) 7 · other (Otro) 3 · truck (Camión) 5, igual que antes |
+| Inspecciones sin tipo | 0 |
+| Inspecciones con un tipo distinto al valor respaldado | 0 |
+| `vehicle_type_id` con `NOT NULL` en la base | Sí |
+| Columnas | `vehicle_type` eliminada por Odoo; quedan `vehicle_type_id` y `legacy_vehicle_type` (respaldo) |
+| Segunda corrida de pre y post sobre esa base | 0 respaldadas, 0 asignadas, ningún cambio |
+
+### Reversión
+
+Si hubiera que volver a la 18.0.1.0.0, `legacy_vehicle_type` conserva el valor original de cada inspección.
+El procedimiento completo (respaldo previo, verificaciones y reversión) queda para `MIGRATION_PLAN.md` del
+tramo C.
 
 **Contraprueba** (para demostrar que el registro sí habría mostrado los problemas): se instaló el código de
 Odoo 16 tal cual, solo movido a la carpeta de addons y con la versión subida. Odoo 18 mostró:

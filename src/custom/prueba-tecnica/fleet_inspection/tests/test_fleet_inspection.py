@@ -25,7 +25,11 @@ class TestFleetInspection(TransactionCase):
         })
 
     def _new_inspection(self, **vals):
-        values = {"vehicle_id": self.vehicle.id, "vehicle_type": "truck", "inspector_id": self.inspector.id}
+        values = {
+            "vehicle_id": self.vehicle.id,
+            "vehicle_type_id": self.env.ref("fleet_inspection.vehicle_type_truck").id,
+            "inspector_id": self.inspector.id,
+        }
         values.update(vals)
         return self.env["fleet.inspection"].create(values)
 
@@ -39,14 +43,15 @@ class TestFleetInspection(TransactionCase):
         """create() por lotes (model_create_multi): cada inspección con su número y su checklist."""
         inspections = self.env["fleet.inspection"].create([
             {"vehicle_id": self.vehicle.id, "inspector_id": self.inspector.id},
-            {"vehicle_id": self.vehicle.id, "inspector_id": self.inspector.id, "vehicle_type": "other"},
+            {"vehicle_id": self.vehicle.id, "inspector_id": self.inspector.id,
+             "vehicle_type_id": self.env.ref("fleet_inspection.vehicle_type_other").id},
         ])
         self.assertEqual(len(set(inspections.mapped("name"))), 2)
         items = self.env["fleet.inspection.item"].search([])
         for inspection in inspections:
             self.assertTrue(inspection.name.startswith("INS/"))
             self.assertEqual(inspection.line_ids.mapped("item_id"), items)
-        self.assertEqual(inspections[1].vehicle_type, "other")
+        self.assertEqual(inspections[1].vehicle_type_id, self.env.ref("fleet_inspection.vehicle_type_other"))
 
     def test_report_renders(self):
         inspection = self._new_inspection(notes="Revisar presión")
@@ -105,7 +110,7 @@ class TestFleetInspection(TransactionCase):
         form.vehicle_id = self.vehicle
         inspection = form.save()
         self.assertEqual(inspection.inspector_id, self.inspector)
-        self.assertEqual(inspection.vehicle_type, "car")
+        self.assertEqual(inspection.vehicle_type_id, self.env.ref("fleet_inspection.vehicle_type_car"))
 
     def test_cron_marks_overdue_once(self):
         inspection = self._new_inspection(date=fields.Date.today() - timedelta(days=10))
