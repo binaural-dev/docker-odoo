@@ -16,11 +16,11 @@
             <t t-foreach="docs" t-as="o">
                 <t t-call="web.external_layout">
                     <div class="page">
-                        <h2>Inspección <span t-esc="o.name"/></h2>
+                        <h2>Inspección <span t-out="o.name"/></h2>
                         <p>
-                            <strong>Vehículo:</strong> <span t-esc="o.vehicle_id.display_name"/><br/>
+                            <strong>Vehículo:</strong> <span t-out="o.vehicle_id.display_name"/><br/>
                             <strong>Tipo:</strong> <span t-field="o.vehicle_type"/><br/>
-                            <strong>Inspector:</strong> <span t-esc="o.inspector_id.name"/><br/>
+                            <strong>Inspector:</strong> <span t-out="o.inspector_id.name"/><br/>
                             <strong>Fecha:</strong> <span t-field="o.date"/><br/>
                             <strong>Estado:</strong> <span t-field="o.state"/>
                         </p>
@@ -30,13 +30,13 @@
                             </thead>
                             <tbody>
                                 <tr t-foreach="o.line_ids" t-as="line">
-                                    <td><span t-esc="line.item_id.name"/></td>
+                                    <td><span t-out="line.item_id.name"/></td>
                                     <td><span t-field="line.result"/></td>
-                                    <td><span t-esc="line.comment"/></td>
+                                    <td><span t-out="line.comment"/></td>
                                 </tr>
                             </tbody>
                         </table>
-                        <p t-if="o.notes"><strong>Observaciones:</strong> <span t-esc="o.notes"/></p>
+                        <p t-if="o.notes"><strong>Observaciones:</strong> <span t-out="o.notes"/></p>
                     </div>
                 </t>
             </t>

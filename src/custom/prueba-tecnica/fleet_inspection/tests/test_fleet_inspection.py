@@ -2,14 +2,14 @@ from datetime import timedelta
 
 from odoo import fields
 from odoo.exceptions import AccessError, UserError, ValidationError
-from odoo.tests.common import Form, TransactionCase, tagged
+from odoo.tests import Form, TransactionCase, tagged
 
 
 @tagged("post_install", "-at_install")
 class TestFleetInspection(TransactionCase):
     @classmethod
     def setUpClass(cls):
-        super(TestFleetInspection, cls).setUpClass()
+        super().setUpClass()
         brand = cls.env["fleet.vehicle.model.brand"].create({"name": "Marca de prueba"})
         model = cls.env["fleet.vehicle.model"].create({"name": "Modelo de prueba", "brand_id": brand.id})
         cls.vehicle = cls.env["fleet.vehicle"].create({"model_id": model.id, "license_plate": "AB123CD"})
@@ -35,9 +35,32 @@ class TestFleetInspection(TransactionCase):
         items = self.env["fleet.inspection.item"].search([])
         self.assertEqual(inspection.line_ids.mapped("item_id"), items)
 
-    def test_name_get_includes_plate(self):
+    def test_create_batch(self):
+        """create() por lotes (model_create_multi): cada inspección con su número y su checklist."""
+        inspections = self.env["fleet.inspection"].create([
+            {"vehicle_id": self.vehicle.id, "inspector_id": self.inspector.id},
+            {"vehicle_id": self.vehicle.id, "inspector_id": self.inspector.id, "vehicle_type": "other"},
+        ])
+        self.assertEqual(len(set(inspections.mapped("name"))), 2)
+        items = self.env["fleet.inspection.item"].search([])
+        for inspection in inspections:
+            self.assertTrue(inspection.name.startswith("INS/"))
+            self.assertEqual(inspection.line_ids.mapped("item_id"), items)
+        self.assertEqual(inspections[1].vehicle_type, "other")
+
+    def test_report_renders(self):
+        inspection = self._new_inspection(notes="Revisar presión")
+        html, _format = self.env["ir.actions.report"]._render_qweb_html(
+            "fleet_inspection.action_report_fleet_inspection", inspection.ids
+        )
+        html = html.decode()
+        self.assertIn(inspection.name, html)
+        self.assertIn("Frenos", html)
+        self.assertIn("Revisar presión", html)
+
+    def test_display_name_includes_plate(self):
         inspection = self._new_inspection()
-        self.assertIn("AB123CD", inspection.name_get()[0][1])
+        self.assertEqual(inspection.display_name, "%s - AB123CD" % inspection.name)
 
     def test_full_flow_approved(self):
         inspection = self._new_inspection()
