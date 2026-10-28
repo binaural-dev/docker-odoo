@@ -56,6 +56,11 @@
                                     <tr><th>Diario</th><td><span t-field="o.payment_id.journal_id"/></td></tr>
                                     <tr><th>Monto pagado</th>
                                         <td><span t-field="o.payment_id.amount" t-options="{'widget': 'monetary', 'display_currency': o.payment_id.currency_id}"/></td></tr>
+                                    <tr t-if="o.payment_id.currency_id != o.currency_id">
+                                        <th>Tasa aplicada</th>
+                                        <td>1 <span t-field="o.currency_id.name"/> = <span t-out="'%.6f' % o.payment_rate"/>
+                                            <span t-field="o.payment_id.currency_id.name"/> (tasa del <span t-field="o.payment_id.date"/>)</td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </t>

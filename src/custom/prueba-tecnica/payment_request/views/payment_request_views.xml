@@ -75,6 +75,9 @@
                             <field name="approver_id" widget="many2one_avatar_user" invisible="not approver_id"/>
                             <field name="approved_by_id" invisible="not approved_by_id"/>
                             <field name="approval_date" invisible="not approval_date"/>
+                            <field name="payment_currency_id" invisible="1"/>
+                            <field name="payment_amount" invisible="not payment_id"/>
+                            <field name="payment_rate" invisible="not payment_id or payment_currency_id == currency_id"/>
                         </group>
                     </group>
                     <field name="concept" readonly="state != 'draft'"
