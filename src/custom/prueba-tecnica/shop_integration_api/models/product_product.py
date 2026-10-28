@@ -21,6 +21,24 @@ class ProductProduct(models.Model):
             ]
         return domain
 
+    @api.model
+    def _shop_api_page(self, domain, page=1, page_size=50):
+        """Una página de productos con sus metadatos.
+
+        La cantidad de consultas no depende de cuántos productos haya en la página: una para el total, una
+        para la página y lecturas en lote (nombre, precio y stock se calculan para todo el lote junto, no
+        producto por producto). Lo verifica test_query_count_does_not_grow.
+        """
+        total = self.search_count(domain)
+        products = self.search(domain, order="default_code, id", limit=page_size, offset=(page - 1) * page_size)
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "has_next": page * page_size < total,
+            "data": products._shop_api_serialize(),
+        }
+
     def _shop_api_serialize(self):
         """Datos de cada producto para la tienda. free_qty se calcula para todo el lote junto."""
         # Nombre con los valores de la variante (p. ej. «Camisa (Rojo, M)») pero sin el código delante.
