@@ -10,6 +10,8 @@
         "security/payment_request_security.xml",
         "security/ir.model.access.csv",
         "data/ir_sequence_data.xml",
+        "views/payment_request_views.xml",
+        "views/payment_request_menus.xml",
     ],
     "installable": True,
     "application": True,
