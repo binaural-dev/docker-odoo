@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Vista Formulario de Préstamos -->
+    <record id="view_equipment_loan_form" model="ir.ui.view">
+        <field name="name">equipment.loan.form</field>
+        <field name="model">equipment.loan</field>
+        <field name="arch" type="xml">
+            <form string="Préstamo de Equipo">
+                <header>
+                    <!-- Botón Entregar (Solo en borrador) -->
+                    <button name="action_deliver" type="object" string="Entregar"
+                            class="btn-primary" invisible="state != 'draft'"/>
+
+                    <!-- Botón Devolver (Solo en préstamo activo) -->
+                    <button name="action_return" type="object" string="Devolver"
+                            class="btn-success" invisible="state != 'loaned'"/>
+
+                    <!-- Barra de estado -->
+                    <field name="state" widget="statusbar" statusbar_visible="draft,loaned,returned"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <!-- Botón para ver el historial de préstamos del equipo seleccionado -->
+                        <button name="action_view_laptop_history" type="object" class="oe_stat_button"
+                                icon="fa-history" invisible="not laptop_id">
+                            <div class="o_stat_info">
+                                <span class="o_stat_text">Historial del</span>
+                                <span class="o_stat_text">Equipo</span>
+                            </div>
+                        </button>
+                    </div>
+
+                    <!-- Indicador visual de Préstamo Vencido -->
+                    <widget name="web_ribbon" title="VENCIDO" bg_color="text-bg-danger"
+                            invisible="not is_overdue"/>
+
+                    <div class="oe_title">
+                        <label for="name" string="Préstamo"/>
+                        <h1>
+                            <field name="name" readonly="1"/>
+                        </h1>
+                    </div>
+
+                    <group>
+                        <group string="Asignación del Equipo">
+                            <field name="laptop_id" readonly="state != 'draft'"
+                                   options="{'no_create': True}"
+                                   domain="[('state', '=', 'available')]"/>
+                            <field name="receiver_id" readonly="state != 'draft'"/>
+                            <field name="user_id" readonly="state != 'draft'"/>
+                        </group>
+                        <group string="Control de Fechas">
+                            <field name="delivery_date" readonly="state != 'draft'"/>
+                            <field name="expected_return_date" readonly="state != 'draft'"/>
+                            <field name="actual_return_date" readonly="1"/>
+                            <field name="is_overdue" invisible="1"/>
+                            <field name="company_id" invisible="1"/>
+                        </group>
+                    </group>
+
+                    <group string="Observaciones / Motivo">
+                        <field name="notes" placeholder="Justificación del préstamo, estado de entrega, accesorios entregados..."
+                               readonly="state == 'returned'"/>
+                    </group>
+                </sheet>
+                <!-- Chatter para auditoría -->
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="activity_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <!-- Vista de Lista de Préstamos -->
+    <record id="view_equipment_loan_tree" model="ir.ui.view">
+        <field name="name">equipment.loan.tree</field>
+        <field name="model">equipment.loan</field>
+        <field name="arch" type="xml">
+            <tree string="Préstamos de Equipos"
+                  decoration-danger="is_overdue"
+                  decoration-info="state == 'loaned'"
+                  decoration-muted="state == 'returned'">
+                <field name="name"/>
+                <field name="laptop_id"/>
+                <field name="receiver_id"/>
+                <field name="delivery_date"/>
+                <field name="expected_return_date"/>
+                <field name="actual_return_date"/>
+                <field name="is_overdue" widget="boolean"/>
+                <field name="state" widget="badge"
+                       decoration-danger="is_overdue"
+                       decoration-info="state == 'loaned'"
+                       decoration-success="state == 'returned'"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Vista de Búsqueda de Préstamos con Filtro de Vencidos y Estatus -->
+    <record id="view_equipment_loan_search" model="ir.ui.view">
+        <field name="name">equipment.loan.search</field>
+        <field name="model">equipment.loan</field>
+        <field name="arch" type="xml">
+            <search string="Buscar Préstamos">
+                <field name="name"/>
+                <field name="laptop_id"/>
+                <field name="receiver_id"/>
+                <field name="user_id"/>
+                <filter name="filter_loaned" string="En Préstamo (Activos)" domain="[('state', '=', 'loaned')]"/>
+                <filter name="filter_overdue" string="Préstamos Vencidos" domain="[('is_overdue', '=', True)]"/>
+                <filter name="filter_returned" string="Devueltos" domain="[('state', '=', 'returned')]"/>
+                <filter name="filter_draft" string="Borradores" domain="[('state', '=', 'draft')]"/>
+                <separator/>
+                <filter name="my_loans" string="Mis Gestiones" domain="[('user_id', '=', uid)]"/>
+                <group expand="0" string="Agrupar por">
+                    <filter name="group_laptop" string="Equipo" context="{'group_by': 'laptop_id'}"/>
+                    <filter name="group_receiver" string="Persona que Recibe" context="{'group_by': 'receiver_id'}"/>
+                    <filter name="group_state" string="Estado" context="{'group_by': 'state'}"/>
+                    <filter name="group_delivery" string="Mes de Entrega" context="{'group_by': 'delivery_date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Acción de Ventana para Préstamos -->
+    <record id="action_equipment_loan" model="ir.actions.act_window">
+        <field name="name">Préstamos de Equipos</field>
+        <field name="res_model">equipment.loan</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_equipment_loan_search"/>
+        <field name="context">{'search_default_filter_loaned': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Cree el primer registro de préstamo de equipo
+            </p>
+            <p>
+                Permite formalizar la entrega de laptops a colaboradores, controlar las fechas previas y reales de devolución y alertar sobre vencimientos.
+            </p>
+        </field>
+    </record>
+</odoo>
+

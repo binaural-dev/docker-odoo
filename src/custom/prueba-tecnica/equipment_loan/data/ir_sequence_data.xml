@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Secuencia correlativa de Préstamos: PREST/2026/0001 -->
+    <record id="seq_equipment_loan" model="ir.sequence">
+        <field name="name">Secuencia de Préstamo de Equipo</field>
+        <field name="code">equipment.loan</field>
+        <field name="prefix">PREST/%(year)s/</field>
+        <field name="padding">4</field>
+        <field name="company_id" eval="False"/>
+    </record>
+</odoo>
+
