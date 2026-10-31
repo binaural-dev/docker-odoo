@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Menú Raíz -->
+    <menuitem id="menu_equipment_loan_root"
+              name="Préstamos de Equipos"
+              web_icon="equipment_loan,static/description/icon.png"
+              sequence="60"/>
+
+    <!-- Submenú Operaciones -->
+    <menuitem id="menu_equipment_loan_operations"
+              name="Operaciones"
+              parent="menu_equipment_loan_root"
+              sequence="10"/>
+
+    <!-- Menú de Préstamos -->
+    <menuitem id="menu_equipment_loan_act"
+              name="Préstamos"
+              parent="menu_equipment_loan_operations"
+              action="action_equipment_loan"
+              sequence="10"/>
+
+    <!-- Submenú Inventario / Equipos -->
+    <menuitem id="menu_equipment_loan_inventory"
+              name="Catálogo de Equipos"
+              parent="menu_equipment_loan_root"
+              sequence="20"/>
+
+    <!-- Menú de Laptops -->
+    <menuitem id="menu_equipment_laptop_act"
+              name="Equipos y Laptops"
+              parent="menu_equipment_loan_inventory"
+              action="action_equipment_laptop"
+              sequence="10"/>
+</odoo>
+

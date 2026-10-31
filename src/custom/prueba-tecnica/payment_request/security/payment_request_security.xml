@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Categoría de Seguridad -->
+    <record id="module_category_payment_request" model="ir.module.category">
+        <field name="name">Solicitudes de Pago</field>
+        <field name="description">Permisos de acceso para la gestión y aprobación de pagos a proveedores.</field>
+        <field name="sequence">25</field>
+    </record>
+
+    <!-- Grupos de Usuario -->
+    <record id="group_payment_request_user" model="res.groups">
+        <field name="name">Solicitante</field>
+        <field name="category_id" ref="module_category_payment_request"/>
+        <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+        <field name="comment">Puede crear y consultar únicamente sus propias solicitudes de pago.</field>
+    </record>
+
+    <record id="group_payment_request_approver" model="res.groups">
+        <field name="name">Aprobador</field>
+        <field name="category_id" ref="module_category_payment_request"/>
+        <field name="implied_ids" eval="[(4, ref('group_payment_request_user'))]"/>
+        <field name="comment">Puede revisar, aprobar y rechazar solicitudes de pago de cualquier empleado.</field>
+    </record>
+
+    <record id="group_payment_request_treasury" model="res.groups">
+        <field name="name">Tesorería</field>
+        <field name="category_id" ref="module_category_payment_request"/>
+        <field name="implied_ids" eval="[(4, ref('group_payment_request_user'))]"/>
+        <field name="comment">Puede consultar todas las solicitudes aprobadas y marcar su pago efectivo.</field>
+    </record>
+
+    <!-- Reglas de Registro (Record Rules) -->
+    <!-- Regla Solicitante: solo ve y edita sus propias solicitudes -->
+    <record id="payment_request_rule_solicitante" model="ir.rule">
+        <field name="name">Solicitud de Pago: Solicitante ve solo las suyas</field>
+        <field name="model_id" ref="model_payment_request"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('group_payment_request_user'))]"/>
+        <field name="perm_read" eval="1"/>
+        <field name="perm_write" eval="1"/>
+        <field name="perm_create" eval="1"/>
+        <field name="perm_unlink" eval="1"/>
+    </record>
+
+    <!-- Regla Aprobador: ve y gestiona todas las solicitudes -->
+    <record id="payment_request_rule_approver" model="ir.rule">
+        <field name="name">Solicitud de Pago: Aprobadores ven todas</field>
+        <field name="model_id" ref="model_payment_request"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_payment_request_approver'))]"/>
+        <field name="perm_read" eval="1"/>
+        <field name="perm_write" eval="1"/>
+        <field name="perm_create" eval="1"/>
+        <field name="perm_unlink" eval="1"/>
+    </record>
+
+    <!-- Regla Tesorería: ve todas las solicitudes para procesar pagos -->
+    <record id="payment_request_rule_treasury" model="ir.rule">
+        <field name="name">Solicitud de Pago: Tesorería ve todas</field>
+        <field name="model_id" ref="model_payment_request"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_payment_request_treasury'))]"/>
+        <field name="perm_read" eval="1"/>
+        <field name="perm_write" eval="1"/>
+        <field name="perm_create" eval="1"/>
+        <field name="perm_unlink" eval="1"/>
+    </record>
+
+    <!-- Regla Multi-compañía (Global) -->
+    <record id="payment_request_rule_company" model="ir.rule">
+        <field name="name">Solicitud de Pago: Multi-compañía</field>
+        <field name="model_id" ref="model_payment_request"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>

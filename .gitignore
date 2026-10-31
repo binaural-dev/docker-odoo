@@ -3,7 +3,13 @@ instances.json
 instances.json.bak
 coverage_data/
 pwa.json
-src
+src/*
+!src/custom/
+src/custom/*
+!src/custom/readme.md
+# Prueba técnica: módulos de partida y entregas del candidato
+!src/custom/prueba-tecnica/
+!src/custom/prueba-tecnica-odoo16/
 !mcp-server/src
 logs/
 .resources/Dockerfile

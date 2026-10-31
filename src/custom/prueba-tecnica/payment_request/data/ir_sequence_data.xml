@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Secuencia correlativa de Solicitudes de Pago: SP/2026/0001 -->
+    <record id="seq_payment_request" model="ir.sequence">
+        <field name="name">Secuencia de Solicitud de Pago</field>
+        <field name="code">payment.request</field>
+        <field name="prefix">SP/%(year)s/</field>
+        <field name="padding">4</field>
+        <field name="company_id" eval="False"/>
+    </record>
+</odoo>

@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="fleet_inspection_view_tree" model="ir.ui.view">
+        <field name="name">fleet.inspection.tree</field>
+        <field name="model">fleet.inspection</field>
+        <field name="arch" type="xml">
+            <tree decoration-success="state == 'approved'" decoration-danger="state == 'rejected'"
+                  decoration-warning="is_overdue">
+                <field name="name"/>
+                <field name="vehicle_id"/>
+                <field name="vehicle_type"/>
+                <field name="inspector_id" widget="many2one_avatar_user"/>
+                <field name="date"/>
+                <field name="failed_count"/>
+                <field name="is_overdue" invisible="1"/>
+                <field name="state" widget="badge"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="fleet_inspection_view_form" model="ir.ui.view">
+        <field name="name">fleet.inspection.form</field>
+        <field name="model">fleet.inspection</field>
+        <field name="arch" type="xml">
+            <form string="Inspección">
+                <header>
+                    <button name="action_start" string="Iniciar" type="object" class="oe_highlight"
+                            invisible="state != 'draft'"/>
+                    <button name="action_approve" string="Aprobar" type="object" class="oe_highlight"
+                            invisible="state != 'in_progress'" groups="fleet_inspection.group_fleet_inspection_manager"/>
+                    <button name="action_reject" string="Rechazar" type="object"
+                            invisible="state != 'in_progress'" groups="fleet_inspection.group_fleet_inspection_manager"/>
+                    <button name="action_reset_draft" string="Volver a borrador" type="object"
+                            invisible="state != 'rejected'" groups="fleet_inspection.group_fleet_inspection_manager"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,in_progress,approved"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-warning" role="alert" invisible="not is_overdue">
+                        Esta inspección lleva más de 7 días en curso.
+                    </div>
+                    <div class="oe_title">
+                        <h1><field name="name"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="vehicle_id" readonly="state != 'draft'"/>
+                            <field name="vehicle_type" readonly="state != 'draft'"/>
+                            <field name="odometer" readonly="state in ('approved', 'rejected')"/>
+                        </group>
+                        <group>
+                            <field name="inspector_id"/>
+                            <field name="date" readonly="state != 'draft'"/>
+                            <field name="failed_count"/>
+                            <field name="is_overdue" invisible="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Checklist" name="checklist">
+                            <field name="line_ids" readonly="state in ('approved', 'rejected')">
+                                <tree editable="bottom" create="0" decoration-danger="result == 'fail'">
+                                    <field name="sequence" invisible="1"/>
+                                    <field name="item_id" readonly="1" force_save="1"/>
+                                    <field name="critical"/>
+                                    <field name="state" invisible="1"/>
+                                    <field name="result" required="state == 'in_progress'"/>
+                                    <field name="comment"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="Observaciones" name="notes">
+                            <field name="notes"/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="activity_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <record id="fleet_inspection_view_search" model="ir.ui.view">
+        <field name="name">fleet.inspection.search</field>
+        <field name="model">fleet.inspection</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="name"/>
+                <field name="vehicle_id"/>
+                <field name="inspector_id"/>
+                <filter name="my_inspections" string="Mis inspecciones" domain="[('inspector_id', '=', uid)]"/>
+                <separator/>
+                <filter name="in_progress" string="En curso" domain="[('state', '=', 'in_progress')]"/>
+                <filter name="overdue" string="Vencidas" domain="[('is_overdue', '=', True)]"/>
+                <filter name="with_failures" string="Con fallas" domain="[('failed_count', '>', 0)]"/>
+                <group expand="0" string="Agrupar por">
+                    <filter name="group_vehicle_type" string="Tipo de vehículo" context="{'group_by': 'vehicle_type'}"/>
+                    <filter name="group_state" string="Estado" context="{'group_by': 'state'}"/>
+                    <filter name="group_date" string="Fecha" context="{'group_by': 'date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="fleet_inspection_action" model="ir.actions.act_window">
+        <field name="name">Inspecciones</field>
+        <field name="res_model">fleet.inspection</field>
+        <field name="view_mode">tree,form</field>
+        <field name="context">{'search_default_my_inspections': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Registra la primera inspección</p>
+            <p>El checklist se carga solo con los puntos configurados.</p>
+        </field>
+    </record>
+</odoo>

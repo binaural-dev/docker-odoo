@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Categoría de Seguridad -->
+    <record id="module_category_equipment_loan" model="ir.module.category">
+        <field name="name">Préstamos de Equipos</field>
+        <field name="description">Permisos de acceso para la gestión y préstamo de laptops a colaboradores.</field>
+        <field name="sequence">30</field>
+    </record>
+
+    <!-- Grupos de Usuario -->
+    <record id="group_equipment_loan_user" model="res.groups">
+        <field name="name">Usuario</field>
+        <field name="category_id" ref="module_category_equipment_loan"/>
+        <field name="implied_ids" eval="[(4, ref('base.group_user'))]"/>
+        <field name="comment">Puede consultar equipos disponibles y registrar préstamos.</field>
+    </record>
+
+    <record id="group_equipment_loan_manager" model="res.groups">
+        <field name="name">Administrador / TI</field>
+        <field name="category_id" ref="module_category_equipment_loan"/>
+        <field name="implied_ids" eval="[(4, ref('group_equipment_loan_user'))]"/>
+        <field name="comment">Control total del catálogo de laptops, entregas, devoluciones y supervisión global.</field>
+    </record>
+
+    <!-- Reglas de Registro: Préstamos -->
+    <record id="equipment_loan_rule_user" model="ir.rule">
+        <field name="name">Préstamo de Equipo: Usuario ve solo los suyos</field>
+        <field name="model_id" ref="model_equipment_loan"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('group_equipment_loan_user'))]"/>
+        <field name="perm_read" eval="1"/>
+        <field name="perm_write" eval="1"/>
+        <field name="perm_create" eval="1"/>
+        <field name="perm_unlink" eval="0"/>
+    </record>
+
+    <record id="equipment_loan_rule_manager" model="ir.rule">
+        <field name="name">Préstamo de Equipo: Administrador ve todos</field>
+        <field name="model_id" ref="model_equipment_loan"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('group_equipment_loan_manager'))]"/>
+        <field name="perm_read" eval="1"/>
+        <field name="perm_write" eval="1"/>
+        <field name="perm_create" eval="1"/>
+        <field name="perm_unlink" eval="1"/>
+    </record>
+
+    <!-- Reglas Multi-compañía (Globales) -->
+    <record id="equipment_loan_rule_company" model="ir.rule">
+        <field name="name">Préstamo de Equipo: Multi-compañía</field>
+        <field name="model_id" ref="model_equipment_loan"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+
+    <record id="equipment_laptop_rule_company" model="ir.rule">
+        <field name="name">Equipo Laptop: Multi-compañía</field>
+        <field name="model_id" ref="model_equipment_laptop"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>
+

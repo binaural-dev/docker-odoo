@@ -1,0 +1,8 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_equipment_laptop_user,equipment.laptop.user,model_equipment_laptop,group_equipment_loan_user,1,0,0,0
+access_equipment_laptop_manager,equipment.laptop.manager,model_equipment_laptop,group_equipment_loan_manager,1,1,1,1
+access_equipment_laptop_admin,equipment.laptop.admin,model_equipment_laptop,base.group_system,1,1,1,1
+access_equipment_loan_user,equipment.loan.user,model_equipment_loan,group_equipment_loan_user,1,1,1,0
+access_equipment_loan_manager,equipment.loan.manager,model_equipment_loan,group_equipment_loan_manager,1,1,1,1
+access_equipment_loan_admin,equipment.loan.admin,model_equipment_loan,base.group_system,1,1,1,1
+

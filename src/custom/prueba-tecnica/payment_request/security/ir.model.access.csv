@@ -1,0 +1,5 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_payment_request_user,payment.request.user,model_payment_request,group_payment_request_user,1,1,1,0
+access_payment_request_approver,payment.request.approver,model_payment_request,group_payment_request_approver,1,1,1,1
+access_payment_request_treasury,payment.request.treasury,model_payment_request,group_payment_request_treasury,1,1,0,0
+access_payment_request_admin,payment.request.admin,model_payment_request,base.group_system,1,1,1,1

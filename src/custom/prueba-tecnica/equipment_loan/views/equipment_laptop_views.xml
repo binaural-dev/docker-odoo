@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Vista Formulario de Equipos / Laptops -->
+    <record id="view_equipment_laptop_form" model="ir.ui.view">
+        <field name="name">equipment.laptop.form</field>
+        <field name="model">equipment.laptop</field>
+        <field name="arch" type="xml">
+            <form string="Equipo / Laptop">
+                <header>
+                    <field name="state" widget="statusbar" statusbar_visible="available,loaned,maintenance"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_loans" type="object" class="oe_stat_button" icon="fa-laptop">
+                            <field name="loan_count" widget="statinfo" string="Préstamos"/>
+                        </button>
+                    </div>
+                    <div class="oe_title">
+                        <label for="name" string="Nombre / Identificador"/>
+                        <h1>
+                            <field name="name" placeholder="Ej. Lenovo ThinkPad T14 - TI-01"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group string="Identificación y Hardware">
+                            <field name="serial_number"/>
+                            <field name="brand"/>
+                            <field name="model"/>
+                        </group>
+                        <group string="Estado Administrativo">
+                            <field name="company_id" invisible="1"/>
+                            <field name="overdue_loan_count" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Historial de Préstamos">
+                            <field name="loan_ids" readonly="1">
+                                <tree string="Préstamos Registrados"
+                                      decoration-danger="is_overdue"
+                                      decoration-info="state == 'loaned'"
+                                      decoration-muted="state == 'returned'">
+                                    <field name="name"/>
+                                    <field name="receiver_id"/>
+                                    <field name="delivery_date"/>
+                                    <field name="expected_return_date"/>
+                                    <field name="actual_return_date"/>
+                                    <field name="is_overdue" widget="boolean"/>
+                                    <field name="state" widget="badge"
+                                           decoration-danger="is_overdue"
+                                           decoration-info="state == 'loaned'"
+                                           decoration-success="state == 'returned'"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="Observaciones / Ficha Técnica">
+                            <field name="notes" placeholder="Especificaciones de procesador, memoria, almacenamiento o condiciones del equipo..."/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <!-- Chatter para trazabilidad -->
+                <div class="oe_chatter">
+                    <field name="message_follower_ids"/>
+                    <field name="activity_ids"/>
+                    <field name="message_ids"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <!-- Vista de Lista de Equipos / Laptops -->
+    <record id="view_equipment_laptop_tree" model="ir.ui.view">
+        <field name="name">equipment.laptop.tree</field>
+        <field name="model">equipment.laptop</field>
+        <field name="arch" type="xml">
+            <tree string="Equipos y Laptops"
+                  decoration-success="state == 'available'"
+                  decoration-info="state == 'loaned'"
+                  decoration-warning="state == 'maintenance'">
+                <field name="name"/>
+                <field name="serial_number"/>
+                <field name="brand"/>
+                <field name="model"/>
+                <field name="loan_count"/>
+                <field name="overdue_loan_count"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'available'"
+                       decoration-info="state == 'loaned'"
+                       decoration-warning="state == 'maintenance'"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Vista de Búsqueda de Equipos -->
+    <record id="view_equipment_laptop_search" model="ir.ui.view">
+        <field name="name">equipment.laptop.search</field>
+        <field name="model">equipment.laptop</field>
+        <field name="arch" type="xml">
+            <search string="Buscar Equipos">
+                <field name="name"/>
+                <field name="serial_number"/>
+                <field name="brand"/>
+                <field name="model"/>
+                <filter name="filter_available" string="Disponibles" domain="[('state', '=', 'available')]"/>
+                <filter name="filter_loaned" string="En Préstamo" domain="[('state', '=', 'loaned')]"/>
+                <filter name="filter_maintenance" string="En Mantenimiento" domain="[('state', '=', 'maintenance')]"/>
+                <separator/>
+                <filter name="filter_with_overdue" string="Con Préstamos Vencidos" domain="[('overdue_loan_count', '>', 0)]"/>
+                <group expand="0" string="Agrupar por">
+                    <filter name="group_state" string="Estado" context="{'group_by': 'state'}"/>
+                    <filter name="group_brand" string="Marca" context="{'group_by': 'brand'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Acción de Ventana para Equipos -->
+    <record id="action_equipment_laptop" model="ir.actions.act_window">
+        <field name="name">Equipos y Laptops</field>
+        <field name="res_model">equipment.laptop</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_equipment_laptop_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Registre el primer equipo o laptop en el inventario
+            </p>
+            <p>
+                Permite registrar seriales, marcas, modelos y controlar la disponibilidad de las laptops para su posterior asignación a colaboradores.
+            </p>
+        </field>
+    </record>
+</odoo>
+

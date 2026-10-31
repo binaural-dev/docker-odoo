@@ -1,5 +1,24 @@
 # Binaural Workspace — Multi-Instance Odoo Docker
 
+## 📌 Entrega de Prueba Técnica — Desarrollador Odoo (Binaural)
+
+- **Candidato:** Kenner ([KacsS](https://github.com/KacsS))
+- **Versión de Odoo:** **17.0** (Odoo Community Edition)
+- **Instancia activa:** `prueba-tecnica` (Odoo 17.0 en puerto 8069, Base de datos `v17` en PostgreSQL 16)
+- **Rama de entrega:** `main` (Fork: https://github.com/KacsS/docker-odoo)
+- **Pull Request Incidente T-200:** [PR #1 (hotfix/T-200)](https://github.com/KacsS/docker-odoo/pull/1)
+
+### Estado de los 4 Ejercicios (Tramo A al 100%)
+
+| # | Módulo | Objetivo | Tests | Cobertura | Documentación |
+|---|---|---|:---:|:---:|---|
+| **1** | `shop_integration_api` | API REST `GET /api/v1/products` con filtros y respuestas HTTP 422 | 8 / 8 OK | 92% | `README.md` · `AI_LOG.md` |
+| **2** | `fleet_inspection` | Migración Odoo 16 -> 17 (sin `attrs`/`states`, `_compute_display_name`) | 9 / 9 OK | 94% | `README.md` (tabla de migración) · `AI_LOG.md` |
+| **3** | `sale_commission` | Incidente urgente T-200 (permisos vendedores sin `sudo` indiscriminado) | 6 / 6 OK | 83% | `INCIDENT.md` · `README.md` · `AI_LOG.md` |
+| **4** | `payment_request` | Flujo de solicitudes de pago con aprobación y reglas de aislamiento | 7 / 7 OK | 89% | `README.md` (supuestos y preguntas) · `AI_LOG.md` |
+
+---
+
 Entorno de desarrollo que permite levantar **múltiples instancias de Odoo** (diferentes versiones, diferentes proyectos) desde un único directorio, cada una con sus propios addons, base de datos y puerto. Todo se configura en un archivo `instances.json`.
 
 Compatible con Odoo 14.0, 16.0, 17.0, 18.0, 19.0 y master.
