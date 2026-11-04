@@ -157,6 +157,73 @@ class DevModeCommandFlagTest(unittest.TestCase):
         )
 
 
+class DebugModeTest(unittest.TestCase):
+    """`debug` -> Odoo under debugpy, port on localhost, websocket on 8069."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp(prefix="test_compose_debug_")
+        os.makedirs(os.path.join(self.tmpdir, ".resources", "nginx_configs"), exist_ok=True)
+        self.dockerfile_map = {"17.0": ".resources/17.Dockerfile"}
+
+    def _generate(self, config):
+        path = generate_compose(self.tmpdir, config, self.dockerfile_map)
+        with open(path) as f:
+            return f.read()
+
+    def _nginx(self, config):
+        path = generate_nginx_config(self.tmpdir, config)
+        with open(path) as f:
+            return f.read()
+
+    def test_debug_off_by_default(self):
+        config = _sample_config()
+        content = self._generate(config)
+        self.assertNotIn("debugpy", content)
+        self.assertNotIn(":5678", content)
+        self.assertIn("http://odoo-acme:8071", self._nginx(config))
+
+    def test_debug_runs_under_debugpy_without_workers(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        content = self._generate(config)
+        self.assertIn(
+            '    command: ["/usr/bin/python3", "-Xfrozen_modules=off", "/opt/debugpy/debugpy", '
+            '"--listen", "0.0.0.0:5678", "/usr/bin/odoo", "--workers=0"]',
+            content,
+        )
+        self.assertIn('      - "127.0.0.1:5678:5678"', content)
+
+    def test_debug_custom_port(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        config["instances"]["acme"]["debug_port"] = 5690
+        content = self._generate(config)
+        self.assertIn('      - "127.0.0.1:5690:5678"', content)
+
+    def test_debug_with_dev_mode_drops_autoreload(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        config["odoo_configs"]["base"]["dev_mode"] = True
+        content = self._generate(config)
+        self.assertIn('"--workers=0", "--dev=qweb,xml"]', content)
+        self.assertNotIn("--dev=all", content)
+
+    def test_debug_websocket_goes_to_http_port(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        nginx = self._nginx(config)
+        self.assertNotIn("http://odoo-acme:8071", nginx)
+        self.assertEqual(nginx.count("http://odoo-acme:8069"), 2)
+
+    def test_debug_suppressed_on_production_instance(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        config["instances"]["acme"]["production"] = True
+        content = self._generate(config)
+        self.assertNotIn("debugpy", content)
+        self.assertNotIn(":5678", content)
+
+
 class NginxGeneratorServiceNameTest(unittest.TestCase):
     """nginx must proxy to service names, not the removed container_name."""
 

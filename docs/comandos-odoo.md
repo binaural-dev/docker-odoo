@@ -26,6 +26,7 @@ tocar Docker.
 | `remove [instancia]` | opcional* | Borra contenedores + **volúmenes** (pide confirmación) |
 | `fix-files [instancia]` | opcional* | `chown -R odoo:odoo` sobre el filestore |
 | `psql [instancia] [-d db]` | opcional* | Conecta a psql dentro del contenedor Odoo |
+| `vscode [instancia]` | opcional* | Copia el core de Odoo a `.odoo-src/` y arma `.vscode/launch.json` para depurar |
 | `pw [instancia] [-d db] [-l login] [-p pass]` | opcional* | Resetea contraseña de un usuario |
 | `update [instancia] [-d db\|all] [-m mods]` | opcional* | `odoo -u <mods> -d <db> --stop-after-init` |
 | `init [instancia]` | opcional | Reporta qué `addons` faltan en disco (no clona) |
@@ -129,6 +130,24 @@ todo el compose. Siempre `--tail=10 -f` (streaming, no dump completo).
 Sin `-d`, te pregunta la base (con menú si hay más de una). Corre `psql`
 **dentro** del contenedor Odoo (no necesitás el cliente de Postgres en tu
 host), conectando a `db-<nombre>:5432` por la red interna.
+
+### `vscode [instancia]`
+
+Prepara VS Code para depurar una instancia con `"debug": true` en
+`instances.json` (ver readme). Siempre pide una instancia concreta.
+
+1. Copia `/usr/lib/python3/dist-packages/odoo` del contenedor a
+   `.odoo-src/<instancia>/odoo` (reemplaza la copia anterior; está en
+   `.gitignore`). Es por instancia porque cada una tiene su propio volumen
+   `/usr/lib` y puede tener otro build nightly de la misma versión. El
+   contenedor tiene que existir (`./odoo start <instancia>`).
+2. Agrega o reemplaza la configuración `Odoo: <instancia>` en
+   `.vscode/launch.json` (attach a `localhost:<debug_port>`, mapeando `src/`
+   y el core copiado, `justMyCode: false`). Si el archivo tiene comentarios
+   no lo toca e imprime la configuración para pegarla a mano.
+
+Volvé a correrlo si reconstruís la imagen o recreás los volúmenes, para que
+el core local coincida con el del contenedor.
 
 ---
 

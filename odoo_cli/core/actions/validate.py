@@ -18,6 +18,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from odoo_cli.core.runner import Runner
 
+# Must match generators.config_loader.DEFAULT_DEBUG_PORT. Duplicated (not
+# imported) so this module keeps not depending on the generators package.
+DEFAULT_DEBUG_PORT = 5678
+
 
 def validate_instances(runner: "Runner", config: dict) -> None:
     """Validate ``instances.json`` for duplicate ports and valid configuration.
@@ -91,6 +95,17 @@ def validate_instances(runner: "Runner", config: dict) -> None:
             else:
                 ports_seen[lp_port] = f"instancia {name} (longpolling_port)"
 
+        # Check debug_port (only published when "debug": true)
+        if inst.get("debug"):
+            dbg_port = inst.get("debug_port", DEFAULT_DEBUG_PORT)
+            if dbg_port in ports_seen:
+                errors.append(
+                    f"Puerto duplicado: {dbg_port} usado por '{name}' "
+                    f"y '{ports_seen[dbg_port]}'"
+                )
+            else:
+                ports_seen[dbg_port] = f"instancia {name} (debug_port)"
+
         # Check db existence
         db_name = inst.get("database")
         if db_name and db_name not in config.get("databases", {}):
@@ -128,6 +143,8 @@ def _collect_config_ports(config: dict) -> set[int]:
             ports.add(inst["external_port"])
         if inst.get("longpolling_port"):
             ports.add(inst["longpolling_port"])
+        if inst.get("debug"):
+            ports.add(inst.get("debug_port", DEFAULT_DEBUG_PORT))
 
     return ports
 

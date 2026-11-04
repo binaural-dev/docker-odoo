@@ -114,6 +114,8 @@ El flag opcional `"production"` (default `false`) marca una instancia como produ
 
 El flag `"dev_mode"` (default `false`, dentro de `overwrite_odoo_config` o del `odoo_config` base, igual que `workers`/`without_demo`) agrega `--dev=all` al comando de arranque de Odoo (autoreload de código/assets — útil en desarrollo). **No se puede combinar con `"production": true`**: `instances.json` se rechaza al cargar (`ValueError`) si una instancia productiva tiene `dev_mode` activo — en producción corresponde `./odoo update`, no dev mode.
 
+El flag `"debug"` (default `false`, a nivel de instancia como `"production"`) arranca Odoo bajo [debugpy](https://github.com/microsoft/debugpy) con `--workers=0` y publica el depurador en `127.0.0.1:<debug_port>` (default `5678`; si activás `debug` en varias instancias, cada una necesita su propio `debug_port`). Después de `./odoo build` + `./odoo restart <instancia>`, corré `./odoo vscode <instancia>`: copia el código base de Odoo del contenedor a `.odoo-src/<instancia>/odoo` y agrega la configuración `Odoo: <instancia>` a `.vscode/launch.json`, con la que VS Code (extensiones *Python* y *Python Debugger*) se conecta y para en breakpoints tanto en `src/` como en el core de Odoo. En modo debug no hay autoreload de Python (aunque esté `dev_mode`): reiniciá la instancia tras cambiar código. **No se puede combinar con `"production": true`.**
+
 ```json
 {
   "instances": {

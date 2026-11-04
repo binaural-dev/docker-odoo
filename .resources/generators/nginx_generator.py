@@ -15,6 +15,8 @@ not bleed across instances.
 
 import os
 
+from .config_loader import is_debug_instance, is_production_instance
+
 
 ODOO_HTTP_PORT = 8069
 ODOO_GEVENT_PORT = 8071
@@ -34,8 +36,14 @@ def generate_nginx_config(base_path, config):
     for inst_name, inst_conf in config["instances"].items():
         external_port = inst_conf["external_port"]
         container_name = f"odoo-{inst_name}"
+        # In debug mode Odoo runs with --workers=0 (threaded server), which
+        # serves /websocket on the HTTP port: there is no gevent process.
+        debug = is_debug_instance(inst_conf) and not is_production_instance(inst_conf)
+        websocket_port = ODOO_HTTP_PORT if debug else ODOO_GEVENT_PORT
         blocks.append(
-            _odoo_server_block(inst_name, external_port, container_name, is_first)
+            _odoo_server_block(
+                inst_name, external_port, container_name, is_first, websocket_port
+            )
         )
         is_first = False
 
@@ -83,7 +91,10 @@ def _listen_lines(port_a, port_b, is_default_server):
     ]
 
 
-def _odoo_server_block(inst_name, external_port, container_name, is_first):
+def _odoo_server_block(
+    inst_name, external_port, container_name, is_first,
+    websocket_port=ODOO_GEVENT_PORT,
+):
     listen_lines = _listen_lines(external_port, NGINX_HTTP_PORT, is_first)
     listen_block = "\n".join(listen_lines)
     return f"""# Instance: {inst_name} (port {external_port} | {inst_name}.local)
@@ -114,8 +125,8 @@ server {{
     }}
 
     location /websocket {{
-        set $proxy_upstream_{ODOO_GEVENT_PORT} http://{container_name}:{ODOO_GEVENT_PORT};
-        proxy_pass $proxy_upstream_{ODOO_GEVENT_PORT};
+        set $proxy_upstream_{websocket_port} http://{container_name}:{websocket_port};
+        proxy_pass $proxy_upstream_{websocket_port};
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection "Upgrade";

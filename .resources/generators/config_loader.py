@@ -136,6 +136,24 @@ def is_production_instance(inst_conf) -> bool:
     return bool(inst_conf.get("production", False))
 
 
+# Host port published for debugpy when an instance doesn't set "debug_port".
+DEFAULT_DEBUG_PORT = 5678
+
+
+def is_debug_instance(inst_conf) -> bool:
+    """Return whether an instance runs Odoo under debugpy (VS Code attach).
+
+    Defaults to ``False``. Never ``True`` for a production instance:
+    ``_validate_instance`` rejects that combination.
+    """
+    return bool(inst_conf.get("debug", False))
+
+
+def get_debug_port(inst_conf) -> int:
+    """Host-side port where the instance's debugpy listener is published."""
+    return inst_conf.get("debug_port", DEFAULT_DEBUG_PORT)
+
+
 def _validate_config(config):
     """Validate the configuration structure."""
     required_sections = ["odoo_configs", "databases", "instances"]
@@ -212,6 +230,25 @@ def _validate_instance(inst_name, inst_conf, config):
             f"'production': true (usá './odoo update' en su lugar)."
         )
 
+    # Validate 'debug' (debugpy attach for VS Code). Same reasoning as
+    # dev_mode: --workers=0 plus an open debugger port must never reach
+    # a production container.
+    if "debug" in inst_conf and not isinstance(inst_conf["debug"], bool):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'debug' debe ser true/false, "
+            f"no {inst_conf['debug']!r}"
+        )
+    if is_debug_instance(inst_conf) and is_production_instance(inst_conf):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'debug' no puede estar activo junto a "
+            f"'production': true."
+        )
+    if "debug_port" in inst_conf and not isinstance(inst_conf["debug_port"], int):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'debug_port' debe ser un número, "
+            f"no {inst_conf['debug_port']!r}"
+        )
+
     # Validate unique external_port
     ports = [
         v["external_port"]
@@ -219,6 +256,17 @@ def _validate_instance(inst_name, inst_conf, config):
     ]
     if len(ports) != len(set(ports)):
         raise ValueError("Los external_port de las instancias deben ser únicos")
+
+    # Validate unique debug_port among instances with debug enabled
+    debug_ports = [
+        get_debug_port(v)
+        for v in config["instances"].values()
+        if is_debug_instance(v)
+    ]
+    if len(debug_ports) != len(set(debug_ports)):
+        raise ValueError(
+            "Los debug_port de las instancias con 'debug': true deben ser únicos"
+        )
 
 
 def _validate_cron_dbfilter_isolation(config):

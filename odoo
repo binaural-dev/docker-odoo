@@ -78,7 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Comandos por categoría:\n"
             "  Ciclo de vida       build, start, stop, restart, remove, fix-files\n"
-            "  Acceso / debug      bash, shell, logs, list, psql, pw\n"
+            "  Acceso / debug      bash, shell, logs, list, psql, pw, vscode\n"
             "  Módulos             update, init, test\n"
             "  Git / submódulos    sync, update-tags, update-tags-bulk, "
             "submodule-status\n"
@@ -220,6 +220,26 @@ def _build_parser() -> argparse.ArgumentParser:
     # list
     subparsers.add_parser(
         "list", help="Lista contenedores en ejecución"
+    )
+
+    # vscode
+    p = subparsers.add_parser(
+        "vscode",
+        help="Prepara VS Code para depurar una instancia (debugpy)",
+        description=(
+            "Copia el código base de Odoo del contenedor a "
+            ".odoo-src/<instancia>/odoo y agrega la configuración 'Odoo: "
+            "<instancia>' a .vscode/launch.json para conectarse con debugpy.\n\n"
+            "La instancia debe tener \"debug\": true en instances.json "
+            "(opcional \"debug_port\", por defecto 5678) y haberse "
+            "reconstruido con './odoo build' y reiniciado. En modo debug "
+            "Odoo corre con --workers=0 y sin autoreload: reinicia la "
+            "instancia tras cambiar código Python."
+        ),
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional, se pregunta si falta)",
     )
 
     # remove

@@ -85,6 +85,49 @@ class DevModeProductionCrossCheckTest(unittest.TestCase):
             _validate_config(config)
 
 
+class DebugValidationTest(unittest.TestCase):
+    def test_debug_allowed_without_production(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        _validate_config(config)  # should not raise
+
+    def test_debug_rejected_on_production_instance(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        config["instances"]["acme"]["production"] = True
+        with self.assertRaises(ValueError):
+            _validate_config(config)
+
+    def test_non_bool_debug_is_rejected(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = "si"
+        with self.assertRaises(ValueError):
+            _validate_config(config)
+
+    def test_duplicate_debug_port_is_rejected(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        # Two instances on one DB service: skip the cron/db_filter
+        # isolation check, which is unrelated to what's tested here.
+        config["instances"]["acme"]["overwrite_odoo_config"] = {"max_cron_threads": 0}
+        config["instances"]["other"] = dict(
+            config["instances"]["acme"], external_port=8070
+        )
+        with self.assertRaisesRegex(ValueError, "debug_port"):
+            _validate_config(config)
+
+    def test_distinct_debug_ports_are_accepted(self):
+        config = _sample_config()
+        config["instances"]["acme"]["debug"] = True
+        # Two instances on one DB service: skip the cron/db_filter
+        # isolation check, which is unrelated to what's tested here.
+        config["instances"]["acme"]["overwrite_odoo_config"] = {"max_cron_threads": 0}
+        config["instances"]["other"] = dict(
+            config["instances"]["acme"], external_port=8070, debug_port=5679
+        )
+        _validate_config(config)  # should not raise
+
+
 class ResolveDbBootstrapCredsTest(unittest.TestCase):
     """El rol bootstrap DEBE resolverse contra la conf *cruda* del servicio.
 

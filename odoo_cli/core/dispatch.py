@@ -73,6 +73,7 @@ from odoo_cli.core.actions.postgres import (
     psql_remove_database,
 )
 from odoo_cli.core.actions.testing import run_tests, translate_module_path_tokens
+from odoo_cli.core.actions.vscode import setup_vscode
 from odoo_cli.core.prompts import (
     prompt_for_branch,
     prompt_for_bulk_branch_origin,
@@ -100,7 +101,7 @@ from odoo_cli.core.prompts import (
 # calling the action.
 _INSTANCE_AWARE_ACTIONS = {
     "start", "stop", "restart", "logs", "remove",
-    "fix-files", "init", "bash", "psql", "pw", "update", "test",
+    "fix-files", "init", "bash", "psql", "pw", "update", "test", "vscode",
 }
 
 
@@ -254,6 +255,9 @@ def dispatch(
 
     elif args.action == "list":
         list_containers(runner, config)
+
+    elif args.action == "vscode":
+        return setup_vscode(runner, config, base_path, args.instance)
 
     elif args.action == "remove":
         remove_odoo(runner, config, args.instance)

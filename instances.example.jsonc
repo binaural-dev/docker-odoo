@@ -110,6 +110,8 @@
       "external_port": 8071,
       "database": "v17",
       "odoo_config": "17.0_full",
+      "debug": true,                           // Corre Odoo bajo debugpy (--workers=0) para depurar desde VS Code ("./odoo vscode client-b"). Prohibido con "production": true
+      "debug_port": 5678,                      // Puerto del depurador en el host (solo 127.0.0.1). Default 5678
       "overwrite_odoo_config": {
         "addons": [
           "src/enterprise_v17",

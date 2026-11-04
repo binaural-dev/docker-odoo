@@ -13,6 +13,10 @@ RUN python3 -m pip install --no-cache-dir \
     cairosvg \
     click-odoo-contrib
 
+# debugpy for "debug": true instances (VS Code attach). Installed with --target
+# into /opt so the per-instance /usr/lib and /usr/local/lib volumes don't hide it.
+RUN python3 -m pip install --no-cache-dir --target /opt/debugpy debugpy
+
 ENV SOURCES=/home/odoo/src
 ENV RESOURCES=/home/odoo/.resources
 ENV CONFIG_DIR=/home/odoo/.config
