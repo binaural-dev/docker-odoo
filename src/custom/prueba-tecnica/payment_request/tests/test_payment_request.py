@@ -300,3 +300,129 @@ class TestPaymentRequest(TransactionCase):
             "payment_request.action_report_payment_request", req.ids
         )
         self.assertTrue(len(pdf_content) > 0, "El reporte PDF generado no debe estar vacío")
+
+    def test_currency_conversion_usd_to_ves_payment(self):
+        """Valida solicitud en USD pagada desde diario en VES aplicando la tasa de la fecha de pago."""
+        usd = self.env.ref("base.USD")
+        ves = self.env.ref("base.VES")
+        ves.active = True
+
+        # Tasa: 1 USD = 36.50 VES (VES tiene tasa 36.50 respecto a la moneda base USD)
+        rate = self.env["res.currency.rate"].search([
+            ("currency_id", "=", ves.id),
+            ("company_id", "=", self.env.company.id),
+            ("name", "=", fields.Date.today()),
+        ], limit=1)
+        if rate:
+            rate.write({"rate": 36.50})
+        else:
+            self.env["res.currency.rate"].create({
+                "currency_id": ves.id,
+                "company_id": self.env.company.id,
+                "name": fields.Date.today(),
+                "rate": 36.50,
+            })
+
+        journal_ves = self.env["account.journal"].create({
+            "name": "Banco en Bolívares Test",
+            "code": "BVEST",
+            "type": "bank",
+            "currency_id": ves.id,
+            "company_id": self.env.company.id,
+        })
+
+        req = self._create_request(amount=100.0, currency_id=usd.id)
+        req.action_send()
+        req.with_user(self.user_approver).action_approve()
+
+        # Abrir wizard de pago en diario VES
+        pay_wizard = self.env["payment.request.pay.wizard"].with_user(self.user_treasury).create({
+            "request_id": req.id,
+            "journal_id": journal_ves.id,
+            "payment_date": fields.Date.today(),
+        })
+
+        # Comprobar monto convertido a la tasa
+        self.assertEqual(pay_wizard.payment_amount, 3650.0)
+        self.assertAlmostEqual(pay_wizard.exchange_rate, 36.50, places=2)
+
+        # Confirmar pago
+        pay_wizard.action_confirm_payment()
+
+        self.assertEqual(req.state, "paid")
+        self.assertTrue(req.payment_id)
+        self.assertEqual(req.sudo().payment_id.currency_id, ves)
+        self.assertEqual(req.sudo().payment_id.amount, 3650.0)
+        self.assertEqual(req.payment_amount, 3650.0)
+        self.assertEqual(req.payment_currency_id, ves)
+
+    def test_multicompany_isolation_and_access_rules(self):
+        """Valida que un usuario de la compañía B no vea solicitudes ni niveles de la compañía A."""
+        company_b = self.env["res.company"].create({
+            "name": "Distribuidora Andina Sucursal B C.A.",
+            "currency_id": self.env.ref("base.USD").id,
+        })
+        group_user = self.env.ref("payment_request.group_payment_request_user")
+        user_b = self.env["res.users"].create({
+            "name": "Empleado Sucursal B",
+            "login": "applicant_b_test",
+            "email": "applicant_b@test.com",
+            "company_id": company_b.id,
+            "company_ids": [(6, 0, [company_b.id])],
+            "groups_id": [(6, 0, [group_user.id])],
+        })
+
+        # Solicitud creada en Compañía A
+        req_a = self._create_request()
+        self.assertEqual(req_a.company_id, self.env.company)
+
+        # 1. Búsqueda desde usuario de Compañía B: no debe listar nada de Compañía A
+        visible_requests = self.env["payment.request"].with_user(user_b).search([("id", "=", req_a.id)])
+        self.assertFalse(visible_requests, "El usuario de la compañía B no debe ver solicitudes de la compañía A")
+
+        # 2. Intento de lectura directa por ID: debe arrojar AccessError
+        with self.assertRaises(AccessError):
+            req_a.with_user(user_b).read(["name", "amount", "state"])
+
+    def test_concurrency_database_row_locking(self):
+        """Valida que ante concurrencia de aprobadores, el bloqueo de BD (FOR UPDATE NOWAIT) protege el registro."""
+        import psycopg2
+        from unittest.mock import patch
+
+        req = self._create_request(amount=600.0)
+        req.action_send()
+
+        # Simular que otra transacción ya retiene el bloqueo exclusivo de PostgreSQL
+        orig_execute = self.cr.execute
+
+        def mock_execute(query, params=None):
+            if "FOR UPDATE NOWAIT" in str(query):
+                raise psycopg2.OperationalError("could not obtain lock on row in relation payment_request")
+            return orig_execute(query, params)
+
+        with patch.object(self.cr, "execute", side_effect=mock_execute):
+            with self.assertRaises(UserError) as cm:
+                req.with_user(self.user_approver).action_approve()
+            self.assertIn("procesada concurrentemente", str(cm.exception))
+
+    def test_payment_creation_failure_does_not_mark_paid(self):
+        """Valida que si la creación o validación del pago contable falla, la solicitud no queda en 'paid'."""
+        from unittest.mock import patch
+
+        req = self._create_request(amount=750.0)
+        req.action_send()
+        req.with_user(self.user_approver).action_approve()
+        self.assertEqual(req.state, "approved")
+
+        # Simular fallo durante action_post()
+        with patch("odoo.addons.account.models.account_payment.AccountPayment.action_post", side_effect=UserError("Error contable simulado")):
+            pay_wizard = self.env["payment.request.pay.wizard"].with_user(self.user_treasury).create({
+                "request_id": req.id,
+                "journal_id": self.bank_journal.id,
+            })
+            with self.assertRaises(UserError):
+                pay_wizard.action_confirm_payment()
+
+        # Verificar inmutabilidad: la solicitud sigue en 'approved' y sin pago asociado
+        self.assertEqual(req.state, "approved")
+        self.assertFalse(req.payment_id)
