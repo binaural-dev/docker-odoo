@@ -3,19 +3,15 @@ from datetime import timedelta
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError, ValidationError
 
-VEHICLE_TYPES = [
-    ("motorcycle", "Moto"),
-    ("car", "Carro"),
-    ("truck", "Camión"),
-    ("other", "Otro"),
-]
-
 
 class FleetInspection(models.Model):
     _name = "fleet.inspection"
     _description = "Inspección de vehículo"
     _inherit = ["mail.thread", "mail.activity.mixin"]
     _order = "date desc, id desc"
+
+    def _default_vehicle_type_id(self):
+        return self.env["fleet.inspection.vehicle.type"].search([("code", "=", "car")], limit=1)
 
     name = fields.Char(string="Número", required=True, copy=False, readonly=True, default="/")
     vehicle_id = fields.Many2one(
@@ -24,12 +20,18 @@ class FleetInspection(models.Model):
         required=True,
         tracking=True,
     )
-    vehicle_type = fields.Selection(
-        VEHICLE_TYPES,
+    vehicle_type_id = fields.Many2one(
+        "fleet.inspection.vehicle.type",
         string="Tipo de vehículo",
         required=True,
-        default="car",
+        default=_default_vehicle_type_id,
         tracking=True,
+    )
+    # Campo auxiliar computado/relacionado para retrocompatibilidad con código o filtros legados
+    vehicle_type = fields.Char(
+        related="vehicle_type_id.code",
+        string="Código tipo de vehículo",
+        readonly=True,
     )
     inspector_id = fields.Many2one(
         "res.users",
@@ -99,7 +101,23 @@ class FleetInspection(models.Model):
                 if items is False:
                     items = self.env["fleet.inspection.item"].search([])
                 vals["line_ids"] = [(0, 0, {"item_id": item.id}) for item in items]
+            # Compatibilidad si se pasa 'vehicle_type' como código de texto en lugar de Many2one ID
+            if "vehicle_type" in vals and "vehicle_type_id" not in vals:
+                vtype = self.env["fleet.inspection.vehicle.type"].search([("code", "=", vals["vehicle_type"])], limit=1)
+                if not vtype:
+                    vtype = self.env["fleet.inspection.vehicle.type"].search([("code", "=", "other")], limit=1)
+                if vtype:
+                    vals["vehicle_type_id"] = vtype.id
         return super().create(vals_list)
+
+    def write(self, vals):
+        if "vehicle_type" in vals and "vehicle_type_id" not in vals:
+            vtype = self.env["fleet.inspection.vehicle.type"].search([("code", "=", vals["vehicle_type"])], limit=1)
+            if not vtype:
+                vtype = self.env["fleet.inspection.vehicle.type"].search([("code", "=", "other")], limit=1)
+            if vtype:
+                vals["vehicle_type_id"] = vtype.id
+        return super().write(vals)
 
     def action_start(self):
         for inspection in self:
