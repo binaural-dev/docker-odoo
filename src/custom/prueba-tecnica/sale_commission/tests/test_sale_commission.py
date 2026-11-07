@@ -12,7 +12,11 @@ class TestSaleCommission(TransactionCase):
             name="Vendedor de prueba",
         )
         cls.salesman.commission_percent = 5.0
-        cls.env.user.commission_percent = 5.0
+        cls.manager = new_test_user(
+            cls.env, login="commission_manager", groups="sales_team.group_sale_manager",
+            name="Gerente de ventas",
+        )
+        cls.manager.commission_percent = 0.0
         cls.other_salesman = new_test_user(
             cls.env, login="commission_other_salesman", groups="sales_team.group_sale_salesman",
             name="Otro vendedor",
@@ -37,8 +41,19 @@ class TestSaleCommission(TransactionCase):
     def test_commission_on_confirm(self):
         order = self._create_order(self.salesman)
         self.assertEqual(order.order_line.commission_amount, 0.0)
-        order.action_confirm()
+        order.with_user(self.salesman).action_confirm()
         self.assertEqual(order.order_line.commission_percent, 5.0)
+        self.assertAlmostEqual(order.order_line.commission_amount, 10.0)
+
+    def test_manager_confirm_uses_salesman_commission(self):
+        """Valida que si un gerente confirma un pedido en nombre de un vendedor,
+        la comisión aplicada sea la del vendedor (order.user_id) y no la del gerente."""
+        order = self._create_order(self.salesman)
+        order.with_user(self.manager).action_confirm()
+        self.assertEqual(
+            order.order_line.commission_percent, 5.0,
+            "La comisión debe corresponder al vendedor del pedido, no al gerente que confirma"
+        )
         self.assertAlmostEqual(order.order_line.commission_amount, 10.0)
 
     def test_salesman_report_only_own(self):
