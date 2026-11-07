@@ -19,3 +19,7 @@ Calcula la comisión del vendedor en cada línea de pedido de venta y ofrece un 
 ```bash
 ./odoo test prueba-tecnica sale_commission
 ```
+
+## Incidentes y Mantenimiento
+
+- **Ticket T-200 (Crítica):** Resolución de bloqueo en confirmación de pedidos por vendedores e inconsistencia de comisiones confirmadas por gerentes. Documentación completa del incidente en [INCIDENT.md](INCIDENT.md).
