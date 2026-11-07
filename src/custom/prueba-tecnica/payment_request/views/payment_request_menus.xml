@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <menuitem id="menu_payment_request_root" name="Solicitudes de Pago" sequence="55"
-              web_icon="payment_request,static/description/icon.png" groups="group_payment_request_user"/>
+              groups="group_payment_request_user"/>
 
     <menuitem id="menu_payment_request_main" name="Solicitudes" parent="menu_payment_request_root" sequence="10"/>
 
@@ -10,5 +10,7 @@
 
     <menuitem id="menu_payment_request_config" name="Configuración" parent="menu_payment_request_root"
               sequence="90" groups="group_payment_request_approver"/>
-</odoo>
 
+    <menuitem id="menu_payment_approval_level_list" name="Niveles de Aprobación" parent="menu_payment_request_config"
+              action="action_payment_approval_level" sequence="10"/>
+</odoo>

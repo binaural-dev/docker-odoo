@@ -1,0 +1,155 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="action_report_payment_request" model="ir.actions.report">
+        <field name="name">Solicitud de Pago</field>
+        <field name="model">payment.request</field>
+        <field name="report_type">qweb-pdf</field>
+        <field name="report_name">payment_request.report_payment_request_document</field>
+        <field name="report_file">payment_request.report_payment_request_document</field>
+        <field name="print_report_name">'Solicitud_Pago_' + (object.name or '').replace('/', '_')</field>
+        <field name="binding_model_id" ref="model_payment_request"/>
+        <field name="binding_type">report</field>
+    </record>
+
+    <template id="report_payment_request_document">
+        <t t-call="web.html_container">
+            <t t-foreach="docs" t-as="doc">
+                <t t-call="web.external_layout">
+                    <div class="page" style="font-family: sans-serif; font-size: 13px; color: #333;">
+                        <div class="row mb-4">
+                            <div class="col-8">
+                                <h2 style="font-weight: bold; margin-bottom: 2px;">SOLICITUD DE PAGO</h2>
+                                <h4 class="text-primary" t-field="doc.name"/>
+                            </div>
+                            <div class="col-4 text-end">
+                                <span t-if="doc.state == 'draft'" class="badge bg-secondary p-2" style="font-size: 14px;">BORRADOR</span>
+                                <span t-elif="doc.state == 'sent'" class="badge bg-warning text-dark p-2" style="font-size: 14px;">ENVIADA (POR APROBAR)</span>
+                                <span t-elif="doc.state == 'approved'" class="badge bg-info text-white p-2" style="font-size: 14px;">APROBADA</span>
+                                <span t-elif="doc.state == 'paid'" class="badge bg-success p-2" style="font-size: 14px;">PAGADA</span>
+                                <span t-elif="doc.state == 'rejected'" class="badge bg-danger p-2" style="font-size: 14px;">RECHAZADA</span>
+                            </div>
+                        </div>
+
+                        <!-- Datos Generales -->
+                        <div class="card mb-4" style="border: 1px solid #dee2e6; border-radius: 6px;">
+                            <div class="card-header bg-light py-2" style="font-weight: bold;">
+                                INFORMACIÓN DE LA SOLICITUD
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row mb-2">
+                                    <div class="col-3 text-muted">Proveedor:</div>
+                                    <div class="col-9 fw-bold" t-field="doc.partner_id.name"/>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-3 text-muted">Concepto:</div>
+                                    <div class="col-9" t-field="doc.concept"/>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-3 text-muted">Solicitante:</div>
+                                    <div class="col-3" t-field="doc.applicant_id.name"/>
+                                    <div class="col-3 text-muted">Fecha de Solicitud:</div>
+                                    <div class="col-3" t-field="doc.date"/>
+                                </div>
+                                <div class="row">
+                                    <div class="col-3 text-muted">Monto Solicitado:</div>
+                                    <div class="col-9 fw-bold text-success" style="font-size: 16px;">
+                                        <span t-field="doc.amount" t-options="{'widget': 'monetary', 'display_currency': doc.currency_id}"/>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Cuadro de Aprobación -->
+                        <div class="card mb-4" style="border: 1px solid #dee2e6; border-radius: 6px;">
+                            <div class="card-header bg-light py-2" style="font-weight: bold;">
+                                CONTROL DE APROBACIÓN
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row mb-2">
+                                    <div class="col-3 text-muted">Aprobador Asignado:</div>
+                                    <div class="col-9">
+                                        <span t-if="doc.approver_id" t-field="doc.approver_id.name"/>
+                                        <span t-else="" class="text-muted">No asignado</span>
+                                    </div>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-3 text-muted">Aprobado por:</div>
+                                    <div class="col-9 fw-bold">
+                                        <span t-if="doc.approver_user_id" t-field="doc.approver_user_id.name"/>
+                                        <span t-elif="doc.state == 'rejected'" class="text-danger">No aplica (Rechazada)</span>
+                                        <span t-else="" class="text-muted">Pendiente de aprobación</span>
+                                    </div>
+                                </div>
+                                <div class="row">
+                                    <div class="col-3 text-muted">Fecha y Hora de Aprobación:</div>
+                                    <div class="col-9">
+                                        <span t-if="doc.approval_date" t-field="doc.approval_date" t-options="{'widget': 'datetime', 'format': 'dd/MM/yyyy HH:mm:ss'}"/>
+                                        <span t-else="" class="text-muted">—</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Sección de Tesorería / Pago -->
+                        <div t-if="doc.payment_id" class="card mb-4" style="border: 1px solid #28a745; border-radius: 6px;">
+                            <div class="card-header text-white bg-success py-2" style="font-weight: bold;">
+                                REGISTRO DE PAGO (TESORERÍA)
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row mb-2">
+                                    <div class="col-3 text-muted">Comprobante de Pago:</div>
+                                    <div class="col-9 fw-bold" t-field="doc.payment_id.name"/>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-3 text-muted">Diario Contable:</div>
+                                    <div class="col-9" t-field="doc.payment_id.journal_id.name"/>
+                                </div>
+                                <div class="row">
+                                    <div class="col-3 text-muted">Fecha de Pago:</div>
+                                    <div class="col-3" t-field="doc.payment_id.date"/>
+                                    <div class="col-3 text-muted">Monto Pagado:</div>
+                                    <div class="col-3 fw-bold" t-field="doc.payment_id.amount" t-options="{'widget': 'monetary', 'display_currency': doc.payment_id.currency_id}"/>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Sección de Rechazo -->
+                        <div t-if="doc.state == 'rejected'" class="card mb-4" style="border: 1px solid #dc3545; border-radius: 6px;">
+                            <div class="card-header text-white bg-danger py-2" style="font-weight: bold;">
+                                MOTIVO DE RECHAZO
+                            </div>
+                            <div class="card-body py-3">
+                                <p class="mb-0 text-danger" t-field="doc.reject_reason"/>
+                            </div>
+                        </div>
+
+                        <!-- Firmas -->
+                        <div class="row mt-5 pt-4 text-center">
+                            <div class="col-4">
+                                <div style="border-top: 1px solid #333; width: 80%; margin: 0 auto; padding-top: 5px;">
+                                    <strong>Solicitante</strong><br/>
+                                    <span t-field="doc.applicant_id.name"/>
+                                </div>
+                            </div>
+                            <div class="col-4">
+                                <div style="border-top: 1px solid #333; width: 80%; margin: 0 auto; padding-top: 5px;">
+                                    <strong>Aprobador</strong><br/>
+                                    <span t-if="doc.approver_user_id" t-field="doc.approver_user_id.name"/>
+                                    <span t-elif="doc.approver_id" t-field="doc.approver_id.name"/>
+                                    <span t-else="">Firma / Sello</span>
+                                </div>
+                            </div>
+                            <div class="col-4">
+                                <div style="border-top: 1px solid #333; width: 80%; margin: 0 auto; padding-top: 5px;">
+                                    <strong>Tesorería</strong><br/>
+                                    <span>Revisado y Pagado</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </t>
+            </t>
+        </t>
+    </template>
+</odoo>
+

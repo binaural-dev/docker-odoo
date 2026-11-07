@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="payment_approval_level_view_tree" model="ir.ui.view">
+        <field name="name">payment.approval.level.tree</field>
+        <field name="model">payment.approval.level</field>
+        <field name="arch" type="xml">
+            <tree string="Niveles de Aprobación">
+                <field name="sequence" widget="handle"/>
+                <field name="name"/>
+                <field name="amount_min"/>
+                <field name="currency_id" column_invisible="True"/>
+                <field name="approver_id" widget="many2one_avatar_user"/>
+                <field name="company_id" groups="base.group_multi_company"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="payment_approval_level_view_form" model="ir.ui.view">
+        <field name="name">payment.approval.level.form</field>
+        <field name="model">payment.approval.level</field>
+        <field name="arch" type="xml">
+            <form string="Nivel de Aprobación">
+                <sheet>
+                    <div class="oe_title">
+                        <label for="name" class="oe_edit_only"/>
+                        <h1><field name="name" placeholder="Ej. Gerencia de Administración"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <label for="amount_min"/>
+                            <div class="o_row">
+                                <field name="amount_min" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+                                <field name="currency_id" options="{'no_open': True, 'no_create': True}"/>
+                            </div>
+                            <field name="sequence"/>
+                        </group>
+                        <group>
+                            <field name="approver_id" widget="many2one_avatar_user"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="payment_approval_level_view_search" model="ir.ui.view">
+        <field name="name">payment.approval.level.search</field>
+        <field name="model">payment.approval.level</field>
+        <field name="arch" type="xml">
+            <search string="Buscar Niveles de Aprobación">
+                <field name="name"/>
+                <field name="approver_id"/>
+                <group expand="0" string="Agrupar por">
+                    <filter name="group_by_approver" string="Aprobador" context="{'group_by': 'approver_id'}"/>
+                    <filter name="group_by_company" string="Compañía" context="{'group_by': 'company_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_payment_approval_level" model="ir.actions.act_window">
+        <field name="name">Niveles de Aprobación</field>
+        <field name="res_model">payment.approval.level</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="payment_approval_level_view_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Cree un nuevo nivel de aprobación
+            </p>
+            <p>
+                Configure montos mínimos y los usuarios aprobadores asignados para las solicitudes de pago.
+            </p>
+        </field>
+    </record>
+</odoo>
+

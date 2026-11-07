@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="payment_request_pay_wizard_view_form" model="ir.ui.view">
+        <field name="name">payment.request.pay.wizard.form</field>
+        <field name="model">payment.request.pay.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Registrar Pago de Solicitud">
+                <sheet>
+                    <group>
+                        <field name="request_id" invisible="1"/>
+                        <field name="company_id" invisible="1"/>
+                        <group>
+                            <field name="partner_id"/>
+                            <label for="amount"/>
+                            <div class="o_row">
+                                <field name="amount" widget="monetary" options="{'currency_field': 'currency_id'}"/>
+                                <field name="currency_id" options="{'no_open': True, 'no_create': True}"/>
+                            </div>
+                        </group>
+                        <group>
+                            <field name="journal_id" options="{'no_create': True, 'no_open': True}"/>
+                            <field name="payment_date"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="communication" placeholder="Ej. Pago SP/2026/0001"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_confirm_payment" string="Confirmar y Generar Pago" type="object" class="btn-primary"/>
+                    <button string="Cancelar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>
+

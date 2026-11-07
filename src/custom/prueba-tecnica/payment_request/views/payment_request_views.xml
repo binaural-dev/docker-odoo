@@ -11,6 +11,7 @@
                 <field name="partner_id"/>
                 <field name="concept"/>
                 <field name="applicant_id" widget="many2one_avatar_user"/>
+                <field name="approver_id" widget="many2one_avatar_user" optional="show"/>
                 <field name="amount" sum="Total"/>
                 <field name="currency_id" column_invisible="True"/>
                 <field name="state" widget="badge"/>
@@ -37,6 +38,14 @@
                     <field name="state" widget="statusbar" statusbar_visible="draft,sent,approved,paid"/>
                 </header>
                 <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="action_view_payment" type="object" class="oe_stat_button" icon="fa-money" invisible="not payment_id">
+                            <div class="o_stat_info">
+                                <span class="o_stat_text">Pago Contable</span>
+                                <span class="o_stat_value"><field name="payment_id" readonly="1"/></span>
+                            </div>
+                        </button>
+                    </div>
                     <div class="alert alert-danger" role="alert" invisible="state != 'rejected' or not reject_reason">
                         <strong>Motivo de rechazo: </strong><field name="reject_reason" readonly="1" class="d-inline"/>
                     </div>
@@ -44,19 +53,20 @@
                         <h1><field name="name"/></h1>
                     </div>
                     <group>
-                        <group>
+                        <group name="general_info">
                             <field name="partner_id" readonly="state != 'draft'"/>
                             <field name="amount" readonly="state != 'draft'"/>
                             <field name="currency_id" readonly="state != 'draft'"/>
+                            <field name="concept" placeholder="Ej. Pago de factura #F-4589 por insumos de oficina" readonly="state != 'draft'"/>
                         </group>
-                        <group>
+                        <group name="request_info">
                             <field name="applicant_id" readonly="state != 'draft'"/>
                             <field name="date" readonly="state != 'draft'"/>
                             <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft'"/>
+                            <field name="approver_id" invisible="state == 'draft'"/>
+                            <field name="approver_user_id" invisible="state not in ('approved', 'paid')"/>
+                            <field name="approval_date" invisible="state not in ('approved', 'paid')"/>
                         </group>
-                    </group>
-                    <group>
-                        <field name="concept" placeholder="Ej. Pago de factura #F-4589 por insumos de oficina" readonly="state != 'draft'"/>
                     </group>
                 </sheet>
                 <chatter/>
@@ -73,8 +83,10 @@
                 <field name="partner_id"/>
                 <field name="concept"/>
                 <field name="applicant_id"/>
+                <field name="approver_id"/>
                 <separator/>
                 <filter name="filter_my_requests" string="Mis solicitudes" domain="[('applicant_id', '=', uid)]"/>
+                <filter name="filter_to_approve_by_me" string="Por aprobar asignadas a mí" domain="[('state', '=', 'sent'), ('approver_id', '=', uid)]"/>
                 <separator/>
                 <filter name="filter_draft" string="Borrador" domain="[('state', '=', 'draft')]"/>
                 <filter name="filter_sent" string="Enviadas / Por aprobar" domain="[('state', '=', 'sent')]"/>
@@ -84,6 +96,7 @@
                 <group expand="0" string="Agrupar por">
                     <filter name="group_by_partner" string="Proveedor" context="{'group_by': 'partner_id'}"/>
                     <filter name="group_by_state" string="Estado" context="{'group_by': 'state'}"/>
+                    <filter name="group_by_approver" string="Aprobador Asignado" context="{'group_by': 'approver_id'}"/>
                     <filter name="group_by_date" string="Fecha" context="{'group_by': 'date:month'}"/>
                     <filter name="group_by_applicant" string="Solicitante" context="{'group_by': 'applicant_id'}"/>
                 </group>
@@ -107,4 +120,3 @@
         </field>
     </record>
 </odoo>
-

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="payment_request_reject_wizard_view_form" model="ir.ui.view">
+        <field name="name">payment.request.reject.wizard.form</field>
+        <field name="model">payment.request.reject.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Rechazar Solicitud de Pago">
+                <sheet>
+                    <p class="text-muted">
+                        Indique el motivo por el cual se rechaza esta solicitud. Este motivo será notificado y publicado en el chatter para conocimiento del solicitante.
+                    </p>
+                    <group>
+                        <field name="request_id" invisible="1"/>
+                        <field name="reason" placeholder="Indique claramente la razón del rechazo..." required="1"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_confirm_reject" string="Rechazar Solicitud" type="object" class="btn-danger"/>
+                    <button string="Cancelar" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+</odoo>
+
