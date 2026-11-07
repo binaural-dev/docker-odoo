@@ -37,3 +37,6 @@ __pycache__
 click
 os
 sys
+.odoo_data/
+odoo.local.conf
+run_test.ps1
