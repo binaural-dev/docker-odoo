@@ -25,6 +25,14 @@ Como consultor funcional y técnico, tras analizar el requerimiento enviado por 
 
 ## Tramos completados
 - **Tramo A:** Modelo `payment.request`, secuencia `SP/2026/0001`, máquina de estados (`draft`, `sent`, `approved`, `paid`, `rejected`), roles de seguridad (`Solicitante`, `Aprobador`, `Tesorería`), aislamiento de registros (`ir.rule`), inmutabilidad tras envío, validaciones de monto positivo y suite completa de pruebas unitarias.
+- **Tramo B:**
+  - **Niveles de aprobación configurables (`payment.approval.level`):** Gestión por monto mínimo, secuencia y usuario aprobador asignado por compañía.
+  - **Asignación automática y actividades:** Al enviar la solicitud, el sistema determina el nivel de aprobación correspondiente al monto, asigna al aprobador y crea una actividad en el chatter (`mail.activity`).
+  - **Control estricto de aprobación:** Solo el aprobador específicamente asignado puede aprobar o rechazar la solicitud. Al aprobarse, se registra auditoría de quién aprobó y en qué fecha/hora.
+  - **Wizard de rechazo:** Permite ingresar un motivo obligatorio, el cual queda registrado en la solicitud y publicado en el chatter para retroalimentación al solicitante.
+  - **Wizard de pago y vinculación contable:** Permite a Tesorería seleccionar el diario financiero de egreso y fecha, generando y validando el registro `account.payment` vinculado a la solicitud con un botón inteligente (*Smart Button*).
+  - **Control anti doble-pago:** Validación estricta que impide generar múltiples pagos para una misma solicitud.
+  - **Reporte impreso PDF (QWeb):** Documento formal con datos de la solicitud, desglose de montos, comprobante contable y cuadro de auditoría de aprobación (quién aprobó y cuándo).
 
 ---
 
