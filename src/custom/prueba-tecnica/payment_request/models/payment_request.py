@@ -49,6 +49,19 @@ class PaymentRequest(models.Model):
         copy=False,
         help="Asiento contable de pago generado por tesorería.",
     )
+    payment_amount = fields.Monetary(
+        string="Monto Pagado",
+        related="payment_id.amount",
+        readonly=True,
+        currency_field="payment_currency_id",
+        help="Monto efectivamente registrado en el asiento contable de pago.",
+    )
+    payment_currency_id = fields.Many2one(
+        "res.currency",
+        string="Moneda de Pago",
+        related="payment_id.currency_id",
+        readonly=True,
+    )
     amount = fields.Monetary(
         string="Monto",
         required=True,
@@ -154,6 +167,21 @@ class PaymentRequest(models.Model):
     def action_approve(self):
         if not self.env.user.has_group("payment_request.group_payment_request_approver"):
             raise AccessError(_("Solo los usuarios con permisos de Aprobador pueden aprobar solicitudes de pago."))
+
+        # Bloqueo a nivel de base de datos para prevenir condiciones de carrera (FOR UPDATE NOWAIT)
+        try:
+            self.env.cr.execute(
+                "SELECT id, state FROM payment_request WHERE id IN %s FOR UPDATE NOWAIT",
+                [tuple(self.ids)],
+            )
+        except Exception:
+            raise UserError(
+                _("La solicitud está siendo procesada concurrentemente por otro aprobador. Por favor, recargue la página.")
+            )
+
+        # Invalidar caché local para asegurar lectura del estado actualizado desde la BD bajo el bloqueo
+        self.invalidate_recordset(["state", "approver_id"])
+
         for request in self:
             if request.state != "sent":
                 raise UserError(_("Solo se pueden aprobar solicitudes en estado 'Enviada'."))

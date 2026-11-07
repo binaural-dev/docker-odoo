@@ -12,6 +12,20 @@ class PaymentRequestRejectWizard(models.TransientModel):
     def action_confirm_reject(self):
         self.ensure_one()
         req = self.request_id
+
+        # Bloqueo a nivel de base de datos para prevenir condiciones de carrera (FOR UPDATE NOWAIT)
+        try:
+            self.env.cr.execute(
+                "SELECT id, state FROM payment_request WHERE id = %s FOR UPDATE NOWAIT",
+                [req.id],
+            )
+        except Exception:
+            raise UserError(
+                _("La solicitud está siendo procesada concurrentemente por otro usuario. Por favor, recargue la página.")
+            )
+
+        req.invalidate_recordset(["state", "approver_id"])
+
         if not self.env.user.has_group("payment_request.group_payment_request_approver"):
             raise AccessError(_("Solo los usuarios con permisos de Aprobador pueden rechazar solicitudes de pago."))
         if req.state != "sent":

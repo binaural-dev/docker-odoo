@@ -68,6 +68,18 @@
                             <field name="approval_date" invisible="state not in ('approved', 'paid')"/>
                         </group>
                     </group>
+                    <group name="payment_details" string="Detalles del Desembolso" invisible="state != 'paid'">
+                        <group>
+                            <field name="payment_id" readonly="1"/>
+                        </group>
+                        <group>
+                            <label for="payment_amount"/>
+                            <div class="o_row">
+                                <field name="payment_amount" readonly="1" widget="monetary" options="{'currency_field': 'payment_currency_id'}"/>
+                                <field name="payment_currency_id" options="{'no_open': True, 'no_create': True}" readonly="1"/>
+                            </div>
+                        </group>
+                    </group>
                 </sheet>
                 <chatter/>
             </form>

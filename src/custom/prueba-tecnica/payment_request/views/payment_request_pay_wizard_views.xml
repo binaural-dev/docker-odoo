@@ -9,7 +9,7 @@
                     <group>
                         <field name="request_id" invisible="1"/>
                         <field name="company_id" invisible="1"/>
-                        <group>
+                        <group name="request_data" string="Datos de Solicitud">
                             <field name="partner_id"/>
                             <label for="amount"/>
                             <div class="o_row">
@@ -17,9 +17,22 @@
                                 <field name="currency_id" options="{'no_open': True, 'no_create': True}"/>
                             </div>
                         </group>
-                        <group>
+                        <group name="journal_data" string="Diario y Fecha">
                             <field name="journal_id" options="{'no_create': True, 'no_open': True}"/>
                             <field name="payment_date"/>
+                        </group>
+                    </group>
+                    <group name="conversion_data" string="Conversión y Desembolso" invisible="currency_id == journal_currency_id">
+                        <group>
+                            <field name="journal_currency_id" options="{'no_open': True, 'no_create': True}"/>
+                            <field name="exchange_rate"/>
+                        </group>
+                        <group>
+                            <label for="payment_amount"/>
+                            <div class="o_row">
+                                <field name="payment_amount" widget="monetary" options="{'currency_field': 'journal_currency_id'}"/>
+                                <field name="journal_currency_id" options="{'no_open': True, 'no_create': True}"/>
+                            </div>
                         </group>
                     </group>
                     <group>
@@ -34,4 +47,3 @@
         </field>
     </record>
 </odoo>
-
