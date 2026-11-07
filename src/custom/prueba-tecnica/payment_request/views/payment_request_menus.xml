@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_payment_request_root" name="Solicitudes de Pago" sequence="55"
+              web_icon="payment_request,static/description/icon.png" groups="group_payment_request_user"/>
+
+    <menuitem id="menu_payment_request_main" name="Solicitudes" parent="menu_payment_request_root" sequence="10"/>
+
+    <menuitem id="menu_payment_request_list" name="Solicitudes de Pago" parent="menu_payment_request_main"
+              action="action_payment_request" sequence="10"/>
+
+    <menuitem id="menu_payment_request_config" name="Configuración" parent="menu_payment_request_root"
+              sequence="90" groups="group_payment_request_approver"/>
+</odoo>
+

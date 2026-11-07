@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="payment_request_view_tree" model="ir.ui.view">
+        <field name="name">payment.request.tree</field>
+        <field name="model">payment.request</field>
+        <field name="arch" type="xml">
+            <tree decoration-success="state == 'paid'" decoration-info="state == 'approved'"
+                  decoration-warning="state == 'sent'" decoration-danger="state == 'rejected'">
+                <field name="name"/>
+                <field name="date"/>
+                <field name="partner_id"/>
+                <field name="concept"/>
+                <field name="applicant_id" widget="many2one_avatar_user"/>
+                <field name="amount" sum="Total"/>
+                <field name="currency_id" column_invisible="True"/>
+                <field name="state" widget="badge"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="payment_request_view_form" model="ir.ui.view">
+        <field name="name">payment.request.form</field>
+        <field name="model">payment.request</field>
+        <field name="arch" type="xml">
+            <form string="Solicitud de Pago">
+                <header>
+                    <button name="action_send" string="Enviar solicitud" type="object" class="oe_highlight"
+                            invisible="state != 'draft'" groups="payment_request.group_payment_request_user"/>
+                    <button name="action_approve" string="Aprobar" type="object" class="oe_highlight"
+                            invisible="state != 'sent'" groups="payment_request.group_payment_request_approver"/>
+                    <button name="action_reject" string="Rechazar" type="object"
+                            invisible="state != 'sent'" groups="payment_request.group_payment_request_approver"/>
+                    <button name="action_pay" string="Registrar pago" type="object" class="oe_highlight"
+                            invisible="state != 'approved'" groups="payment_request.group_payment_request_treasury"/>
+                    <button name="action_reset_draft" string="Volver a borrador" type="object"
+                            invisible="state not in ('rejected', 'draft')"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,sent,approved,paid"/>
+                </header>
+                <sheet>
+                    <div class="alert alert-danger" role="alert" invisible="state != 'rejected' or not reject_reason">
+                        <strong>Motivo de rechazo: </strong><field name="reject_reason" readonly="1" class="d-inline"/>
+                    </div>
+                    <div class="oe_title">
+                        <h1><field name="name"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="partner_id" readonly="state != 'draft'"/>
+                            <field name="amount" readonly="state != 'draft'"/>
+                            <field name="currency_id" readonly="state != 'draft'"/>
+                        </group>
+                        <group>
+                            <field name="applicant_id" readonly="state != 'draft'"/>
+                            <field name="date" readonly="state != 'draft'"/>
+                            <field name="company_id" groups="base.group_multi_company" readonly="state != 'draft'"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="concept" placeholder="Ej. Pago de factura #F-4589 por insumos de oficina" readonly="state != 'draft'"/>
+                    </group>
+                </sheet>
+                <chatter/>
+            </form>
+        </field>
+    </record>
+
+    <record id="payment_request_view_search" model="ir.ui.view">
+        <field name="name">payment.request.search</field>
+        <field name="model">payment.request</field>
+        <field name="arch" type="xml">
+            <search string="Buscar Solicitudes de Pago">
+                <field name="name"/>
+                <field name="partner_id"/>
+                <field name="concept"/>
+                <field name="applicant_id"/>
+                <separator/>
+                <filter name="filter_my_requests" string="Mis solicitudes" domain="[('applicant_id', '=', uid)]"/>
+                <separator/>
+                <filter name="filter_draft" string="Borrador" domain="[('state', '=', 'draft')]"/>
+                <filter name="filter_sent" string="Enviadas / Por aprobar" domain="[('state', '=', 'sent')]"/>
+                <filter name="filter_approved" string="Aprobadas / Por pagar" domain="[('state', '=', 'approved')]"/>
+                <filter name="filter_paid" string="Pagadas" domain="[('state', '=', 'paid')]"/>
+                <filter name="filter_rejected" string="Rechazadas" domain="[('state', '=', 'rejected')]"/>
+                <group expand="0" string="Agrupar por">
+                    <filter name="group_by_partner" string="Proveedor" context="{'group_by': 'partner_id'}"/>
+                    <filter name="group_by_state" string="Estado" context="{'group_by': 'state'}"/>
+                    <filter name="group_by_date" string="Fecha" context="{'group_by': 'date:month'}"/>
+                    <filter name="group_by_applicant" string="Solicitante" context="{'group_by': 'applicant_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_payment_request" model="ir.actions.act_window">
+        <field name="name">Solicitudes de Pago</field>
+        <field name="res_model">payment.request</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="payment_request_view_search"/>
+        <field name="context">{'search_default_filter_my_requests': 1}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Crea tu primera solicitud de pago a proveedor
+            </p>
+            <p>
+                Indica el proveedor, monto y concepto del pago para remitirlo a aprobación.
+            </p>
+        </field>
+    </record>
+</odoo>
+
