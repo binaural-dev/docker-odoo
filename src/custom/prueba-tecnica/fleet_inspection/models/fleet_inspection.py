@@ -101,23 +101,7 @@ class FleetInspection(models.Model):
                 if items is False:
                     items = self.env["fleet.inspection.item"].search([])
                 vals["line_ids"] = [(0, 0, {"item_id": item.id}) for item in items]
-            # Compatibilidad si se pasa 'vehicle_type' como código de texto en lugar de Many2one ID
-            if "vehicle_type" in vals and "vehicle_type_id" not in vals:
-                vtype = self.env["fleet.inspection.vehicle.type"].search([("code", "=", vals["vehicle_type"])], limit=1)
-                if not vtype:
-                    vtype = self.env["fleet.inspection.vehicle.type"].search([("code", "=", "other")], limit=1)
-                if vtype:
-                    vals["vehicle_type_id"] = vtype.id
         return super().create(vals_list)
-
-    def write(self, vals):
-        if "vehicle_type" in vals and "vehicle_type_id" not in vals:
-            vtype = self.env["fleet.inspection.vehicle.type"].search([("code", "=", vals["vehicle_type"])], limit=1)
-            if not vtype:
-                vtype = self.env["fleet.inspection.vehicle.type"].search([("code", "=", "other")], limit=1)
-            if vtype:
-                vals["vehicle_type_id"] = vtype.id
-        return super().write(vals)
 
     def action_start(self):
         for inspection in self:

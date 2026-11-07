@@ -29,9 +29,10 @@ Registro del uso de herramientas de Inteligencia Artificial durante el desarroll
 - Manejo de campos `translate=True` en inserciones directas PostgreSQL (`jsonb`).
 - Diseño de prueba automatizada para testear la función `migrate()`.
 
-### Decisiones tomadas por el desarrollador
+### Correcciones y decisiones del desarrollador humano
+- **Revisión y eliminación de sobreescrituras en el ORM:** Tras la revisión del código por parte del desarrollador, se ordenó eliminar la sobreescritura del método `write()` y la lógica accesoria en `create()` que la IA había propuesto para mapear strings. El desarrollador instruyó apegarse estrictamente a las buenas prácticas de Odoo, evitando interceptar el ciclo de vida de los registros y operando el Many2one `vehicle_type_id` de forma nativa y directa.
 - Se creó el modelo `fleet.inspection.vehicle.type` con constraint único sobre el campo `code`.
-- Se introdujo `vehicle_type_id` como `Many2one` y se conservó `vehicle_type` como campo relacionado a `vehicle_type_id.code` con fallback en `create()` y `write()` para preservar compatibilidad con llamadas existentes.
+- Se introdujo `vehicle_type_id` como `Many2one` y se conservó `vehicle_type` como campo relacionado a `vehicle_type_id.code` en modo lectura.
 - Se escribió el script `migrations/17.0.2.0.0/post-migrate.py` que asegura los registros base en catálogo y transfiere los datos legacy por lotes.
 - Se creó la prueba `TestFleetInspectionMigration` para certificar la integridad de los datos y la preservación de la categoría `'other'`.
 

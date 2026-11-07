@@ -25,7 +25,8 @@ class TestFleetInspection(TransactionCase):
         })
 
     def _new_inspection(self, **vals):
-        values = {"vehicle_id": self.vehicle.id, "vehicle_type": "truck", "inspector_id": self.inspector.id}
+        type_truck = self.env["fleet.inspection.vehicle.type"].search([("code", "=", "truck")], limit=1)
+        values = {"vehicle_id": self.vehicle.id, "vehicle_type_id": type_truck.id, "inspector_id": self.inspector.id}
         values.update(vals)
         return self.env["fleet.inspection"].create(values)
 
