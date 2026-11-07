@@ -49,3 +49,29 @@ Registro del uso de herramientas de Inteligencia Artificial durante el análisis
   - Prueba explícita de imposibilidad de pagar dos veces (`test_cannot_pay_twice`).
   - Generación del documento PDF QWeb sin errores de sintaxis ni de renderizado.
 - Suite de pruebas de `fleet_inspection` y `payment_request` pasando al 100% (21/21 pruebas en 3.52s).
+
+---
+
+## Tramo C — Multimoneda, Multi-Compañía, Concurrencia en BD y Atomicidad
+
+### Herramienta utilizada
+- Antigravity / LLM Asistente de Desarrollo Odoo.
+
+### Prompts y consultas principales
+- Implementación de conversión multimoneda (USD a VES) en el wizard de pago según `res.currency.rate` a la fecha de pago.
+- Estrategia de bloqueo pesimista en base de datos (`SELECT ... FOR UPDATE NOWAIT`) en PostgreSQL vs chequeos en Python.
+- Configuración de reglas multi-compañía globales (`global=True`) para aislamiento estricto de registros.
+- Redacción del documento formal [ARCHITECTURE.md](file:///c:/Users/PC/Desktop/pruebaBinaural/src/custom/prueba-tecnica/payment_request/ARCHITECTURE.md).
+
+### Correcciones y decisiones del desarrollador humano
+- **Bloqueo a nivel de BD:** Se descartó depender exclusivamente de chequeos de estado en Python (`state == 'sent'`), ya que bajo aislamiento *Read Committed* dos transacciones concurrentes pueden pasar la validación simultáneamente. Se implementó `SELECT id, state FROM payment_request WHERE id = %s FOR UPDATE NOWAIT` con invalidación de caché (`invalidate_recordset`), garantizando que solo una transacción adquiera el cerrojo de fila.
+- **Atomicidad en pago:** Se ordenaron las operaciones para ejecutar `create()` y `action_post()` de `account.payment` antes de modificar el estado de la solicitud. Si el pago falla por cualquier motivo contable, la transacción hace rollback y la solicitud permanece en `approved`.
+- **Cálculo multimoneda flexible:** El wizard calcula automáticamente el monto en moneda del diario a la tasa oficial de la fecha seleccionada, pero permite inspeccionar y ajustar tasa/monto manteniendo el registro exacto en el chatter y en los asientos contables.
+
+### Validación y pruebas
+- 4 nuevas pruebas unitarias en `test_payment_request.py` cubriendo:
+  - Conversión de USD a VES con tasa oficial en la fecha del pago y verificación de montos contables.
+  - Aislamiento multi-compañía: un usuario de la Compañía B no puede listar ni leer solicitudes de la Compañía A.
+  - Concurrencia y cerrojo de fila (`FOR UPDATE NOWAIT`): verificación de captura de excepciones operacionales y emisión de `UserError`.
+  - Atomicidad ante fallos: verificación de que un fallo contable no transiciona la solicitud a `paid`.
+- Suite combinada ejecutada: 25/25 pruebas pasando exitosamente en 7.78s (14 de `fleet_inspection` y 17 de `payment_request`).

@@ -33,6 +33,12 @@ Como consultor funcional y técnico, tras analizar el requerimiento enviado por 
   - **Wizard de pago y vinculación contable:** Permite a Tesorería seleccionar el diario financiero de egreso y fecha, generando y validando el registro `account.payment` vinculado a la solicitud con un botón inteligente (*Smart Button*).
   - **Control anti doble-pago:** Validación estricta que impide generar múltiples pagos para una misma solicitud.
   - **Reporte impreso PDF (QWeb):** Documento formal con datos de la solicitud, desglose de montos, comprobante contable y cuadro de auditoría de aprobación (quién aprobó y cuándo).
+- **Tramo C:**
+  - **Multimoneda (USD a VES):** Solicitud en USD pagada desde un diario en VES aplicando la tasa oficial de cambio a la fecha de pago (`res.currency.rate`), con cálculo y desglose automático en el wizard y publicación detallada en el chatter.
+  - **Multi-compañía estricto:** Aislamiento total entre compañías mediante reglas globales de registro (`ir.rule`) tanto en solicitudes de pago como en niveles de aprobación. Un usuario de la compañía B no puede listar, buscar ni acceder a registros de la compañía A.
+  - **Control de concurrencia a nivel de BD:** Bloqueo pesimista mediante PostgreSQL (`SELECT ... FOR UPDATE NOWAIT`) en aprobaciones, rechazos y pagos, garantizando que ante dos aprobadores actuando simultáneamente solo uno gane el cerrojo sin condiciones de carrera.
+  - **Atomicidad y resiliencia:** Si la creación o confirmación del pago contable falla, la solicitud no transiciona a `paid` y la base de datos revierte íntegramente la operación.
+  - **Documento de arquitectura:** [ARCHITECTURE.md](file:///c:/Users/PC/Desktop/pruebaBinaural/src/custom/prueba-tecnica/payment_request/ARCHITECTURE.md) detallando y justificando técnicamente todas las decisiones de diseño.
 
 ---
 
