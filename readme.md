@@ -117,7 +117,7 @@ El flag `"dev_mode"` (default `false`, dentro de `overwrite_odoo_config` o del `
 ```json
 {
   "instances": {
-    "bananera": {
+    "client-a": {
       "odoo_version": "19.0",
       "external_port": 8070,
       "database": "pg16",
@@ -125,9 +125,9 @@ El flag `"dev_mode"` (default `false`, dentro de `overwrite_odoo_config` o del `
       "production": true,
       "overwrite_odoo_config": {
         "workers": 4,
-        "addons": ["src/enterprise", "src/custom/bananera"],
-        "db_name": "bananera_prod",
-        "db_filter": "^bananera_"
+        "addons": ["src/enterprise", "src/custom/client-a"],
+        "db_name": "client_a_prod",
+        "db_filter": "^client_a_"
       }
     },
     "client-b": {
@@ -154,7 +154,7 @@ El flag `"dev_mode"` (default `false`, dentro de `overwrite_odoo_config` o del `
 }
 ```
 
-`db_filter` es el patrón de regex que Odoo usa en runtime para decidir qué bases de datos le pertenecen (ej. `^bananera_` matcheará `bananera_prod`, `bananera_staging`, etc.), y también lo respeta el CLI de gestión: `./odoo update -d all` para una instancia solo actualiza las bases que matchean su `db_filter`, no todas las del servicio de Postgres que comparte con otras instancias. Si una instancia no define `db_filter` (o es `"*"`), `-d all` sigue trayendo todas las bases del servicio, con una advertencia explícita en pantalla.
+`db_filter` es el patrón de regex que Odoo usa en runtime para decidir qué bases de datos le pertenecen (ej. `^client_a_` matcheará `client_a_prod`, `client_a_staging`, etc.), y también lo respeta el CLI de gestión: `./odoo update -d all` para una instancia solo actualiza las bases que matchean su `db_filter`, no todas las del servicio de Postgres que comparte con otras instancias. Si una instancia no define `db_filter` (o es `"*"`), `-d all` sigue trayendo todas las bases del servicio, con una advertencia explícita en pantalla.
 
 ⚠️ **Importante**: `db_filter` solo rige el ruteo HTTP (selector de bases en `/web/database/manager`, sesión) y el `-d all` del CLI. **El cron interno de Odoo (`ir.cron`) nunca lo consulta** — es un mecanismo puramente de request web, confirmado leyendo el código fuente real de Odoo 14.0/16.0/17.0/19.0. Si dos instancias comparten un mismo servicio de Postgres, el cron de una puede terminar procesando (y modificando) datos de la base de la OTRA — esto ya pasó en producción una vez. Ver la sección siguiente para el aislamiento real.
 
@@ -165,15 +165,15 @@ Cuando **más de una** instancia usa el mismo `database` (mismo servicio de Post
 ```json
 {
   "instances": {
-    "bananera": {
+    "client-a": {
       "odoo_version": "19.0",
       "external_port": 8070,
       "database": "pg16",
       "odoo_config": "19.0_default",
-      "db_user": "app_bananera",
+      "db_user": "app_client_a",
       "db_password": "<password dedicado>",
       "overwrite_odoo_config": {
-        "db_filter": "^bananera_"
+        "db_filter": "^client_a_"
       }
     }
   }
@@ -194,11 +194,11 @@ La validación también exige que `db_user` sea **realmente distinto** entre ins
 
 # 2. Aprovisionar: crea el rol si no existe, transfiere el ownership de toda
 #    base que matchee el db_filter, y revoca CONNECT de PUBLIC sobre ellas
-./odoo provision-role bananera
+./odoo provision-role client-a
 
 # 3. Regenerar compose y recrear el contenedor para que use las credenciales nuevas
 ./odoo build
-docker compose -f docker-compose.generated.yml up -d --no-deps odoo-bananera
+docker compose -f docker-compose.generated.yml up -d --no-deps odoo-client-a
 ```
 
 `provision-role` puede requerir una ventana breve de mantenimiento de **todo** el servicio de Postgres (no solo de esa instancia) si el rol bootstrap del servicio está en `NOLOGIN` (lo normal) — el comando lo maneja solo y pide confirmación explícita antes de tocar nada.
@@ -243,7 +243,7 @@ Para correr `./odoo build` en un contexto no interactivo (CI, automatización), 
 ```
 src/
     custom/
-        bananera/          # Repositorio/proyecto A
+        client-a/          # Repositorio/proyecto A
         client-b/          # Repositorio/proyecto B
     enterprise/            # Módulos enterprise de Odoo
     third-party-addons/    # Módulos de terceros
@@ -251,7 +251,7 @@ src/
 
 Los addons de cada instancia se especifican en el campo `addons` de su configuración:
 ```json
-"addons": ["src/enterprise", "src/custom/bananera"]
+"addons": ["src/enterprise", "src/custom/client-a"]
 ```
 
 ## Comandos disponibles: `./odoo`
@@ -310,6 +310,8 @@ gotchas): [`docs/comandos-odoo.md`](docs/comandos-odoo.md).
 
 ### Ejemplos
 
+> En los ejemplos, reemplazá `<cliente>` por el nombre de la instancia, **sin** los signos `< >` (en la shell, `<` es una redirección).
+
 ```bash
 # Construir todo
 ./odoo build
@@ -318,71 +320,71 @@ gotchas): [`docs/comandos-odoo.md`](docs/comandos-odoo.md).
 ./odoo start
 
 # Iniciar solo una instancia
-./odoo start bananera
+./odoo start <cliente>
 
 # Ver logs de una instancia
-./odoo logs bananera
+./odoo logs <cliente>
 
 # Detener una instancia sin afectar las demás
 ./odoo stop client-b
 
 # Bash en un contenedor
-./odoo bash bananera
+./odoo bash <cliente>
 
 # Conectar a psql
-./odoo psql bananera -d bananera_prod
+./odoo psql <cliente> -d <cliente>_prod
 
 # Conectar a CUALQUIER base de un servicio de Postgres, sin filtrar por instancia
 ./odoo psql --ps
 
 # Eliminar una base de datos (con confirmación)
-./odoo psql remove bananera -d bananera_old
+./odoo psql remove <cliente> -d <cliente>_old
 
 # Eliminar cualquier base de cualquier servicio (con confirmación)
 ./odoo psql remove --ps
 
 # Actualizar módulos
-./odoo update bananera -d bananera_prod -m sale,purchase
+./odoo update <cliente> -d <cliente>_prod -m sale,purchase
 
 # Actualizar todas las bases de datos de una instancia (solo lo que cambio, via click-odoo-update)
-./odoo update bananera -d all
+./odoo update <cliente> -d all
 
 # Forzar un upgrade completo de todos los modulos, sin importar que cambio
-./odoo update bananera -d all -f
+./odoo update <cliente> -d all -f
 
 # Correr tests con cobertura de un modulo
-./odoo test bananera sale_extension
+./odoo test <cliente> sale_extension
 
 # Correr tests de varios modulos juntos
-./odoo test bananera sale_extension,purchase_extension
+./odoo test <cliente> sale_extension,purchase_extension
 
 # Correr tests de un modulo y todo su arbol de dependencias
-./odoo test bananera sale_extension --recursive
+./odoo test <cliente> sale_extension --recursive
 
 # Reiniciar todo
 ./odoo restart
 
 # Ver en qué tag/rama/hash está parado cada submódulo de un proyecto
-./odoo submodule-status bananera
+./odoo submodule-status <cliente>
 
 # Lo mismo para todos los proyectos de src/custom/
 ./odoo submodule-status
 
 # Bumpear un submódulo a un tag y preparar el PR (todo interactivo si se omite)
-./odoo update-tags bananera
+./odoo update-tags <cliente>
 
 # Bumpear el mismo submódulo/tag en varios proyectos de la misma versión de una
 # (todo interactivo: elige versión, proyectos, submódulo y tag)
 ./odoo update-tags-bulk
 
 # Lo mismo, todo por flags: sin moverse de la rama en la que ya está cada proyecto
-./odoo update-tags-bulk 17.0 odoo-venezuela l10nve_17.0.3.4.2 --projects contiflex,gno,syf
+./odoo update-tags-bulk 17.0 odoo-venezuela l10nve_17.0.3.4.2 --projects client-a,client-b,client-c
 
 # Lo mismo, pero parando cada proyecto en 'staging' antes de ramificar
 ./odoo update-tags-bulk 17.0 odoo-venezuela l10nve_17.0.3.4.2 --branch-origin staging
 
 # Aprovisionar el rol dedicado de una instancia (ver seccion de instances.json)
-./odoo provision-role bananera
+./odoo provision-role <cliente>
 ```
 
 ## Subdominios locales por instance
@@ -402,16 +404,16 @@ compuesto:
 server {
     listen 8072 default_server;
     listen 80;
-    server_name contiflex.local localhost;
-    location / { proxy_pass http://odoo-contiflex:8069; }
+    server_name client-a.local localhost;
+    location / { proxy_pass http://odoo-client-a:8069; }
 }
 ```
 
 Resultado: las 3 URLs siguientes llevan a la misma instance, pero con
 orígenes distintos para el browser:
 
-- `http://contiflex.local` (subdominio, port 80)
-- `http://contiflex.local:8072` (subdominio + port legacy)
+- `http://client-a.local` (subdominio, port 80)
+- `http://client-a.local:8072` (subdominio + port legacy)
 - `http://localhost:8072` (compat con scripts antiguos)
 
 Opcionales también: `pgadmin.local` (si `pgadmin.enabled=true`) y
@@ -511,7 +513,7 @@ Cuando ejecutás `Update` con módulos seleccionados, aparece un recuadro
 verde arriba del panel de output que muestra:
 
 ```
-┌─ Actualizando módulos ─ bananera_prod ───────────────────┐
+┌─ Actualizando módulos ─ client_a_prod ───────────────────┐
 │  Progreso:  ████████░░░░░░░░░░░░  45 / 234 (19%)        │
 │  Quedan: 189 módulos                                     │
 │  [I]INFO ✓  [W]WARNING ✓  [E]ERROR ✓  [C]CRITICAL ✓     │
@@ -742,10 +744,10 @@ Cada key equivale a un flag (sin guiones):
 
 | Key | Equivale a | Qué va |
 |-----|-----------|--------|
-| `instance` | (argumento) | Etiqueta del directorio de build, p.ej. `maxcam` |
+| `instance` | (argumento) | Etiqueta del directorio de build, p.ej. `client-a` |
 | `scheme` | `--scheme` | `http` o `https` (por defecto https) |
 | `domain` | `--domain` | Host (o `ip:puerto`) de la app, sin esquema |
-| `package` | `--package` | Package name Android, p.ej. `com.binaural.maxcam.ventas` |
+| `package` | `--package` | Package name Android, p.ej. `com.binaural.clienta.ventas` |
 | `version` | `--version` | Versión visible, p.ej. `1.2.0` |
 | `version_code` | `--version-code` | Entero monotónico (se hornea en el start_url) |
 | `start_path` | `--start-path` | Ruta de arranque (por defecto `/payments`) |
@@ -760,17 +762,17 @@ Ejemplo (la plantilla `pwa.example.json` trae datos de prueba):
 
 ```json
 {
-  "instance": "maxcam",
+  "instance": "client-a",
   "scheme": "http",
-  "domain": "192.168.1.226:9001",
-  "package": "com.binaural.maxcam.ventas",
+  "domain": "192.168.1.100:8069",
+  "package": "com.binaural.clienta.ventas",
   "version": "0.0.1",
   "version_code": 1,
   "start_path": "/payments",
-  "app_name": "Maxcam Ventas",
-  "short_name": "Maxcam",
+  "app_name": "Client A Ventas",
+  "short_name": "ClientA",
   "target_sdk": 36,
-  "keystore": "/work/maxcam/android.keystore",
+  "keystore": "/work/client-a/android.keystore",
   "alias": "app",
   "rebuild": false,
   "storepass": "tu-contraseña-del-keystore"
@@ -779,7 +781,7 @@ Ejemplo (la plantilla `pwa.example.json` trae datos de prueba):
 
 Nota sobre `keystore`: las rutas se resuelven **dentro del contenedor**, donde
 `/work` está montado sobre `.ignore/apk-build/` del host. O sea, la key de
-arriba apunta a `.ignore/apk-build/maxcam/android.keystore` en tu máquina.
+arriba apunta a `.ignore/apk-build/client-a/android.keystore` en tu máquina.
 Con `null` (o sin la key) usa esa misma ubicación por defecto.
 
 `--scheme` permite apuntar a instancias locales por HTTP

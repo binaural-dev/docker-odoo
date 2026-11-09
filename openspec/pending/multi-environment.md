@@ -14,7 +14,7 @@ Identificados en `.resources/generators/compose_generator.py`:
 | `container_name` (DB) | `db-{db_name}` hardcodeado | 84, 97 | "name already in use" |
 | `container_name` (Odoo) | `odoo-{inst_name}` hardcodeado | 124 | "name already in use" |
 | Network | `NETWORK_NAME = "odoo-multi"` constante | 20 | la 2da instancia falla |
-| Volúmenes con nombre | `v17-data`, `contiflex-data`, etc. | 110, 164, 167-169 | compartidos o falla |
+| Volúmenes con nombre | `v17-data`, `<cliente>-data`, etc. | 110, 164, 167-169 | compartidos o falla |
 | Port postgres | `5432` fijo en todas las DBs | (en `instances.json`) | bind error |
 | Ports Odoo | `8070-8100` fijos en `instances.json` | (en `instances.json`) | bind error |
 | Port nginx | fijo en config | (generador) | bind error |

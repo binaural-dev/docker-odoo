@@ -47,7 +47,7 @@ configuración y de mental model.
 - **nginx + subdominios `.local` en vez de solo puertos**: varias instancias
   serviditas por `localhost:<puerto>` comparten origin a nivel de cookies del
   browser, lo que rompía CSRF al tener varias abiertas a la vez. Un subdominio
-  por instancia (`contiflex.local`) aísla las cookies por host real.
+  por instancia (`mi-proyecto.local`) aísla las cookies por host real.
 - **Extracción a `odoo_cli/core/`**: el `./odoo` original llegó a 1208 LOC
   monolíticas. Se extrajo a un paquete con un `Runner` (`typing.Protocol` con
   `info`/`warn`/`confirm`/`run_streamed`) para que la misma lógica de negocio

@@ -1,4 +1,4 @@
-# Sesión 2026-06-16 — Refactor mayor (TUI, odoo_cli/core, mcp-server) + restore de rea
+# Sesión 2026-06-16 — Refactor mayor (TUI, odoo_cli/core, mcp-server) + restore de una DB de cliente
 
 ## Contexto
 
@@ -89,17 +89,17 @@ odoo_cli/core/
 
 **Subcommand nuevo**: `./odoo tui` (equivalente al shim `./odoo-tui`).
 
-### 5. Restore de la DB `rea` desde backup
+### 5. Restore de la DB `<db_cliente>` desde backup
 
 (operacional, no en el repo, pero documentado acá porque consume tiempo)
 
-La DB `rea` se había corrompido (7 tablas core sin PK + filestore ausente).
+La DB `<db_cliente>` se había corrompido (7 tablas core sin PK + filestore ausente).
 Los updates de Odoo fallaban con `LockNotAvailable` y luego `InvalidForeignKey`.
 
-- DROP DATABASE rea (parando temporalmente el contenedor `odoo-rea19` para
+- DROP DATABASE <db_cliente> (parando temporalmente el contenedor `odoo-<instancia>` para
   matar las 7 sesiones zombie que mantenían el lock)
-- Restore desde `/home/dukane/Downloads/realista-19(1).zip` (Jun 16 04:22)
-  con `./scripts/odoo_restore restore rea19 -z <zip> -d rea`
+- Restore desde `<ruta>/<cliente>.zip` (Jun 16 04:22)
+  con `./scripts/odoo_restore restore <instancia> -z <zip> -d <db_cliente>`
 - Creación del role `public_user` antes del restore (el dump asume que existe;
   es el role estándar que Odoo crea al iniciar)
 - Workaround para el bug de `hr_recruitment/models/ir_attachment.py:14`:
@@ -107,7 +107,7 @@ Los updates de Odoo fallaban con `LockNotAvailable` y luego `InvalidForeignKey`.
   como STABLE, pero `gin_trgm_ops` requiere IMMUTABLE)
 - 342 módulos actualizados en 1m 45s, 144,576 queries, 0 errores
 - Restore del filestore: 64478 archivos, 3.2 GB, chown odoo:odoo
-- Install de `rea_document_template` (módulo custom de Clodofy): 2 patches
+- Install de `<cliente>_document_template` (módulo custom de un proveedor externo): 2 patches
   aplicados a `security/res_groups.xml` (formato `Command.link` en vez de
   `[(4, ref(X))]`, y remoción del campo `category_id` que ya no existe en
   `res.groups` desde este Odoo 19)
@@ -117,8 +117,8 @@ Los updates de Odoo fallaban con `LockNotAvailable` y luego `InvalidForeignKey`.
 - **Mover mcp-server** a `ai-tools/skills-ai/` con auto-discovery (no
   mantener el subcommand `mcp-start` reescrito).
 - **`./odoo tui`** como subcommand (mantener `./odoo-tui` shim por compat).
-- **Opción A** para el bug de `rea_document_template`: patchear el módulo
-  in-place (en lugar de reportar a Clodofy primero).
+- **Opción A** para el bug de `<cliente>_document_template`: patchear el módulo
+  in-place (en lugar de reportar al proveedor del módulo primero).
 - **NO chained PRs** — todos los commits en `master-multi_bin-daldana`.
 - **`master-multi_bin-daldana` queda 18 commits ahead** de
   `origin/master-multi_bin-daldana` (sin push, el usuario lo decide).

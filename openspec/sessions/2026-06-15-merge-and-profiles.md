@@ -28,24 +28,24 @@ Commit: `0a837d1` — "Merge branch 'origin/master-multi' into master-multi_bin-
 ### 2. 12 instancias faltantes agregadas
 
 **Problema:** existían 13 carpetas en `src/custom/` sin entrada en `instances.json`.
-Una de ellas (`odoo-farmacia-xana`) es repo compartido, no instancia — descartada.
+Una de ellas (`odoo-<repo-compartido>`) es repo compartido, no instancia — descartada.
 
 **Carpetas agregadas como instancias:**
 
 | Instancia | v | Puerto | Notas |
 |-----------|---|--------|-------|
-| giralda | 19.0 | 8089 | 13 addons propios `lagiralda_*` |
-| avpharma | 19.0 | 8090 | solo submódulos compartidos |
+| client-a | 19.0 | 8089 | 13 addons propios `client_a_*` |
+| client-b | 19.0 | 8090 | solo submódulos compartidos |
 | demo-integration-core | 17.0 | 8091 | entorno demo |
 | demo-integration-ext | 17.0 | 8092 | entorno demo |
 | integration-homologation | 17.0 | 8093 | entorno de homologación |
 | integration-operative | 17.0 | 8094 | entorno operativo |
-| bananera | 17.0 | 8095 | 1 addon propio `bananera_romana` |
-| contiflex | 19.0 | 8096 | única instancia v19 inicial con 3 addons propios |
-| nuevomercadopetare | 16.0 | 8097 | 4 addons propios, sin `odoo-venezuela` |
-| turaser | 17.0 | 8098 | 7 addons propios `turaser_*` |
-| cigars-core | 17.0 | 8099 | sin addons propios, solo submódulos |
-| cigars-ext | 17.0 | 8100 | sin addons propios, sin `odoo-venezuela` |
+| client-c | 17.0 | 8095 | 1 addon propio `client_c_*` |
+| client-d | 19.0 | 8096 | única instancia v19 inicial con 3 addons propios |
+| client-e | 16.0 | 8097 | 4 addons propios, sin `odoo-venezuela` |
+| client-f | 17.0 | 8098 | 7 addons propios `client_f_*` |
+| client-g-core | 17.0 | 8099 | sin addons propios, solo submódulos |
+| client-g-ext | 17.0 | 8100 | sin addons propios, sin `odoo-venezuela` |
 
 **Total final:** 31 instancias registradas.
 
@@ -104,11 +104,11 @@ En el mismo commit `a668c17`:
 
 ## Decisiones explícitas del usuario
 
-- **No** agregar `odoo-farmacia-xana` como instancia (es repo compartido).
+- **No** agregar `odoo-<repo-compartido>` como instancia (es repo compartido).
 - **No** borrar/limpiar el config grande de PostgreSQL en el primer refactor —
   mea culpa, lo había sobreinterpretado. Aprendí la lección: ante
   "borra lo viejo" preguntar primero si hay valor histórico.
-- **giralda, avpharma, contiflex** son v19 (confirmado por manifest).
+- **client-a, client-b, client-d** son v19 (confirmado por manifest).
 - **demo-integration-*, integration-*** son v17 (confirmado por manifest).
 - **Perfiles en vez de por versión** — el usuario guió esta decisión con
   mejor criterio arquitectónico que el mío inicial.
@@ -119,7 +119,7 @@ En el mismo commit `a668c17`:
 El usuario reportó que `admin`/`admin` no funcionaba para loguearse
 en `http://localhost:8096`. Investigación:
 
-1. La DB `conti` tenía un usuario con `login = "ADMIN"` (mayúscula).
+1. La DB `<db_cliente>` tenía un usuario con `login = "ADMIN"` (mayúscula).
 2. Odoo es **case-sensitive** en el login → `admin` (minúscula) fallaba.
 3. Solución: renombré el login a `admin` (UPDATE 1 en `res_users`).
 4. Verifiqué con `curl /web/login` + CSRF token que el login funciona
@@ -142,7 +142,7 @@ El script `odoo pw` tenía dos bugs:
 ### Audit: el script NO debe decir cosas sobre clientes
 
 - Encontré 1 leak hardcodeado: comment en `init_addons` que decía
-  `"src/custom/bananera"` como ejemplo. Limpiado a `"src/custom/<instance-name>"`.
+  `"src/custom/<cliente>"` como ejemplo. Limpiado a `"src/custom/<instance-name>"`.
 - En el output del script, NO listamos todos los logins disponibles
   cuando hay error (eso expondría emails reales del cliente). Solo
   sugerimos el case-corrected si hay, o damos el comando psql para
@@ -192,5 +192,5 @@ openspec/                                     (nuevo: este documento)
 63637bd docs(openspec): bitácora de sesión 2026-06-15 + pendiente multi-ambiente
 a668c17 feat(db): postgres tuning profiles (small/medium/large/xlarge)
 0a837d1 Merge branch 'origin/master-multi' into master-multi_bin-daldana
-b5fd75c chore(infra): coveragerc para mds-telecom + odoo-update no bindea 8069
+b5fd75c chore(infra): coveragerc para <cliente> + odoo-update no bindea 8069
 ```
