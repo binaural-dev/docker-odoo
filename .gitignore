@@ -1,6 +1,6 @@
 .env
 instances.json
-instances.json.bak
+instances.json.bak*
 coverage_data/
 pwa.json
 src
@@ -31,3 +31,7 @@ __pycache__
 click
 os
 sys
+
+# Datos de clientes generados localmente (dashboards, métricas). Nunca versionar.
+docs/_generated/
+docs/control-repos.*
