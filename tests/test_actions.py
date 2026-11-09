@@ -40,7 +40,7 @@ from odoo_cli.core.actions.validate import (
 )
 from odoo_cli.core.instance import get_projects_for_version  # noqa: E402
 
-# Real tag list from src/custom/bananera/integra-addons (68 tags, as of
+# Real tag list from src/custom/<cliente>/integra-addons (68 tags, as of
 # this writing), captured via `git tag --sort=-v:refname`. Used as a
 # realistic fixture for `_filter_tags` — it's the exact data that
 # exposed the alphabetical-sort bug in the old `grep | tail -n 1`

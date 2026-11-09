@@ -389,7 +389,7 @@ class DispatchMixin:
     def _arg_to_field(self, arg: str) -> dict:
         defaults = {
             ARG_DB: {"key": ARG_DB, "label": "Base de datos (-d)",
-                     "placeholder": "ej: bananera_prod"},
+                     "placeholder": "ej: client_a_prod"},
             ARG_MODULES: {"key": ARG_MODULES, "label": "Módulos (-m)",
                           "placeholder": "sale,purchase o 'all'"},
             ARG_USER: {"key": ARG_USER, "label": "Login (-l)", "placeholder": "admin"},

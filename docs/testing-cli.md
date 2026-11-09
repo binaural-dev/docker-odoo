@@ -369,8 +369,8 @@ contenedor, contra una base real:
   (default 70).
 
 El `.coveragerc` que hay en `.resources/.coveragerc` es del mismo mundo:
-apunta a paths de un cliente específico (`/home/odoo/src/custom/mds-telecom/
-mds_splynx*`), es decir, es configuración para medir cobertura de **esos
+apunta a paths de un cliente específico (`/home/odoo/src/custom/<cliente>/
+<modulo>*`), es decir, es configuración para medir cobertura de **esos
 módulos Odoo**, no del CLI. Si vas a tocar algo de `odoo_cli/core/` o
 `.resources/generators/`, el `.coveragerc` de la raíz no aplica — para eso
 están los `tests/test_*.py` de este documento.

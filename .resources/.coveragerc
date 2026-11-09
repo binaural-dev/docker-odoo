@@ -1,9 +1,5 @@
 [run]
 branch = True
-source =
-    /home/odoo/src/custom/mds-telecom/mds_splynx
-    /home/odoo/src/custom/mds-telecom/mds_splynx_third_party
-    /home/odoo/src/custom/mds-telecom/mds_splynx_unidigital
 omit =
     */tests/*
     */__manifest__.py

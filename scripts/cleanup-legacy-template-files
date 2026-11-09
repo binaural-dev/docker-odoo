@@ -32,8 +32,8 @@ set -euo pipefail
 #
 # Ejemplos:
 #   ./scripts/cleanup-legacy-template-files audit staging
-#   ./scripts/cleanup-legacy-template-files apply staging aromacom gno
-#   ./scripts/cleanup-legacy-template-files apply release --exclude donarca,farmacia-xana
+#   ./scripts/cleanup-legacy-template-files apply staging client-a client-b
+#   ./scripts/cleanup-legacy-template-files apply release --exclude client-a,client-b
 #
 # Requiere: git, gh (autenticado con permisos de push sobre los repos objetivo).
 #

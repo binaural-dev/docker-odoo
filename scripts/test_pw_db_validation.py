@@ -102,7 +102,7 @@ class OdooPwDbValidationTest(unittest.TestCase):
                                         _db_exists_ok()]
                 try:
                     self.mod.reset_password(
-                        config, "inst1", "rea", "admin", "admin",
+                        config, "inst1", "client_a", "admin", "admin",
                     )
                     exit_code = 0
                 except SystemExit as e:
@@ -128,7 +128,7 @@ class OdooPwDbValidationTest(unittest.TestCase):
                 mock_run.side_effect = [_db_missing(), _db_listing_ok()]
                 try:
                     self.mod.reset_password(
-                        config, "inst1", "rea", "admin", "admin",
+                        config, "inst1", "client_a", "admin", "admin",
                     )
                     exit_code = 0
                 except SystemExit as e:
@@ -141,7 +141,7 @@ class OdooPwDbValidationTest(unittest.TestCase):
         self.assertNotIn("✅", out, f"BUG: exito falso en flujo fallido:\n{out}")
         self.assertIn("no existe en la instancia", out)
         self.assertIn("Bases disponibles", out)
-        self.assertIn("rea", out)  # La lista de DBs aparece en el mensaje
+        self.assertIn("client_a", out)  # La lista de DBs aparece en el mensaje
         # Exactamente 2 llamadas a psql: check + listing. NO update.
         self.assertEqual(
             mock_run.call_count, 2,
@@ -176,7 +176,7 @@ class OdooPwDbValidationTest(unittest.TestCase):
             runner = CliRunner()
             result = runner.invoke(
                 mod.run_command,
-                ["inst1", "-d", "rea", "-l", "admin"],
+                ["inst1", "-d", "client_a", "-l", "admin"],
                 catch_exceptions=False,
             )
         self.assertEqual(
@@ -211,7 +211,7 @@ class OdooPwDbValidationTest(unittest.TestCase):
             runner = CliRunner()
             result = runner.invoke(
                 mod.run_command,
-                ["inst1", "-d", "rea", "-l", "admin"],
+                ["inst1", "-d", "client_a", "-l", "admin"],
                 catch_exceptions=False,
             )
         self.assertEqual(

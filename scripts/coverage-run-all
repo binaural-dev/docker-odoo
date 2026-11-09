@@ -5,7 +5,7 @@ real (coverage.py) -> stop, para uno, varios o todos los clientes con tests.
 
 Usage:
   ./scripts/coverage-run-all                        # todos los que tienen tests/
-  ./scripts/coverage-run-all oxicar contiflex        # sólo esos
+  ./scripts/coverage-run-all client-a client-b       # sólo esos
   ./scripts/coverage-run-all --dry-run               # muestra el plan sin tocar nada
   ./scripts/coverage-run-all --pull                  # git pull --ff-only antes de cada uno
   ./scripts/coverage-run-all --keep-running          # no para el contenedor al terminar

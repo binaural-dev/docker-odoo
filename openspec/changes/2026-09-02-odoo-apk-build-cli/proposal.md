@@ -59,7 +59,7 @@ Docker.
 ## Impacto
 
 - Verificado end-to-end en arm64 contra una instancia local real
-  (`http://192.168.1.226:9001`, `com.binaural.maxcam.ventas`): APK firmado
+  (`http://192.168.1.100:8069`, `com.binaural.clienta.ventas`): APK firmado
   1MB + AAB + `assetlinks.json` en el host; `apksigner verify` OK; el
   fingerprint SHA-256 del assetlinks coincide con el certificado; `start_url`
   `/payments?app_version=1` horneado en `res/Wo.json` del APK; instalado en

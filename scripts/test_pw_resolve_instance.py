@@ -3,7 +3,7 @@
 
 Bug original: el pre-dispatch (odoo:770) siempre pedia instancia
 para 'pw' si no se paso posicional, incluso si el usuario paso '-d
-<dbname>'. El usuario pensaba que '-d rea' era suficiente, le pedian
+<dbname>'. El usuario pensaba que '-d client_a' era suficiente, le pedian
 instancia de todos modos, elegia cualquiera y terminaba apuntando
 a la DB incorrecta.
 
@@ -109,7 +109,7 @@ class ResolveInstanceTest(unittest.TestCase):
              mock.patch.object(self.mod, "_instance_has_db") as mock_check, \
              mock.patch.object(self.mod, "prompt_selection") as mock_sel:
             result = self.mod._resolve_instance_for_action(
-                config, self._args(action="pw", instance="inst2", d="rea"),
+                config, self._args(action="pw", instance="inst2", d="client_a"),
             )
         self.assertEqual(result, "inst2")
         # No se hace nada mas cuando instance ya esta seteado.
@@ -130,7 +130,7 @@ class ResolveInstanceTest(unittest.TestCase):
                                return_value=False) as mock_check, \
              mock.patch.object(self.mod, "prompt_selection") as mock_sel:
             result = self.mod._resolve_instance_for_action(
-                config, self._args(action="pw", d="rea"),
+                config, self._args(action="pw", d="client_a"),
             )
         self.assertEqual(result, "inst1")
         mock_check.assert_called()
@@ -153,7 +153,7 @@ class ResolveInstanceTest(unittest.TestCase):
                                side_effect=fake_has_db), \
              mock.patch.object(self.mod, "prompt_selection") as mock_sel:
             result = self.mod._resolve_instance_for_action(
-                config, self._args(action="pw", d="rea"),
+                config, self._args(action="pw", d="client_a"),
             )
         self.assertEqual(result, "inst2")
         mock_prompt.assert_not_called()
@@ -176,7 +176,7 @@ class ResolveInstanceTest(unittest.TestCase):
              mock.patch.object(self.mod, "prompt_selection",
                                return_value="inst3") as mock_sel:
             result = self.mod._resolve_instance_for_action(
-                config, self._args(action="pw", d="rea"),
+                config, self._args(action="pw", d="client_a"),
             )
         self.assertEqual(result, "inst3")
         mock_prompt.assert_not_called()
@@ -190,7 +190,7 @@ class ResolveInstanceTest(unittest.TestCase):
         self.assertNotIn("inst2", values)
         # El titulo menciona la DB.
         title = mock_sel.call_args.args[1]
-        self.assertIn("rea", title)
+        self.assertIn("client_a", title)
 
     # ------------------------------------------------------------------
     # Caso adicional: otra accion (no pw) -> no consulta DBs
@@ -204,7 +204,7 @@ class ResolveInstanceTest(unittest.TestCase):
              mock.patch.object(self.mod, "prompt_selection") as mock_sel, \
              mock.patch.object(self.mod, "_instance_has_db") as mock_check:
             result = self.mod._resolve_instance_for_action(
-                config, self._args(action="start", d="rea"),
+                config, self._args(action="start", d="client_a"),
             )
         self.assertEqual(result, "inst1")
         mock_prompt.assert_called_once_with(config, "start")

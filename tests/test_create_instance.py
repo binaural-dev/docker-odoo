@@ -40,7 +40,7 @@ def _data(instances=None):
     }
 
 
-def _build(data, name="farmacia-santa-rosa-v19"):
+def _build(data, name="client-demo-v19"):
     return build_instance_entry(
         data, name, "19.0", 8153, "v19", "19.0_full", ["src/custom/" + name]
     )
@@ -61,7 +61,7 @@ SIBLING = {
 class DedicatedRoleNameTests(unittest.TestCase):
     def test_hyphens_become_underscores(self):
         self.assertEqual(
-            dedicated_role_name("farmacia-santa-rosa-v19"), "app_farmacia_santa_rosa_v19"
+            dedicated_role_name("client-demo-v19"), "app_client_demo_v19"
         )
 
     def test_result_is_plain_sql_identifier(self):
@@ -76,24 +76,24 @@ class BuildInstanceEntryTests(unittest.TestCase):
 
     def test_shared_service_gets_role_password_and_filter(self):
         entry = _build(_data({"binaural": SIBLING}))
-        self.assertEqual(entry["db_user"], "app_farmacia_santa_rosa_v19")
+        self.assertEqual(entry["db_user"], "app_client_demo_v19")
         self.assertEqual(len(entry["db_password"]), 24)
         db_filter = entry["overwrite_odoo_config"]["db_filter"]
-        self.assertTrue(re.match(db_filter, "farmacia-santa-rosa-v19"))
-        self.assertFalse(re.match(db_filter, "farmaciaXsanta-rosa-v19"))
+        self.assertTrue(re.match(db_filter, "client-demo-v19"))
+        self.assertFalse(re.match(db_filter, "clientXdemo-v19"))
 
     def test_disabled_sibling_still_counts_as_shared(self):
         entry = _build(_data({"binaural": dict(SIBLING, enabled=False)}))
         self.assertIn("db_user", entry)
 
     def test_role_collision_is_rejected(self):
-        sibling = dict(SIBLING, db_user="app_farmacia_santa_rosa_v19")
+        sibling = dict(SIBLING, db_user="app_client_demo_v19")
         with self.assertRaises(ValueError):
             _build(_data({"binaural": sibling}))
 
     def test_generated_entry_passes_config_validation(self):
         data = _data({"binaural": SIBLING})
-        data["instances"]["farmacia-santa-rosa-v19"] = _build(data)
+        data["instances"]["client-demo-v19"] = _build(data)
         _validate_config(data)  # must not raise
 
 

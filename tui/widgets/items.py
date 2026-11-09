@@ -8,7 +8,7 @@ from tui.models import Action, CATEGORY_BADGE_WIDTH
 class InstanceItem(ListItem):
     """Una instancia con su version, puerto y database.
 
-    Layout:  [●/○] nombre  v17.0  :8070  db: conti
+    Layout:  [●/○] nombre  v17.0  :8070  db: client_a
     El indicador circular muestra si esta habilitada (● verde) o
     deshabilitada (○ gris), para que el usuario distinga de un vistazo
     cuales instancias van a ejecutarse con el comando.

@@ -1081,7 +1081,7 @@ class TuiActionDispatchIntegrationTest(unittest.TestCase):
                 await pilot.press("enter")
                 await pilot.pause()
                 inp = app.screen.query_one("#inp_repo", Input)
-                inp.value = "bananera"
+                inp.value = "client-a"
                 await pilot.pause()
                 with patch("tui.runner.stream_command", side_effect=fake_stream_command):
                     await pilot.press("ctrl+enter")
@@ -1090,7 +1090,7 @@ class TuiActionDispatchIntegrationTest(unittest.TestCase):
 
         asyncio.run(go())
         self.assertEqual(
-            captured.get("argv"), ["./odoo", "submodule-status", "bananera"],
+            captured.get("argv"), ["./odoo", "submodule-status", "client-a"],
             f"argv inesperado: {captured}",
         )
 
@@ -1118,7 +1118,7 @@ class TuiActionDispatchIntegrationTest(unittest.TestCase):
                 await pilot.press("enter")
                 await pilot.pause()
                 inp = app.screen.query_one("#inp_repo", Input)
-                inp.value = "bananera"
+                inp.value = "client-a"
                 await pilot.pause()
                 with patch.object(
                     app, "_run_interactive", side_effect=fake_run_interactive
@@ -1129,7 +1129,7 @@ class TuiActionDispatchIntegrationTest(unittest.TestCase):
 
         asyncio.run(go())
         self.assertEqual(
-            captured.get("argv"), ["./odoo", "update-tags", "bananera"],
+            captured.get("argv"), ["./odoo", "update-tags", "client-a"],
             f"argv inesperado: {captured}",
         )
         self.assertEqual(captured.get("action_id"), "update-tags")
