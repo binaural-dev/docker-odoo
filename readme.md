@@ -5,6 +5,47 @@ Entorno de desarrollo que permite levantar **múltiples instancias de Odoo** (di
 Compatible con Odoo 14.0, 16.0, 17.0, 18.0, 19.0 y master.
 Compatible con Linux y macOS (AMD y ARM).
 
+## Prueba técnica — entrega de Candido Marcano
+
+- **Versión de Odoo declarada: 18.0** (Community, sin Enterprise). Se define con `odoo_version` en
+  `instances.json`, que es como este repositorio fija la versión (no hay `.env` con `ODOO_VERSION`).
+- **Módulos** (todos en `src/custom/prueba-tecnica/`):
+
+  | Ejercicio | Módulo |
+  |---|---|
+  | 1. Integración con API para una tienda en línea | `shop_integration_api` |
+  | 2. Migración del módulo de inspecciones | `fleet_inspection` |
+  | 3. Ticket urgente T-200 | `sale_commission` (corrección en la rama `hotfix/T-200`) |
+  | 4. Solicitudes de pago con aprobación | `payment_request` |
+
+  Cada módulo tiene su `README.md` (tramos completados, cómo probarlo, supuestos y limitaciones) y su `AI_LOG.md`.
+
+### Levantar el entorno
+
+1. Copiar la configuración de la prueba (instancia `prueba-tecnica`: Odoo 18, Postgres 16, puerto
+   8069, addons en `src/custom/prueba-tecnica`, `dev_mode` activo; contraseñas solo de desarrollo local):
+
+   ```bash
+   cp instances.prueba-tecnica.example.json instances.json
+   ```
+
+2. `./odoo build` y `./odoo start prueba-tecnica` → http://localhost:8069
+3. Pruebas sobre una base nueva (se crea y se borra al terminar):
+
+   ```bash
+   ./odoo test prueba-tecnica shop_integration_api,fleet_inspection,sale_commission,payment_request -d prueba_limpia
+   ```
+
+   Equivale al comando del enunciado (`./odoo test -d prueba_limpia -m ...`). Escrito así, sin la instancia,
+   el CLI pregunta cuál usar (elegir `1. prueba-tecnica`).
+
+   Resultado en la rama `integration/entrega`: **4 módulos instalados, 126 pruebas, 0 fallos, cobertura 94 %**,
+   sin advertencias en el registro.
+
+**En Windows:** correr el CLI desde WSL2 (Ubuntu) con Docker Desktop y la integración de WSL activa.
+El repo fuerza finales de línea LF con `.gitattributes`; sin eso los scripts quedan con CRLF y el
+build de la imagen falla.
+
 ## Instalación Rápida
 
 ```bash

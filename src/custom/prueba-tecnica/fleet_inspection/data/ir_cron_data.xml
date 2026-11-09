@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <record id="ir_cron_fleet_inspection_overdue" model="ir.cron">
+        <field name="name">Inspecciones: marcar las que llevan más de 7 días en curso</field>
+        <field name="model_id" ref="model_fleet_inspection"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_mark_overdue()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

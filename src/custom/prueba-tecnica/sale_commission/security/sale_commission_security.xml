@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="sale_commission_report_rule_own" model="ir.rule">
+        <field name="name">Comisiones: el vendedor ve solo las suyas</field>
+        <field name="model_id" ref="model_sale_commission_report"/>
+        <field name="domain_force">[('user_id', '=', user.id)]</field>
+        <field name="groups" eval="[(4, ref('sales_team.group_sale_salesman'))]"/>
+    </record>
+
+    <record id="sale_commission_report_rule_all" model="ir.rule">
+        <field name="name">Comisiones: todas para quien ve todos los pedidos</field>
+        <field name="model_id" ref="model_sale_commission_report"/>
+        <field name="domain_force">[(1, '=', 1)]</field>
+        <field name="groups" eval="[(4, ref('sales_team.group_sale_salesman_all_leads'))]"/>
+    </record>
+
+    <record id="sale_commission_report_rule_company" model="ir.rule">
+        <field name="name">Comisiones: multi-compañía</field>
+        <field name="model_id" ref="model_sale_commission_report"/>
+        <field name="global" eval="True"/>
+        <field name="domain_force">[('company_id', 'in', company_ids)]</field>
+    </record>
+</odoo>
