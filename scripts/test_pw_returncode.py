@@ -84,7 +84,7 @@ class OdooPwReturncodeTest(unittest.TestCase):
                     )
                     try:
                         self.mod.reset_password(
-                            config, "inst1", "rea", "admin", "admin",
+                            config, "inst1", "client_a", "admin", "admin",
                         )
                         exit_code = 0
                     except SystemExit as e:
@@ -110,7 +110,7 @@ class OdooPwReturncodeTest(unittest.TestCase):
                     )
                     try:
                         self.mod.reset_password(
-                            config, "inst1", "rea", "admin", "admin",
+                            config, "inst1", "client_a", "admin", "admin",
                         )
                         exit_code = 0
                     except SystemExit as e:
@@ -140,7 +140,7 @@ class OdooPwReturncodeTest(unittest.TestCase):
                     )
                     try:
                         self.mod.reset_password(
-                            config, "inst1", "rea", "admin", "admin",
+                            config, "inst1", "client_a", "admin", "admin",
                         )
                     except SystemExit as e:
                         exit_code = e.code
@@ -184,7 +184,7 @@ class OdooPwReturncodeTest(unittest.TestCase):
             runner = CliRunner()
             result = runner.invoke(
                 mod.run_command,
-                ["inst1", "-d", "rea", "-l", "admin"],
+                ["inst1", "-d", "client_a", "-l", "admin"],
                 catch_exceptions=False,
             )
         self.assertEqual(
@@ -227,7 +227,7 @@ class OdooPwReturncodeTest(unittest.TestCase):
             runner = CliRunner()
             result = runner.invoke(
                 mod.run_command,
-                ["inst1", "-d", "rea", "-l", "admin"],
+                ["inst1", "-d", "client_a", "-l", "admin"],
                 catch_exceptions=False,
             )
         self.assertEqual(

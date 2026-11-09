@@ -88,11 +88,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "validate-instances, tui, apk, agent\n"
             "\n"
             "Ejemplos:\n"
-            "  ./odoo start contiflex               levanta sólo esa instancia\n"
-            "  ./odoo bash contiflex                shell root en el contenedor\n"
-            "  ./odoo sync contiflex staging        stash+checkout+pull+submodules\n"
+            "  ./odoo start <cliente>               levanta sólo esa instancia\n"
+            "  ./odoo bash <cliente>                shell root en el contenedor\n"
+            "  ./odoo sync <cliente> staging        stash+checkout+pull+submodules\n"
             "  ./odoo coverage-status               qué clientes tienen tests (sin Docker)\n"
-            "  ./odoo coverage contiflex --dry-run  ve el plan de coverage sin ejecutar nada\n"
+            "  ./odoo coverage <cliente> --dry-run  ve el plan de coverage sin ejecutar nada\n"
+            "  (reemplazá <cliente> por el nombre de la instancia, sin los signos < >)\n"
             "\n"
             "La mayoría de los comandos con instancia opcional preguntan de forma\n"
             "interactiva cuál usar si no la pasás como argumento."
@@ -508,7 +509,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  ./odoo update-tags-bulk                       "
             "elige version, proyectos, submódulo y tag interactivamente\n"
             "  ./odoo update-tags-bulk 17.0 odoo-venezuela l10nve_17.0.3.4.2\n"
-            "  ./odoo update-tags-bulk 17.0 --projects contiflex,gno,syf\n"
+            "  ./odoo update-tags-bulk 17.0 --projects client-a,client-b,client-c\n"
             "  ./odoo update-tags-bulk 17.0 --branch-origin staging\n"
         ),
     )
@@ -647,8 +648,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "DB estén listos, corre coverage.py real, para el contenedor, "
             "borra la imagen si la creó él mismo, y restaura 'enabled'. "
             "Sin argumentos corre sobre todos los clientes con tests.\n\n"
-            "Ejemplos: './odoo coverage' (todos) | './odoo coverage contiflex' "
-            "(uno) | './odoo coverage contiflex --dry-run' (solo mostrar el plan).\n"
+            "Ejemplos: './odoo coverage' (todos) | './odoo coverage <cliente>' "
+            "(uno) | './odoo coverage <cliente> --dry-run' (solo mostrar el plan).\n"
             "Ver 'scripts/coverage-run-all --help' para todos los flags."
         ),
     )
