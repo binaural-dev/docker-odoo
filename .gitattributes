@@ -1,0 +1,3 @@
+# Los scripts y módulos corren dentro de contenedores Linux: forzar LF
+# aunque el repo se clone en Windows con core.autocrlf=true.
+* text=auto eol=lf

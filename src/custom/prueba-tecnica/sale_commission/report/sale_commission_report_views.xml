@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="sale_commission_report_view_pivot" model="ir.ui.view">
+        <field name="name">sale.commission.report.pivot</field>
+        <field name="model">sale.commission.report</field>
+        <field name="arch" type="xml">
+            <pivot string="Comisiones" sample="1">
+                <field name="user_id" type="row"/>
+                <field name="date" interval="month" type="col"/>
+                <field name="amount_untaxed" type="measure"/>
+                <field name="commission_amount" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <record id="sale_commission_report_view_graph" model="ir.ui.view">
+        <field name="name">sale.commission.report.graph</field>
+        <field name="model">sale.commission.report</field>
+        <field name="arch" type="xml">
+            <graph string="Comisiones" type="bar" sample="1">
+                <field name="date" interval="month"/>
+                <field name="user_id"/>
+                <field name="commission_amount" type="measure"/>
+            </graph>
+        </field>
+    </record>
+
+    <record id="sale_commission_report_view_search" model="ir.ui.view">
+        <field name="name">sale.commission.report.search</field>
+        <field name="model">sale.commission.report</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="user_id"/>
+                <field name="partner_id"/>
+                <field name="order_id"/>
+                <filter name="this_month" string="Este mes"
+                        domain="[('date', '&gt;=', context_today().strftime('%Y-%m-01'))]"/>
+                <filter name="date" string="Fecha" date="date"/>
+                <group>
+                    <filter name="group_user" string="Vendedor" context="{'group_by': 'user_id'}"/>
+                    <filter name="group_month" string="Mes" context="{'group_by': 'date:month'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="sale_commission_report_action" model="ir.actions.act_window">
+        <field name="name">Comisiones</field>
+        <field name="res_model">sale.commission.report</field>
+        <field name="view_mode">pivot,graph</field>
+        <field name="context">{'search_default_this_month': 1}</field>
+    </record>
+
+    <menuitem id="menu_sale_commission_report" name="Comisiones" parent="sale.menu_sale_report"
+              action="sale_commission_report_action" sequence="30"/>
+</odoo>

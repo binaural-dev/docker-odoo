@@ -1,0 +1,6 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_fleet_inspection_user,fleet.inspection.user,model_fleet_inspection,group_fleet_inspection_user,1,1,1,0
+access_fleet_inspection_manager,fleet.inspection.manager,model_fleet_inspection,group_fleet_inspection_manager,1,1,1,1
+access_fleet_inspection_line_user,fleet.inspection.line.user,model_fleet_inspection_line,group_fleet_inspection_user,1,1,1,1
+access_fleet_inspection_item_user,fleet.inspection.item.user,model_fleet_inspection_item,group_fleet_inspection_user,1,0,0,0
+access_fleet_inspection_item_manager,fleet.inspection.item.manager,model_fleet_inspection_item,group_fleet_inspection_manager,1,1,1,1

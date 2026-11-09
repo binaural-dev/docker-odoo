@@ -1,0 +1,61 @@
+{
+  "odoo_configs": {
+    "18.0_default": {
+      "admin_password": "admin",
+      "workers": 2,
+      "without_demo": true,
+      "list_db": true,
+      "proxy_mode": true,
+      "limit_memory_soft": 2684354560,
+      "limit_memory_hard": 3221225472,
+      "max_cron_threads": 1,
+      "limit_time_real_cron": 0,
+      "limit_time_real": 3600,
+      "limit_time_cpu": 600,
+      "db_maxconn": 64,
+      "unaccent": false,
+      "server_wide_modules": "",
+      "db_filter": "",
+      "db_name": "False",
+      "server_mode": "test",
+      "dev_mode": false,
+      "addons": []
+    }
+  },
+  "databases": {
+    "pg16": {
+      "postgres_version": 16,
+      "port": 5432,
+      "expose_host_port": false,
+      "user": "odoo",
+      "password": "odoo",
+      "bootstrap_user": "odoo_bootstrap",
+      "bootstrap_password": "odoo_bootstrap_local",
+      "config": "postgresql.small.conf"
+    }
+  },
+  "instances": {
+    "prueba-tecnica": {
+      "enabled": true,
+      "odoo_version": "18.0",
+      "external_port": 8069,
+      "database": "pg16",
+      "odoo_config": "18.0_default",
+      "overwrite_odoo_config": {
+        "addons": ["src/custom/prueba-tecnica"],
+        "dev_mode": true
+      }
+    }
+  },
+  "pgadmin": {
+    "enabled": false,
+    "port": 5050,
+    "email": "admin@admin.com",
+    "password": "admin"
+  },
+  "mailhog": {
+    "enabled": true,
+    "smtp_port": 1025,
+    "http_port": 8025
+  }
+}
