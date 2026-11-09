@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+# Respaldo y restauración de la base del almacén de Bolipuertos (BP-RELEASE-ALMACEN)
+# sobre una instancia de docker-odoo con el código actual de bolipuertos-v18.
+#
+# La base del almacén vive en otro servidor (10.50.27.78, alias ssh almacen-bp-18)
+# con código de 2025-11. Restaurarla sobre código nuevo no basta con `-u all`:
+# varios módulos tienen dependencias rotas que solo aparecen en bases viejas.
+# El paso `prepare` aplica los parches SQL que lo destraban. Detalle de cada
+# parche y cómo diagnosticar uno nuevo: scripts/bp-almacen-restore.md
+#
+# Uso (desde la raíz de docker-odoo):
+#   scripts/bp-almacen-restore backup  [-o DIR]                  # saca el respaldo del almacén a un ZIP
+#   scripts/bp-almacen-restore all     -i INST -d DB -z ZIP      # restore + prepare + update + post + verify
+#   scripts/bp-almacen-restore restore -i INST -d DB -z ZIP      # solo ./odoo restore --skip-post-restore
+#   scripts/bp-almacen-restore prepare -i INST -d DB             # parches SQL previos al -u all
+#   scripts/bp-almacen-restore update  -i INST -d DB             # -u all con reintentos
+#   scripts/bp-almacen-restore post    -i INST -d DB             # post_restore_db sin -u all
+#   scripts/bp-almacen-restore verify  -i INST -d DB             # estados de módulos y /web/login
+#
+# Variables opcionales para `backup`:
+#   ALMACEN_SSH (almacen-bp-18)  ALMACEN_DB (BP-RELEASE-ALMACEN)
+#   ALMACEN_DB_CONTAINER (bp18_db)  ALMACEN_ODOO_CONTAINER (bp18)  ALMACEN_PG_USER (odoo)
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOG_DIR="$ROOT/.tmp_ignored/bp-almacen-restore"
+UPDATE_ATTEMPTS=3
+
+ALMACEN_SSH="${ALMACEN_SSH:-almacen-bp-18}"
+ALMACEN_DB="${ALMACEN_DB:-BP-RELEASE-ALMACEN}"
+ALMACEN_DB_CONTAINER="${ALMACEN_DB_CONTAINER:-bp18_db}"
+ALMACEN_ODOO_CONTAINER="${ALMACEN_ODOO_CONTAINER:-bp18}"
+ALMACEN_PG_USER="${ALMACEN_PG_USER:-odoo}"
+
+die() { echo "ERROR: $*" >&2; exit 1; }
+step() { printf '\n\033[1;35m=== %s ===\033[0m\n' "$*"; }
+
+usage() { sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+CMD="${1:-}"; [ -n "$CMD" ] || usage 1; shift
+INSTANCE="" DB="" ZIP="" OUT_DIR=""
+while getopts "i:d:z:o:h" opt; do
+    case "$opt" in
+        i) INSTANCE="$OPTARG" ;;
+        d) DB="$OPTARG" ;;
+        z) ZIP="$OPTARG" ;;
+        o) OUT_DIR="$OPTARG" ;;
+        h) usage 0 ;;
+        *) usage 1 ;;
+    esac
+done
+
+# --- Helpers en Python (fuera de $( ) por el bash 3.2 de macOS) ------------
+
+read -r -d '' PY_LOAD_INSTANCE <<'PY' || true
+import json, re, shlex, sys
+path, name, db = sys.argv[1:]
+cfg = json.load(open(path))
+inst = cfg.get("instances", {}).get(name)
+if not inst:
+    sys.exit(f"ERROR: la instancia {name} no existe en instances.json")
+over = inst.get("overwrite_odoo_config", {})
+db_filter = over.get("db_filter") or cfg.get("odoo_configs", {}).get(inst.get("odoo_config"), {}).get("db_filter") or ""
+if db_filter and not re.search(db_filter, db):
+    sys.exit(f"ERROR: la base {db} no cumple el db_filter {db_filter} de {name}")
+addons = over.get("addons") or cfg.get("odoo_configs", {}).get(inst.get("odoo_config"), {}).get("addons", [])
+custom = [a for a in addons if a.startswith("src/custom/")]
+print(f"DB_CONTAINER={shlex.quote('db-' + inst['database'])}")
+print(f"DB_USER={shlex.quote(inst['db_user'])}")
+print(f"ODOO_CONTAINER={shlex.quote('odoo-' + name)}")
+print(f"HTTP_PORT={shlex.quote(str(inst.get('external_port', '')))}")
+print(f"CUSTOM_ADDONS={shlex.quote(':'.join(custom))}")
+PY
+
+# Clasifica las vistas activas de módulos propios: línea 1 = ids obsoletos
+# (xmlid ya no está en el XML), línea 2 = heredadas no-noupdate a recargar.
+read -r -d '' PY_CLASSIFY_VIEWS <<'PY' || true
+import glob, os, re, sys
+root, custom, views_txt = sys.argv[1:]
+mods = {}
+for path in filter(None, custom.split(":")):
+    for manifest in glob.glob(os.path.join(root, path, "*", "__manifest__.py")):
+        d = os.path.dirname(manifest)
+        mods[os.path.basename(d)] = d
+xml = {}
+obsolete, stale = [], []
+for line in open(views_txt):
+    mod, name, vid, noupdate, inherits = line.rstrip("\n").split("|")
+    if mod not in mods:
+        continue
+    if mod not in xml:
+        xml[mod] = "".join(open(f, errors="ignore").read() for f in glob.glob(mods[mod] + "/**/*.xml", recursive=True))
+    if not re.search(r"""id=["'](%s\.)?%s["']""" % (re.escape(mod), re.escape(name)), xml[mod]):
+        obsolete.append(vid)
+    elif inherits == "t" and noupdate != "t":
+        stale.append(vid)
+print(",".join(obsolete) or "0")
+print(",".join(stale) or "0")
+PY
+
+# --- Datos de la instancia (instances.json) ----------------------------------
+
+load_instance() {
+    [ -n "$INSTANCE" ] || die "falta -i <instancia>"
+    [ -n "$DB" ] || die "falta -d <base>"
+    [ -f "$ROOT/instances.json" ] || die "no existe $ROOT/instances.json"
+    local vars
+    vars="$(python3 -c "$PY_LOAD_INSTANCE" "$ROOT/instances.json" "$INSTANCE" "$DB")" || exit 1
+    eval "$vars"
+    mkdir -p "$LOG_DIR"
+}
+
+psql_db() { docker exec -i "$DB_CONTAINER" psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB" "$@"; }
+
+# --- backup ------------------------------------------------------------------
+
+cmd_backup() {
+    local stamp out work
+    stamp="$(date +%Y-%m-%d)"
+    out="${OUT_DIR:-$HOME/workspace/18/respaldos-almacen-bp18/$stamp}"
+    work="$out/zip_build"
+    mkdir -p "$work/filestore"
+
+    step "Respaldo de $ALMACEN_DB desde $ALMACEN_SSH (solo lectura) a $out"
+    ssh "$ALMACEN_SSH" "docker exec $ALMACEN_DB_CONTAINER psql -U $ALMACEN_PG_USER -d postgres -Atc \"select 1 from pg_database where datname='$ALMACEN_DB'\"" | grep -q 1 \
+        || die "la base $ALMACEN_DB no existe en $ALMACEN_SSH"
+
+    echo "pg_dump (SQL plano, el formato que espera ./odoo restore)..."
+    ssh "$ALMACEN_SSH" "docker exec $ALMACEN_DB_CONTAINER pg_dump -U $ALMACEN_PG_USER -d '$ALMACEN_DB'" > "$work/dump.sql"
+    grep -q "PostgreSQL database dump complete" "$work/dump.sql" || die "el dump quedó incompleto: $work/dump.sql"
+
+    echo "filestore (/home/odoo/data/filestore/$ALMACEN_DB)..."
+    ssh "$ALMACEN_SSH" "docker exec $ALMACEN_ODOO_CONTAINER tar -C '/home/odoo/data/filestore/$ALMACEN_DB' -cf - ." | tar -xf - -C "$work/filestore"
+
+    local zip="$out/${ALMACEN_DB}_${stamp}.zip"
+    echo "Armando $zip ..."
+    python3 - "$work" "$zip" <<'PY'
+import os, sys, zipfile
+src, dst = sys.argv[1:]
+with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as z:
+    z.write(os.path.join(src, "dump.sql"), "dump.sql")
+    base = os.path.join(src, "filestore")
+    for d, _, files in os.walk(base):
+        rel = os.path.relpath(d, src)
+        z.write(d, rel)
+        for f in files:
+            z.write(os.path.join(d, f), os.path.join(rel, f))
+PY
+    rm -rf "$work"
+    (cd "$out" && shasum -a 256 "$(basename "$zip")" 2>/dev/null || sha256sum "$(basename "$zip")") | tee -a "$out/sha256.txt"
+    echo
+    echo "Listo: $zip"
+    echo "Para la VM: rsync -a --partial -e 'ssh -p 977' '$zip' binaural@10.50.27.76:/var/home/backups/"
+}
+
+# --- restore -----------------------------------------------------------------
+
+cmd_restore() {
+    [ -n "$ZIP" ] || die "falta -z <zip>"
+    [ -f "$ZIP" ] || die "no existe $ZIP"
+    step "Restore de $ZIP en $DB ($INSTANCE), sin post-restore"
+    local extra=()
+    # El flag existe desde el PR #127 de docker-odoo; las versiones previas no
+    # hacen post-restore, así que sin el flag el resultado es el mismo.
+    if (cd "$ROOT" && ./odoo restore --help 2>&1) | grep -q -- "--skip-post-restore"; then
+        extra=(--skip-post-restore)
+    fi
+    (cd "$ROOT" && ./odoo restore "$INSTANCE" -z "$ZIP" -d "$DB" ${extra[@]+"${extra[@]}"}) < /dev/null
+}
+
+# --- prepare -----------------------------------------------------------------
+
+cmd_prepare() {
+    step "Parches previos al -u all en $DB"
+
+    echo "1/6 Pausar crons (mismo formato que odoo_restore, post_restore_db los repone)"
+    # --skip-post-restore no los pausa, y el hilo de cron del servidor choca con
+    # el -u all (deadlock / could not serialize access).
+    psql_db -q <<'SQL'
+DO $$ BEGIN
+IF to_regclass('public._restore_paused_crons') IS NULL THEN
+    CREATE TABLE public._restore_paused_crons AS SELECT id, active, nextcall FROM public.ir_cron;
+    UPDATE public.ir_cron SET active = false, nextcall = '9999-12-31';
+    CREATE TABLE public._restore_paused_cron_triggers AS SELECT * FROM public.ir_cron_trigger;
+    DELETE FROM public.ir_cron_trigger;
+END IF; END $$;
+SQL
+
+    echo "2/6 xmlid billing_and_collection.menu_clientes_root -> menu_customers_root"
+    # tools_bp/views/credit_advice.xml lo usa sin depender de billing_and_collection;
+    # el commit 3553960e lo renombró sin migración.
+    psql_db -q <<'SQL'
+UPDATE ir_model_data SET name = 'menu_customers_root'
+ WHERE module = 'billing_and_collection' AND name = 'menu_clientes_root'
+   AND NOT EXISTS (SELECT 1 FROM ir_model_data WHERE module = 'billing_and_collection' AND name = 'menu_customers_root');
+SQL
+
+    echo "3/6 Acción provisional national_ports.action_payment_request_mass_port_origin_wizard"
+    # retention_type/views/payment_request.xml la usa, pero national_ports depende
+    # de retention_type (circular). national_ports la sobrescribe al actualizarse.
+    psql_db -q <<'SQL'
+WITH a AS (
+    INSERT INTO ir_act_window (name, type, binding_type, binding_view_types, res_model, view_mode, target, context, "limit",
+                               create_uid, write_uid, create_date, write_date)
+    SELECT '{"en_US": "Mass Assign Port Origin"}'::jsonb, 'ir.actions.act_window', 'action', 'list',
+           'payment.request.mass.port.origin.wizard', 'form', 'new', '{}', 80, 1, 1, now(), now()
+     WHERE NOT EXISTS (SELECT 1 FROM ir_model_data WHERE module = 'national_ports' AND name = 'action_payment_request_mass_port_origin_wizard')
+    RETURNING id)
+INSERT INTO ir_model_data (module, name, model, res_id, noupdate, create_uid, write_uid, create_date, write_date)
+SELECT 'national_ports', 'action_payment_request_mass_port_origin_wizard', 'ir.actions.act_window', id, false, 1, 1, now(), now() FROM a;
+SQL
+
+    echo "4/6 Plazos de pago de tools_bp (si bp_port_dashboard no está instalado)"
+    # tools_bp/data/account_payment_term_data.xml (noupdate) usa payment_condition,
+    # que define bp_port_dashboard; tools_bp no depende de él. Con el xmlid ya
+    # creado, Odoo salta esos registros noupdate.
+    psql_db -q <<'SQL'
+WITH src(xmlid, name, note) AS (VALUES
+    ('account_payment_term_incomes_deferred', 'Deferred payment', 'Payment terms: Deferred payment'),
+    ('account_payment_term_incomes_cash', 'Cash', 'Payment terms: Cash'),
+    ('account_payment_term_incomes_credit', 'Credit', 'Payment terms: Credit')
+), todo AS (
+    SELECT * FROM src
+     WHERE NOT EXISTS (SELECT 1 FROM ir_model_data d WHERE d.module = 'tools_bp' AND d.name = src.xmlid)
+       AND NOT EXISTS (SELECT 1 FROM ir_module_module WHERE name = 'bp_port_dashboard' AND state = 'installed')
+), terms AS (
+    INSERT INTO account_payment_term (name, note, sequence, active, create_uid, write_uid, create_date, write_date)
+    SELECT jsonb_build_object('en_US', name), jsonb_build_object('en_US', '<p>' || note || '</p>'), 10, true, 1, 1, now(), now() FROM todo
+    RETURNING id, name->>'en_US' AS name
+), lines AS (
+    INSERT INTO account_payment_term_line (payment_id, value, value_amount, nb_days, delay_type, create_uid, write_uid, create_date, write_date)
+    SELECT id, 'percent', 100, 0, 'days_after', 1, 1, now(), now() FROM terms
+)
+INSERT INTO ir_model_data (module, name, model, res_id, noupdate, create_uid, write_uid, create_date, write_date)
+SELECT 'tools_bp', todo.xmlid, 'account.payment.term', terms.id, true, 1, 1, now(), now()
+  FROM todo JOIN terms ON terms.name = todo.name;
+SQL
+
+    echo "5-6/6 Vistas de módulos propios: obsoletas (desactivar) y heredadas viejas (vaciar)"
+    # Obsoletas: el xmlid ya no está en el código; Odoo las borraría al final del
+    # update, pero antes rompen la validación de otras vistas.
+    # Heredadas que siguen en el código: la base trae su arch viejo, que puede
+    # apuntar a campos o nodos que ya no existen. Se vacían (<data/>) y el -u all
+    # las vuelve a escribir desde el XML. Las noupdate no se tocan.
+    local views_txt="$LOG_DIR/views_$DB.txt"
+    psql_db -Atc "SELECT d.module, d.name, v.id, d.noupdate, (v.inherit_id IS NOT NULL) FROM ir_ui_view v
+                  JOIN ir_model_data d ON d.res_id = v.id AND d.model = 'ir.ui.view'
+                  JOIN ir_module_module m ON m.name = d.module AND m.state = 'installed'
+                  WHERE v.active" > "$views_txt"
+    local ids
+    ids="$(python3 -c "$PY_CLASSIFY_VIEWS" "$ROOT" "$CUSTOM_ADDONS" "$views_txt")"
+    local obsolete stale
+    obsolete="$(sed -n 1p <<<"$ids")"; stale="$(sed -n 2p <<<"$ids")"
+    echo "   obsoletas: $(tr ',' '\n' <<<"$obsolete" | grep -vc '^0$' || true)  heredadas a recargar: $(tr ',' '\n' <<<"$stale" | grep -vc '^0$' || true)"
+    psql_db -q <<SQL
+UPDATE ir_ui_view SET active = false WHERE id IN ($obsolete);
+UPDATE ir_ui_view SET arch_db = jsonb_build_object('en_US', '<data/>') WHERE id IN ($stale);
+SQL
+    echo "Parches aplicados."
+}
+
+# --- update ------------------------------------------------------------------
+
+cmd_update() {
+    step "-u all en $DB (hasta $UPDATE_ATTEMPTS intentos)"
+    local attempt log
+    for attempt in $(seq 1 "$UPDATE_ATTEMPTS"); do
+        log="$LOG_DIR/update_${DB}_$attempt.log"
+        echo "Intento $attempt, log: $log"
+        if docker exec -u root "$ODOO_CONTAINER" odoo --stop-after-init --workers=0 --no-http \
+            -d "$DB" -u all > "$log" 2>&1 < /dev/null; then
+            grep -E "Registry loaded" "$log" | tail -1
+            return 0
+        fi
+        echo "Falló. Último módulo y error:"
+        grep -E "Loading module" "$log" | tail -1 | cut -c1-200 || true
+        awk '/ParseError: while parsing|^[a-zA-Z_.]+(Error|Exception|Failure|Detected):/{f=1} f' "$log" \
+            | grep -vE '^\s+File "/usr' | head -25 | cut -c1-300 || true
+        # Un deadlock o un conflicto de serialización es concurrencia: se reintenta.
+        # Cualquier otro error es del código o de la base y hay que diagnosticarlo.
+        if ! grep -qE "DeadlockDetected|SerializationFailure|could not serialize" "$log"; then
+            die "error que no es de concurrencia; ver $log y scripts/bp-almacen-restore.md"
+        fi
+        sleep 20
+    done
+    die "el -u all siguió fallando tras $UPDATE_ATTEMPTS intentos"
+}
+
+# --- post / verify -----------------------------------------------------------
+
+cmd_post() {
+    step "post_restore_db (repone crons, Environment, parámetros, Sandbox, assets)"
+    if [ -x "$ROOT/scripts/post_restore_db" ]; then
+        "$ROOT/scripts/post_restore_db" --container "$ODOO_CONTAINER" --db-name "$DB" --skip-module-update
+        return
+    fi
+    # docker-odoo anterior al PR #127: sin post_restore_db. Se reponen los crons
+    # a mano y se dejan inactivos los servidores de correo; Environment y Sandbox
+    # quedan como vinieron en el dump.
+    echo "AVISO: este docker-odoo no tiene scripts/post_restore_db; se reponen solo los crons"
+    psql_db -q <<'SQL'
+DO $$ BEGIN
+IF to_regclass('public._restore_paused_crons') IS NOT NULL THEN
+    UPDATE public.ir_cron c SET active = p.active, nextcall = p.nextcall FROM public._restore_paused_crons p WHERE p.id = c.id;
+    INSERT INTO public.ir_cron_trigger SELECT * FROM public._restore_paused_cron_triggers ON CONFLICT DO NOTHING;
+    DROP TABLE public._restore_paused_crons;
+    DROP TABLE public._restore_paused_cron_triggers;
+END IF; END $$;
+UPDATE ir_mail_server SET active = false WHERE active;
+SQL
+}
+
+cmd_verify() {
+    step "Verificación de $DB"
+    local pending
+    pending="$(psql_db -Atc "SELECT count(*) FROM ir_module_module WHERE state NOT IN ('installed','uninstalled','uninstallable')")"
+    echo "Módulos en estado intermedio: $pending"
+    psql_db -Atc "SELECT 'Environment=' || value FROM ir_config_parameter WHERE key = 'Environment'"
+    psql_db -Atc "SELECT 'Servidores de correo activos=' || count(*) FROM ir_mail_server WHERE active"
+    psql_db -Atc "SELECT 'web.base.url=' || value FROM ir_config_parameter WHERE key = 'web.base.url'"
+    if [ -n "$HTTP_PORT" ]; then
+        # ?db= guarda la base en la sesión y redirige: hace falta el cookie jar
+        local code jar="$LOG_DIR/cookies_$DB.txt"
+        code="$(curl -s -L -c "$jar" -b "$jar" -o /dev/null -m 60 -w '%{http_code}' "http://localhost:$HTTP_PORT/web/login?db=$DB" || true)"
+        rm -f "$jar"
+        echo "GET /web/login en :$HTTP_PORT -> $code"
+        [ "$code" = 200 ] || die "el login no respondió 200"
+    fi
+    [ "$pending" = 0 ] || die "quedaron módulos sin terminar de actualizar"
+    echo "OK"
+}
+
+case "$CMD" in
+    backup)  cmd_backup ;;
+    restore) load_instance; cmd_restore ;;
+    prepare) load_instance; cmd_prepare ;;
+    update)  load_instance; cmd_update ;;
+    post)    load_instance; cmd_post ;;
+    verify)  load_instance; cmd_verify ;;
+    all)     load_instance; cmd_restore; cmd_prepare; cmd_update; cmd_post; cmd_verify ;;
+    -h|--help|help) usage 0 ;;
+    *) usage 1 ;;
+esac
