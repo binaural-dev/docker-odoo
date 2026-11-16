@@ -74,8 +74,8 @@ ACTIONS: list[Action] = [
     Action("hosts-status", "Sync /etc/hosts", "Mantenimiento",
            "Muestra diff entre /etc/hosts y los subdominios esperados"),
     Action("remove", "Remove", "Mantenimiento",
-           "Elimina contenedores y volúmenes de la instancia",
-           needs=[ARG_INSTANCE], needs_all_option=True),
+           "Elimina la instancia completa o solo sus bases de datos",
+           needs=[ARG_INSTANCE], interactive=True, needs_all_option=True),
 
     # Módulos / DB
     Action("update", "Update módulos", "Módulos / DB",

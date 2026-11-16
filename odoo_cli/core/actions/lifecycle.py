@@ -17,6 +17,7 @@ take over the TTY (bash, psql) — those live in
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from typing import TYPE_CHECKING
@@ -238,12 +239,85 @@ def restart_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
 # ============================================================
 
 
-def remove_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
-    """Remove containers and volumes.
+REMOVE_FULL = "full"
+REMOVE_DBS = "dbs"
+REMOVE_CANCEL = "cancel"
 
-    Asks the user for confirmation first. If the user agrees, removes
-    the requested instance (or everything, when ``instance`` is None)
-    and offers to bring the environment back up blank.
+# Named volumes of an instance service, as the compose generator declares
+# them (``<instance>-<suffix>``). ``py3``/``py`` are no longer generated but
+# may still exist on checkouts created before that change, so they are
+# cleaned up too.
+INSTANCE_VOLUME_SUFFIXES = ("web", "data", "py3", "py")
+
+
+def _compose_project() -> str:
+    """Name of the Compose project, which prefixes every volume it creates.
+
+    Asked to Compose itself rather than derived from the directory, so a
+    ``COMPOSE_PROJECT_NAME`` or a renamed checkout is respected. Falls back
+    to the directory slug the generator uses for image names.
+    """
+    result = subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "config", "--format", "json"],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        try:
+            return json.loads(result.stdout)["name"]
+        except (ValueError, KeyError):
+            pass
+    from generators.compose_generator import _project_slug
+
+    return _project_slug(".")
+
+
+def _project_volumes(project: str, volume: str | None = None) -> list[str]:
+    """Real names of the volumes Compose created for ``project``, optionally
+    only the one declared as ``volume`` in the compose file. Matched by the
+    labels Compose puts on them, never by name prefix."""
+    argv = [
+        "docker", "volume", "ls", "-q",
+        "--filter", f"label=com.docker.compose.project={project}",
+    ]
+    if volume:
+        argv += ["--filter", f"label=com.docker.compose.volume={volume}"]
+    result = subprocess.run(argv, capture_output=True, text=True)
+    if result.returncode != 0:
+        return []
+    return [name.strip() for name in result.stdout.splitlines() if name.strip()]
+
+
+def _instance_image(config: dict, instance: str) -> str:
+    """Image tag of an instance, as the compose generator names it."""
+    from generators.compose_generator import _project_slug
+    from generators.config_loader import get_odoo_minor
+
+    odoo_minor = get_odoo_minor(config["instances"][instance]["odoo_version"])
+    return f"local_odoo_{_project_slug('.')}_{instance}:{odoo_minor}"
+
+
+def _image_exists(image: str) -> bool:
+    result = subprocess.run(
+        ["docker", "image", "inspect", image], capture_output=True, text=True
+    )
+    return result.returncode == 0
+
+
+def _offer_restart(runner: "Runner", config: dict, instance: str | None) -> None:
+    # Default No: an extra Enter must not bring back what was just removed.
+    if runner.confirm("¿Deseas levantar el entorno nuevamente en blanco?", default=False):
+        start_odoo(runner, config, instance)
+
+
+def remove_odoo(
+    runner: "Runner", config: dict, instance: str | None, mode: str | None = None
+) -> None:
+    """Remove an instance (completely, or only some of its databases), or
+    the whole environment when ``instance`` is None.
+
+    With an instance, ``mode`` picks what to remove (``REMOVE_FULL`` or
+    ``REMOVE_DBS``); without it the user is asked. The whole environment
+    is confirmed by typing the Compose project name.
 
     Hard-blocked (no confirm, no override) against any instance flagged
     ``"production": true`` in instances.json — this is the only lifecycle
@@ -274,39 +348,166 @@ def remove_odoo(runner: "Runner", config: dict, instance: str | None) -> None:
             )
             sys.exit(1)
 
-    if instance:
-        target = f"instancia '\033[91m{instance}\033[0m'"
-    else:
-        target = "\033[91mTODAS\033[0m las instancias y bases de datos"
+    if not instance:
+        _remove_environment(runner, config)
+        return
 
-    runner.warn(
-        f"\n⚠️  \033[1mPELIGRO\033[0m: Esto eliminará {target} "
-        f"y sus volúmenes de datos."
+    if mode is None:
+        mode = runner.select_one(
+            f"¿Qué deseas eliminar de la instancia '{instance}'?",
+            [
+                ("Instancia completa: contenedor, volúmenes, imagen y bases de datos", REMOVE_FULL),
+                ("Solo bases de datos de la instancia", REMOVE_DBS),
+                ("Cancelar", REMOVE_CANCEL),
+            ],
+        )
+    if mode == REMOVE_DBS:
+        from odoo_cli.core.actions.postgres import psql_remove_database
+
+        psql_remove_database(runner, config, instance, None, use_ps=False)
+    elif mode == REMOVE_FULL:
+        _remove_instance(runner, config, instance)
+    else:
+        runner.info("\nOperación cancelada.")
+
+
+def _remove_instance(runner: "Runner", config: dict, instance: str) -> None:
+    """Remove an instance completely: its container, named volumes, image
+    and every database its ``db_filter`` matches.
+
+    The databases are dropped first, with the instance stopped so no
+    session is left open; if one fails nothing else is removed, so the
+    command can simply be run again.
+    """
+    from generators.config_loader import (
+        get_db_host,
+        get_db_internal_port,
+        resolve_db_config,
+        resolve_instance_config,
+        resolve_instance_db_creds,
     )
-    if not runner.confirm(
-        "¿Estás seguro de que deseas continuar?", default=False
-    ):
+    from odoo_cli.core.actions.postgres import _drop_database
+    from odoo_cli.core.instance import has_own_db_filter, list_instance_databases
+
+    inst_conf = config["instances"][instance]
+    db_filter = resolve_instance_config(inst_conf, config).get("db_filter")
+    if not has_own_db_filter(db_filter):
+        # Without its own filter the listing would include the databases
+        # of every other instance on the same Postgres service.
+        runner.error(
+            f"\n⛔ '{instance}' no tiene un db_filter propio (o es '*'): no se "
+            "puede saber cuáles bases son suyas sin arrastrar las de otras "
+            "instancias del mismo Postgres. Define su db_filter en instances.json, "
+            f"o borra sus bases a mano con './odoo remove {instance} --dbs'."
+        )
+        sys.exit(1)
+
+    databases = list_instance_databases(config, instance)
+    if databases is None:
+        runner.error(
+            f"\n❌ No se pudieron listar las bases de '{instance}' (¿está "
+            f"levantado el Postgres '{inst_conf['database']}'?). No se eliminó nada."
+        )
+        sys.exit(1)
+
+    service = f"odoo-{instance}"
+    project = _compose_project()
+    volumes = [
+        name
+        for suffix in INSTANCE_VOLUME_SUFFIXES
+        for name in _project_volumes(project, f"{instance}-{suffix}")
+    ]
+    image = _instance_image(config, instance)
+    has_image = _image_exists(image)
+
+    listing = [f"  - Contenedor: {service}"]
+    listing += [f"  - Volumen: {name}" for name in volumes] or ["  - Volúmenes: ninguno"]
+    listing.append(f"  - Imagen: {image}" if has_image else "  - Imagen: no existe")
+    listing += [f"  - Base de datos: {name}" for name in databases] or [
+        "  - Bases de datos: ninguna"
+    ]
+    runner.warn(
+        f"\n⚠️  \033[1mPELIGRO\033[0m: se eliminará la instancia "
+        f"'\033[91m{instance}\033[0m' completa:\n" + "\n".join(listing) + "\n"
+        "Las bases de otras instancias no se tocan. Esto NO se puede deshacer."
+    )
+    typed = runner.prompt_text(
+        f"Escribe el nombre de la instancia ('{instance}') para confirmar"
+    )
+    if (typed or "").strip() != instance:
         runner.info("\nOperación cancelada.")
         return
 
-    if instance:
-        odoo_services = get_instance_services(config, instance)
-        for svc in odoo_services:
-            subprocess.run(
-                [
-                    "docker", "compose", "-f", COMPOSE_FILE,
-                    "rm", "-s", "-v", "-f", svc,
-                ]
-            )
-    else:
-        _docker_compose(runner, "down", "-v", "--remove-orphans")
+    subprocess.run(["docker", "compose", "-f", COMPOSE_FILE, "stop", service], stdin=subprocess.DEVNULL)
 
+    if databases:
+        db_conf = resolve_db_config(inst_conf, config)
+        db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
+        if db_conf.get("create_container", True):
+            # Straight into the Postgres service: the instance is stopped.
+            target, host_args = get_db_host(inst_conf["database"], db_conf), []
+        else:
+            # An external Postgres is only reachable through the instance.
+            subprocess.run(["docker", "compose", "-f", COMPOSE_FILE, "start", service], stdin=subprocess.DEVNULL)
+            target = service
+            host_args = [
+                "-h", get_db_host(inst_conf["database"], db_conf),
+                "-p", str(get_db_internal_port(db_conf)),
+            ]
+        for dbname in databases:
+            runner.info(f"\n→ Eliminando base de datos '{dbname}'...")
+            if not _drop_database(runner, target, db_user, db_password, dbname, host_args):
+                runner.error(
+                    f"❌ No se pudo eliminar '{dbname}'. Se detuvo antes de borrar "
+                    "el contenedor, los volúmenes y la imagen: corrige y vuelve a "
+                    "correr el comando."
+                )
+                sys.exit(1)
+            runner.info(f"✅ Base de datos '{dbname}' eliminada.")
+
+    subprocess.run(
+        ["docker", "compose", "-f", COMPOSE_FILE, "rm", "-s", "-f", service],
+        stdin=subprocess.DEVNULL,
+    )
+    if volumes:
+        subprocess.run(["docker", "volume", "rm", *volumes])
+    if has_image:
+        subprocess.run(["docker", "image", "rm", image])
+
+    runner.info(f"\n🛑 Instancia '{instance}' eliminada.\n")
+    _offer_restart(runner, config, instance)
+
+
+def _remove_environment(runner: "Runner", config: dict) -> None:
+    """Remove every container and volume of the Compose project — the
+    Postgres ones included, that is, the databases of all instances.
+    Confirmed by typing the project name, not with a yes/no."""
+    project = _compose_project()
+    volumes = _project_volumes(project)
+    pg_volumes = {
+        name
+        for db_name in config.get("databases", {})
+        for name in _project_volumes(project, f"{db_name}-data")
+    }
+    listing = "\n".join(
+        f"  - {name}" + ("  ← Postgres: TODAS sus bases de datos" if name in pg_volumes else "")
+        for name in volumes
+    ) or "  (no hay volúmenes creados)"
+    runner.warn(
+        f"\n⚠️  \033[1mPELIGRO\033[0m: esto eliminará \033[91mTODAS\033[0m las "
+        f"instancias del proyecto '{project}' y estos volúmenes:\n{listing}\n"
+        "Esto NO se puede deshacer."
+    )
+    typed = runner.prompt_text(
+        f"Escribe el nombre del proyecto ('{project}') para confirmar"
+    )
+    if (typed or "").strip() != project:
+        runner.info("\nOperación cancelada.")
+        return
+
+    _docker_compose(runner, "down", "-v", "--remove-orphans")
     runner.info("\n🛑 Eliminado.\n")
-
-    if runner.confirm(
-        "¿Deseas levantar el entorno nuevamente en blanco?", default=True
-    ):
-        start_odoo(runner, config, instance)
+    _offer_restart(runner, config, None)
 
 
 # ============================================================

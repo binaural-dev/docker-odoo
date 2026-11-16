@@ -284,7 +284,7 @@ El script `./odoo` es un shim liviano (~690 LOC, sobre todo la definición de ar
 | `shell <instance> <subcomando> ...` | Shell operativo de Odoo contra una instancia: `search`, `read`/`browse`, `count`, `create`, `write`, `unlink`, `method` (llama métodos, incluidos privados) y REPL interactivo (`shell`). Basado en `click-odoo` (ya instalado en las imágenes). Ver `./odoo shell --help`. |
 | `logs [instance]` | Muestra logs en tiempo real. |
 | `list` | Lista contenedores en ejecución. |
-| `remove [instance]` | Elimina contenedores y volúmenes. |
+| `remove [instance] [--full\|--dbs]` | Con instancia: elimina la instancia completa (contenedor, volúmenes, imagen y las bases de su `db_filter`) o solo algunas de sus bases. Sin instancia: todo el entorno, bases de todas las instancias incluidas. Ver `docs/comandos-odoo.md`. |
 | `fix-files [instance]` | Corrige permisos del filestore. |
 | `psql <instance> -d <db>` | Conecta a PostgreSQL. Con `--ps`/`--postgres` en vez de instancia, elegí cualquier base de cualquier servicio de Postgres, sin filtrar (rompe el `NOLOGIN` del rol bootstrap brevemente si hace falta). `psql remove <instance> -d <db>` (o `psql remove --ps`) elimina una base con confirmación explícita. |
 | `restore <instance> -z <zip> -d <db>` | Restaura una base de datos y filestore desde un ZIP (passthrough directo a `scripts/odoo_restore restore`, ver más abajo). |

@@ -182,8 +182,8 @@ class DispatchMixin:
                 ConfirmModal(
                     title="Eliminar instancia",
                     message=(
-                        f"¿Eliminar contenedores y volúmenes de "
-                        f"[b]{target}[/b]?"
+                        f"¿Eliminar [b]{target}[/b]? En la terminal se elige "
+                        f"qué borrar y se confirma escribiendo el nombre."
                     ),
                 ),
                 lambda confirmed: (
