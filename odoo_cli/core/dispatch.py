@@ -256,7 +256,11 @@ def dispatch(
         list_containers(runner, config)
 
     elif args.action == "remove":
-        remove_odoo(runner, config, args.instance)
+        mode = getattr(args, "remove_mode", None)
+        if mode and not args.instance:
+            runner.error("Error: --full y --dbs requieren una instancia.")
+            sys.exit(1)
+        remove_odoo(runner, config, args.instance, mode)
 
     elif args.action == "fix-files":
         fix_filestore(runner, config, args.instance)

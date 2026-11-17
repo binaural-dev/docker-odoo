@@ -631,7 +631,8 @@ def _drop_database(
     def run_dropdb() -> subprocess.CompletedProcess:
         return subprocess.run(
             [*base, "dropdb", "-U", pg_user, *host_args, dbname],
-            capture_output=True, text=True,
+            # ``docker compose exec`` would otherwise swallow pending input.
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
         )
 
     result = run_dropdb()
@@ -649,7 +650,7 @@ def _drop_database(
             [*base, "psql", "-U", pg_user, *host_args, "-d", "postgres", "-tAc",
              f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
              f"WHERE datname = '{dbname}' AND pid <> pg_backend_pid();"],
-            capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, capture_output=True, text=True,
         )
         result = run_dropdb()
         if result.returncode == 0:
@@ -812,7 +813,7 @@ def psql_remove_database(
         get_db_host,
         get_db_internal_port,
     )
-    from odoo_cli.core.instance import get_databases
+    from odoo_cli.core.instance import list_instance_databases
     from odoo_cli.core.prompts import prompt_for_database, prompt_for_instance
 
     if use_ps:
@@ -874,7 +875,9 @@ def psql_remove_database(
     if dbname:
         target_dbs = [dbname]
     else:
-        databases = get_databases(config, instance)
+        # Asked to the Postgres service, so it also works with the instance
+        # stopped (``remove <instance> --dbs`` included).
+        databases = list_instance_databases(config, instance) or []
         if databases:
             target_dbs = runner.select_many(
                 f"Selecciona base(s) de datos para '{instance}' a ELIMINAR",
@@ -898,12 +901,17 @@ def psql_remove_database(
         runner.info("Cancelado.")
         return
 
-    host_args = ["--host", db_host, "--port", str(db_port)]
+    if db_conf.get("create_container", True):
+        # Straight into the Postgres service: works with the instance stopped.
+        target, host_args = db_host, []
+    else:
+        # An external Postgres is only reachable through the instance.
+        target, host_args = service, ["--host", db_host, "--port", str(db_port)]
     hubo_error = False
     for target_db in target_dbs:
         runner.info(f"\n→ Eliminando base de datos '{target_db}' de '{instance}'...")
         if _drop_database(
-            runner, service, db_user, db_password, target_db, host_args=host_args
+            runner, target, db_user, db_password, target_db, host_args=host_args
         ):
             runner.info(f"✅ Base de datos '{target_db}' eliminada.")
         else:

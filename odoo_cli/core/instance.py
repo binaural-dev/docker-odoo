@@ -97,6 +97,69 @@ def get_db_services(
 # ============================================================
 
 
+def has_own_db_filter(db_filter: str | None) -> bool:
+    """Whether ``db_filter`` actually narrows the databases to one
+    instance. Missing or ``*`` means every database of the Postgres
+    service, including those of other instances sharing it."""
+    return bool(db_filter) and db_filter != "*"
+
+
+def _db_filter_where(db_filter: str | None) -> str:
+    """WHERE clause over ``pg_database`` for the databases of an instance:
+    real databases only, narrowed by its ``db_filter`` when it has one."""
+    where_clause = (
+        "datistemplate = false AND datname NOT IN ('postgres', 'template1')"
+    )
+    if has_own_db_filter(db_filter):
+        escaped_filter = db_filter.replace("'", "''")
+        where_clause += f" AND datname ~ '{escaped_filter}'"
+    return where_clause
+
+
+def list_instance_databases(config: dict, instance: str) -> list[str] | None:
+    """Databases of an instance, asked to its Postgres service directly.
+
+    Unlike :func:`get_databases`, this does not go through the Odoo
+    container, so it works with the instance stopped -- which is how
+    ``remove`` needs it, since it stops the instance before dropping its
+    databases. Uses the instance's own credentials and its ``db_filter``.
+
+    An external Postgres (``create_container: false``) has no service to
+    exec into, so it falls back to :func:`get_databases`. Returns ``None``
+    when the listing itself fails, ``[]`` when there is nothing to list.
+    """
+    from generators.config_loader import (
+        get_db_host,
+        resolve_db_config,
+        resolve_instance_config,
+        resolve_instance_db_creds,
+    )
+
+    inst_conf = config["instances"][instance]
+    db_conf = resolve_db_config(inst_conf, config)
+    if not db_conf.get("create_container", True):
+        return get_databases(config, instance)
+
+    db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
+    db_filter = resolve_instance_config(inst_conf, config).get("db_filter")
+    result = subprocess.run(
+        [
+            "docker", "compose", "-f", _COMPOSE_FILE, "exec", "-T",
+            "-e", f"PGPASSWORD={db_password}",
+            get_db_host(inst_conf["database"], db_conf),
+            "psql", "-U", db_user, "-d", "postgres", "-At", "-c",
+            f"SELECT datname FROM pg_database WHERE {_db_filter_where(db_filter)} "
+            f"ORDER BY datname;",
+        ],
+        # Without this, ``docker compose exec`` swallows whatever is waiting
+        # on our stdin -- the answers to the prompts that come next.
+        stdin=subprocess.DEVNULL, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return [name.strip() for name in result.stdout.splitlines() if name.strip()]
+
+
 def get_databases(config: dict, instance: str) -> list[str]:
     """Fetch database names from the postgres container of an instance.
 
@@ -134,13 +197,8 @@ def get_databases(config: dict, instance: str) -> list[str]:
         odoo_conf = resolve_instance_config(inst_conf, config)
         db_filter = odoo_conf.get("db_filter")
 
-        where_clause = (
-            "datistemplate = false AND datname NOT IN ('postgres', 'template1')"
-        )
-        if db_filter and db_filter != "*":
-            escaped_filter = db_filter.replace("'", "''")
-            where_clause += f" AND datname ~ '{escaped_filter}'"
-        else:
+        where_clause = _db_filter_where(db_filter)
+        if not has_own_db_filter(db_filter):
             print(
                 f"\n⚠️  La instancia '{instance}' no tiene un db_filter "
                 f"especifico (o es '*') -- se listaran TODAS las bases del "

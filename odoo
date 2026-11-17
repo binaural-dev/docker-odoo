@@ -225,11 +225,27 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # remove
     p = subparsers.add_parser(
-        "remove", help="Elimina contenedores y volúmenes"
+        "remove",
+        help="Elimina una instancia completa o solo sus bases de datos",
+        description=(
+            "Con instancia, pregunta qué eliminar: la instancia completa "
+            "(contenedor, volúmenes, imagen y las bases de su db_filter) o solo "
+            "algunas de sus bases. Sin instancia, elimina todo el entorno, "
+            "incluidas las bases de todas las instancias."
+        ),
     )
     p.add_argument(
         "instance", nargs="?", default=None,
         help="Nombre de instancia (opcional)",
+    )
+    remove_mode = p.add_mutually_exclusive_group()
+    remove_mode.add_argument(
+        "--full", dest="remove_mode", action="store_const", const="full",
+        help="Instancia completa, sin preguntar el modo",
+    )
+    remove_mode.add_argument(
+        "--dbs", dest="remove_mode", action="store_const", const="dbs",
+        help="Solo bases de datos de la instancia, sin preguntar el modo",
     )
 
     # fix-files

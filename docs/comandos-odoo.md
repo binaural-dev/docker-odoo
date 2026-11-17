@@ -23,7 +23,7 @@ tocar Docker.
 | `bash [instancia]` | opcional* | Shell root dentro del contenedor Odoo |
 | `logs [instancia]` | opcional* | `docker compose logs -f`, tail 10, streaming |
 | `list` | — | `docker compose ps` |
-| `remove [instancia]` | opcional* | Borra contenedores + **volúmenes** (pide confirmación) |
+| `remove [instancia] [--full\|--dbs]` | opcional* | Instancia completa (contenedor, volúmenes, imagen y bases) o solo sus bases; sin instancia, todo el entorno |
 | `fix-files [instancia]` | opcional* | `chown -R odoo:odoo` sobre el filestore |
 | `psql [instancia] [-d db]` | opcional* | Conecta a psql dentro del contenedor Odoo |
 | `pw [instancia] [-d db] [-l login] [-p pass]` | opcional* | Resetea contraseña de un usuario |
@@ -81,16 +81,35 @@ la usa** — si la comparte con otra, te avisa cuál y la deja corriendo.
 
 Es literalmente `stop_odoo` seguido de `start_odoo` sobre el mismo target.
 
-### `remove [instancia]`
+### `remove [instancia] [--full|--dbs]`
 
-**Destructivo** — borra contenedores y volúmenes (datos + filestore). Pide
-confirmación explícita (default `No`), y al terminar pregunta si querés
-levantar el entorno de nuevo en blanco (default `Sí`). Sin instancia,
-apunta a "TODAS las instancias y bases de datos".
+**Destructivo.** Con instancia, pregunta qué eliminar (o lo toma de `--full` / `--dbs`):
+
+- **Instancia completa** (`--full`): el contenedor, sus volúmenes con nombre
+  (`<proyecto>_<instancia>-web`, `-data` y los heredados `-py3`/`-py` si
+  existen), su imagen `local_odoo_<proyecto>_<instancia>:<versión>` y **todas
+  las bases que cumplen su `db_filter`**. Antes de confirmar muestra el
+  inventario completo; se confirma **escribiendo el nombre de la instancia**.
+  Detiene la instancia, borra las bases y, solo si todas se borraron, elimina
+  contenedor, volúmenes e imagen; si una base falla, no borra nada más y se
+  puede volver a correr. Si la instancia no tiene `db_filter` propio (o es
+  `*`), se rechaza sin tocar nada: no hay forma de saber cuáles bases son
+  suyas sin arrastrar las de otras instancias del mismo Postgres.
+- **Solo bases de datos** (`--dbs`): elegís una o varias bases de la instancia
+  y se borran con confirmación; contenedor y volúmenes quedan. Es lo mismo que
+  `psql remove <instancia>`.
+
+Las bases de otras instancias nunca se tocan. Al terminar pregunta si querés
+levantarla de nuevo en blanco (default `No`).
+
+Sin instancia, elimina **todo el entorno** con `down -v`: todos los
+contenedores y volúmenes del proyecto, **incluidos los de Postgres** (las bases
+de todas las instancias). Lista los volúmenes, marca los de Postgres y se
+confirma **escribiendo el nombre del proyecto** de Compose.
 
 **Bloqueado para producción**: si la instancia objetivo tiene
 `"production": true` en `instances.json`, el comando se rechaza directo
-(exit code 1) — ni siquiera se llega a mostrar la confirmación. Lo mismo
+(exit code 1) — ni siquiera se llega a mostrar ninguna pregunta. Lo mismo
 pasa con `remove` sin argumento si *cualquier* instancia de la config está
 marcada como producción, ya que borraría todo por igual. No hay flag ni
 confirmación que lo salve: la única forma de desbloquearlo es editar
