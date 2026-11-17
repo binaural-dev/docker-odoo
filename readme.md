@@ -887,6 +887,20 @@ scripts/precommit binaural-19.0 -m integra-addons/modulo_c,enterprise/modulo_c
 2. Nginx escucha en los puertos externos y enruta a los contenedores Odoo internos (puertos 8069/8071).
 3. Todas las instancias montan `./src` y cada una filtra sus addons via la variable `INSTANCE_ADDONS`.
 4. Instancias con la misma `odoo_version` comparten la misma imagen Docker.
+5. Cada instancia tiene dos volúmenes con nombre: `<instancia>-web` (`/var/lib/odoo`) y `<instancia>-data` (`/home/odoo/data`, el filestore). El código de Odoo y las librerías del sistema salen siempre de la imagen.
+
+### Migración: volúmenes `-py` / `-py3`
+
+Hasta hace poco cada instancia también montaba `<instancia>-py` en `/usr/lib` (donde vive Odoo) y `<instancia>-py3` en `/usr/local/lib`. Docker llena un volumen con nombre desde la imagen **solo la primera vez**, así que esas instancias siguen corriendo el Odoo y las librerías del día en que se crearon, aunque se reconstruya la imagen (`dpkg` muestra la versión nueva igual). No cacheaban nada: los requirements se instalan en cada arranque dentro de `/opt/venv`.
+
+`./odoo build` avisa qué instancias todavía los tienen. Para cada una:
+
+```bash
+docker compose -f docker-compose.generated.yml up -d --force-recreate odoo-<instancia>
+docker volume rm docker-odoo_<instancia>-py docker-odoo_<instancia>-py3
+```
+
+Lo que alguien haya instalado a mano dentro de un contenedor (apt o pip del sistema) se pierde al recrearlo: eso tiene que ir al Dockerfile o a `CUSTOM_REQUIREMENTS`. `./odoo remove <instancia> --full` también borra estos volúmenes.
 
 ## Perfiles de PostgreSQL
 

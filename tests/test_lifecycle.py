@@ -314,6 +314,44 @@ class PsqlRemoveInstanceTest(unittest.TestCase):
         self.assertIn("pg.example", drop.call_args.kwargs["host_args"])
 
 
+class LegacyLibVolumesTest(unittest.TestCase):
+    """After a build, ``-py3``/``-py`` volumes left by older checkouts are
+    pointed out (never removed) with the commands to get rid of them."""
+
+    def _listing(self, stdout):
+        completed = subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+        with mock.patch.object(lifecycle, "_compose_project", return_value="proj"), mock.patch.object(
+            lifecycle.subprocess, "run", return_value=completed
+        ):
+            return lifecycle._legacy_lib_volumes()
+
+    def test_groups_leftovers_by_instance_by_compose_label(self):
+        found = self._listing(
+            "proj_acme-py acme-py\nproj_acme-py3 acme-py3\nproj_acme-web acme-web\n"
+            "proj_v19-data v19-data\nproj_my-py-web my-py-web\n"
+        )
+
+        self.assertEqual(found, {"acme": ["proj_acme-py", "proj_acme-py3"]})
+
+    def test_warns_with_recreate_and_remove_commands(self):
+        runner = FakeRunner()
+        with mock.patch.object(
+            lifecycle, "_legacy_lib_volumes", return_value={"acme": ["proj_acme-py3", "proj_acme-py"]}
+        ):
+            lifecycle._warn_legacy_lib_volumes(runner)
+
+        warning = next(msg for level, msg in runner.messages if level == "warn")
+        self.assertIn("up -d --force-recreate odoo-acme", warning)
+        self.assertIn("docker volume rm proj_acme-py proj_acme-py3", warning)
+
+    def test_nothing_to_say_without_leftovers(self):
+        runner = FakeRunner()
+        with mock.patch.object(lifecycle, "_legacy_lib_volumes", return_value={}):
+            lifecycle._warn_legacy_lib_volumes(runner)
+
+        self.assertEqual(runner.messages, [])
+
+
 class InstanceDatabasesListingTest(unittest.TestCase):
     def test_queries_the_postgres_service_with_the_escaped_filter(self):
         from odoo_cli.core import instance
