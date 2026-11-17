@@ -10,6 +10,7 @@ them.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -107,29 +108,12 @@ def validate_instances(runner: "Runner", config: dict) -> None:
         sys.exit(1)
 
 
-def _collect_config_ports(config: dict) -> set[int]:
-    """Every host-side port this ``instances.json`` wants to bind."""
-    ports: set[int] = set()
+def _collect_config_ports(config: dict, debug_ports: dict | None = None) -> set[int]:
+    """Every host-side port this ``instances.json`` wants to bind
+    (``debug_ports``: already-resolved {instance: port}, see debug_ports.py)."""
+    from generators.config_loader import collect_host_ports
 
-    for db_conf in config.get("databases", {}).values():
-        if db_conf.get("port"):
-            ports.add(db_conf["port"])
-
-    if config.get("pgadmin", {}).get("enabled"):
-        if config["pgadmin"].get("port"):
-            ports.add(config["pgadmin"]["port"])
-
-    if config.get("mailhog", {}).get("enabled"):
-        if config["mailhog"].get("http_port"):
-            ports.add(config["mailhog"]["http_port"])
-
-    for inst in config.get("instances", {}).values():
-        if inst.get("external_port"):
-            ports.add(inst["external_port"])
-        if inst.get("longpolling_port"):
-            ports.add(inst["longpolling_port"])
-
-    return ports
+    return collect_host_ports(config) | set((debug_ports or {}).values())
 
 
 def check_host_port_collisions(
@@ -151,7 +135,11 @@ def check_host_port_collisions(
     installed), this silently does nothing — Docker's own bind-conflict
     error remains the final safety net either way.
     """
-    wanted_ports = _collect_config_ports(config)
+    from generators.debug_ports import load_debug_ports
+
+    wanted_ports = _collect_config_ports(
+        config, load_debug_ports(os.getcwd())
+    )
     if not wanted_ports:
         return
 

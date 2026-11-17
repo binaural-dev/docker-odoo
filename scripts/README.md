@@ -6,6 +6,25 @@ La mayoría obtiene la configuración de `instances.json` a través de
 
 ---
 
+## `./odoo debug-setup` — Debug remoto (debugpy) por instancia
+
+No es un script de `scripts/`: vive en `odoo_cli/core/actions/debug.py`. Resumen
+operativo (detalle completo en `readme.md`, sección *Debug remoto*):
+
+```bash
+# instances.json: "debug": true en la instancia (17.0/19.0) -> ./odoo build -> ./odoo start <inst>
+./odoo debug-setup <inst>                 # core real del contenedor + .zed/debug.json
+./odoo debug-setup --prune                # limpia escenarios/puertos/copias obsoletas
+```
+
+- Terminar sesión: **Detach** (Stop/Rerun mata Odoo).
+- **Nunca** conexiones TCP vacías al puerto de debug (cuelgan el adaptador).
+- Breakpoints **condicionales** por base (`self.env.cr.dbname == "x"`): el
+  Postgres es compartido y el cron de una instancia procesa bases de otras.
+- Puertos: desde 5670, persistidos en `.debug/ports.json`; solo `127.0.0.1`.
+
+---
+
 ## `coverage` — Test runner con cobertura y DB temporal automática
 
 Ejecuta tests de Odoo con `coverage.py` **real** (no un proxy propio):

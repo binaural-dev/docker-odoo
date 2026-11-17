@@ -88,6 +88,13 @@ ARG USERNAME=odoo
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/19.0/requirements.txt /tmp/requirements.txt
 RUN /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
 
+# Remote debugging (./odoo debug-setup): debugpy pinned, installed in its own
+# directory (NOT in /opt/venv, NOT under /usr/lib or /usr/local/lib: those are
+# shadowed by per-instance volumes). The compose service adds
+# PYTHONPATH=/opt/debugpy only when the instance has "debug": true.
+RUN /usr/bin/python3 -m pip install --no-cache-dir --break-system-packages --target /opt/debugpy debugpy==1.8.14 \
+    && chmod -R a+rX /opt/debugpy
+
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-watchdog \

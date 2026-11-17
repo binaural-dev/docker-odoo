@@ -5,7 +5,22 @@ Resolves odoo_config references and applies overwrite_odoo_config merges.
 
 import json
 import os
+import re
 import sys
+
+# --- Debug remoto (debugpy) -------------------------------------------------
+# Puerto interno del contenedor donde escucha debugpy (siempre el mismo).
+DEBUG_INTERNAL_PORT = 5678
+# Los puertos de host se asignan en secuencia desde aquí (ver debug_ports.py).
+DEBUG_PORT_START = 5670
+# Versiones cuya imagen incluye debugpy (/opt/debugpy). Ampliar junto con
+# su Dockerfile en .resources/dockerfiles/.
+DEBUG_SUPPORTED_VERSIONS = ("17.0", "19.0")
+
+# Política de reinicio de los servicios odoo. Default "no": al encender la
+# máquina no debe arrancar todo de golpe (semáforo de RAM).
+DEFAULT_ODOO_RESTART = "no"
+_RESTART_RE = re.compile(r"^(no|always|unless-stopped|on-failure(:\d+)?)$")
 
 
 def _strip_json_comments(text: str) -> str:
@@ -136,6 +151,43 @@ def is_production_instance(inst_conf) -> bool:
     return bool(inst_conf.get("production", False))
 
 
+def is_debug_instance(inst_conf) -> bool:
+    """Return whether an instance is flagged for remote debugging."""
+    return bool(inst_conf.get("debug", False))
+
+
+def get_debug_instances(config):
+    """Names of the (enabled) instances with ``debug: true``, config order."""
+    return [
+        name for name, inst in config["instances"].items()
+        if is_debug_instance(inst)
+    ]
+
+
+def collect_host_ports(config):
+    """Every host-side port this config wants to publish (set of ints).
+
+    Single source of truth shared by ``validate_instances`` /
+    ``check_host_port_collisions`` and the debug-port allocator. The
+    database ``port`` is counted even when ``expose_host_port`` is off:
+    conservative, so a debug port never aliases it.
+    """
+    ports = set()
+    for db_conf in config.get("databases", {}).values():
+        if db_conf.get("port"):
+            ports.add(db_conf["port"])
+    if config.get("pgadmin", {}).get("enabled") and config["pgadmin"].get("port"):
+        ports.add(config["pgadmin"]["port"])
+    if config.get("mailhog", {}).get("enabled") and config["mailhog"].get("http_port"):
+        ports.add(config["mailhog"]["http_port"])
+    for inst in config.get("instances", {}).values():
+        if inst.get("external_port"):
+            ports.add(inst["external_port"])
+        if inst.get("longpolling_port"):
+            ports.add(inst["longpolling_port"])
+    return ports
+
+
 def _validate_config(config):
     """Validate the configuration structure."""
     required_sections = ["odoo_configs", "databases", "instances"]
@@ -155,6 +207,30 @@ def _validate_config(config):
         _validate_instance(inst_name, inst_conf, config)
 
     _validate_cron_dbfilter_isolation(config)
+    _validate_debug_ports(config)
+
+
+def _validate_debug_ports(config):
+    """Explicit ``debug_port`` values must be unique and not collide with
+    any other published host port (nginx 80, external/longpolling ports,
+    database/pgadmin/mailhog ports). Auto-assigned ports are chosen later
+    (debug_ports.py) already avoiding all of these."""
+    taken = collect_host_ports(config) | {80}
+    seen = {}
+    for name, inst in config["instances"].items():
+        port = inst.get("debug_port")
+        if port is None:
+            continue
+        if port in taken:
+            raise ValueError(
+                f"Instancia '{name}': debug_port {port} choca con otro puerto "
+                f"publicado (external_port, base de datos, pgadmin, mailhog o 80)"
+            )
+        if port in seen:
+            raise ValueError(
+                f"Instancia '{name}': debug_port {port} ya lo usa '{seen[port]}'"
+            )
+        seen[port] = name
 
 
 def _validate_database(db_name, db_conf):
@@ -212,6 +288,8 @@ def _validate_instance(inst_name, inst_conf, config):
             f"'production': true (usá './odoo update' en su lugar)."
         )
 
+    _validate_debug_fields(inst_name, inst_conf, odoo_conf)
+
     # Validate unique external_port
     ports = [
         v["external_port"]
@@ -219,6 +297,44 @@ def _validate_instance(inst_name, inst_conf, config):
     ]
     if len(ports) != len(set(ports)):
         raise ValueError("Los external_port de las instancias deben ser únicos")
+
+
+def _validate_debug_fields(inst_name, inst_conf, odoo_conf):
+    """Types/compatibility of 'debug', 'debug_port' and 'restart'."""
+    if "debug" in inst_conf and not isinstance(inst_conf["debug"], bool):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'debug' debe ser true/false, "
+            f"no {inst_conf['debug']!r}"
+        )
+    if "debug_port" in inst_conf:
+        port = inst_conf["debug_port"]
+        if isinstance(port, bool) or not isinstance(port, int) or not 1024 <= port <= 65535:
+            raise ValueError(
+                f"Instancia '{inst_name}': 'debug_port' debe ser un entero "
+                f"entre 1024 y 65535, no {port!r}"
+            )
+        if not is_debug_instance(inst_conf):
+            raise ValueError(
+                f"Instancia '{inst_name}': 'debug_port' requiere 'debug': true"
+            )
+    if is_debug_instance(inst_conf):
+        if is_production_instance(inst_conf):
+            raise ValueError(
+                f"Instancia '{inst_name}': 'debug' no puede estar activo junto a "
+                f"'production': true."
+            )
+        if inst_conf["odoo_version"] not in DEBUG_SUPPORTED_VERSIONS:
+            raise ValueError(
+                f"Instancia '{inst_name}': 'debug' solo está soportado para "
+                f"odoo_version {', '.join(DEBUG_SUPPORTED_VERSIONS)} "
+                f"(su imagen incluye debugpy), no {inst_conf['odoo_version']!r}"
+            )
+    restart = odoo_conf.get("restart", DEFAULT_ODOO_RESTART)
+    if not isinstance(restart, str) or not _RESTART_RE.match(restart):
+        raise ValueError(
+            f"Instancia '{inst_name}': 'restart' inválido ({restart!r}); "
+            f"use no, always, unless-stopped u on-failure[:N]"
+        )
 
 
 def _validate_cron_dbfilter_isolation(config):

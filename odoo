@@ -78,7 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
         epilog=(
             "Comandos por categoría:\n"
             "  Ciclo de vida       build, start, stop, restart, remove, fix-files\n"
-            "  Acceso / debug      bash, shell, logs, list, psql, pw\n"
+            "  Acceso / debug      bash, shell, logs, list, psql, pw, debug-setup\n"
             "  Módulos             update, init, test\n"
             "  Git / submódulos    sync, update-tags, update-tags-bulk, "
             "submodule-status\n"
@@ -688,6 +688,36 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("repo", nargs="?", default=None, help="URL del repositorio (SSH)")
     p.add_argument("branch", nargs="?", default=None, help="Rama del repositorio")
     p.add_argument("version", nargs="?", default=None, help="Versión de Odoo")
+
+    # debug-setup
+    p = subparsers.add_parser(
+        "debug-setup",
+        help="Prepara el debug remoto (core + config del editor) de instancias con debug: true",
+        description=(
+            "Extrae el core de Odoo que REALMENTE corre cada instancia con "
+            "\"debug\": true (sólo *.py, solo lectura) a src/debug/core-<ver>-<hash>/ "
+            "y regenera los escenarios 'Odoo <inst> (attach)' del editor. No "
+            "arranca Odoo; requiere la imagen construida ('./odoo build')."
+        ),
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Instancia (opcional; sin argumento, todas las que tienen debug: true)",
+    )
+    p.add_argument(
+        "--dest", default=None,
+        help="Directorio donde crear core-<ver>-<hash>/ (default src/debug; "
+             "debe estar dentro del proyecto)",
+    )
+    p.add_argument(
+        "--editor", default="zed",
+        help="Editor a configurar (default: zed)",
+    )
+    p.add_argument(
+        "--prune", action="store_true",
+        help="Elimina escenarios, puertos y copias del core de instancias que "
+             "ya no tienen debug: true",
+    )
 
     # tui — thin entry point that hands off to the Textual app
     subparsers.add_parser(

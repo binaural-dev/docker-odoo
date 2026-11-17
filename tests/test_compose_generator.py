@@ -176,5 +176,99 @@ class NginxGeneratorServiceNameTest(unittest.TestCase):
         self.assertNotIn("odoo-pgadmin", content)
 
 
+class _ComposeTmpMixin:
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="test_dbgcompose_")
+        self.addCleanup(self._tmp.cleanup)
+        self.base = self._tmp.name
+
+    def gen(self, config):
+        from tests.debug_fixtures import debug_config  # noqa: F401
+        path = generate_compose(
+            self.base, config, {"17.0": ".resources/Dockerfile.17.0", "19.0": ".resources/Dockerfile.19.0"}
+        )
+        with open(path) as f:
+            return f.read()
+
+    @staticmethod
+    def service(content, name):
+        start = content.index(f"  {name}:\n")
+        nxt = content.find("\n  ", start + 5 + len(name))
+        # service block ends at the next 2-space-indented key line
+        import re
+        m = re.search(r"\n  [a-z][^\n]*:\n", content[start + 1:])
+        return content[start: start + 1 + m.start()] if m else content[start:]
+
+
+class OdooRestartPolicyTest(_ComposeTmpMixin, unittest.TestCase):
+    def test_odoo_restart_defaults_to_no_and_db_nginx_untouched(self):
+        from tests.debug_fixtures import debug_config
+        content = self.gen(debug_config(False, False))
+        self.assertIn('restart: "no"', self.service(content, "odoo-dbg-a"))
+        self.assertIn("restart: always", self.service(content, "db-dbgdb"))
+        self.assertIn("restart: always", self.service(content, "nginx"))
+
+    def test_restart_overridable_per_odoo_config(self):
+        from tests.debug_fixtures import debug_config
+        cfg = debug_config(False, False)
+        cfg["odoo_configs"]["base"]["restart"] = "unless-stopped"
+        content = self.gen(cfg)
+        self.assertIn('restart: "unless-stopped"', self.service(content, "odoo-dbg-b"))
+
+
+class DebugComposeServiceTest(_ComposeTmpMixin, unittest.TestCase):
+    def test_debug_service_has_command_ports_env_and_workers_zero(self):
+        from tests.debug_fixtures import debug_config
+        content = self.gen(debug_config(True, False))
+        svc = self.service(content, "odoo-dbg-a")
+        self.assertIn(
+            "command: /usr/bin/python3 -Xfrozen_modules=off -m debugpy "
+            "--listen 0.0.0.0:5678 /usr/bin/odoo --dev=qweb,xml,werkzeug", svc)
+        self.assertIn('"127.0.0.1:5670:5678"', svc)
+        self.assertIn("PYTHONPATH: /opt/debugpy", svc)
+        self.assertIn("WORKERS: 0", svc)  # base config says 4
+        self.assertNotIn("--dev=all", svc)
+
+    def test_dev_mode_never_leaks_into_debug_command(self):
+        from tests.debug_fixtures import debug_config
+        cfg = debug_config(True, False)
+        cfg["odoo_configs"]["base"]["dev_mode"] = True
+        svc = self.service(self.gen(cfg), "odoo-dbg-a")
+        self.assertNotIn("--dev=all", svc)
+
+    def test_non_debug_service_unchanged(self):
+        from tests.debug_fixtures import debug_config
+        svc = self.service(self.gen(debug_config(True, False)), "odoo-dbg-b")
+        self.assertIn("command: odoo\n", svc)
+        self.assertNotIn("debugpy", svc)
+        self.assertNotIn("PYTHONPATH", svc)
+        self.assertNotIn("5678", svc)
+        self.assertIn("WORKERS: 4", svc)
+
+    def test_ports_sequence_and_persistence_across_regeneration(self):
+        from tests.debug_fixtures import debug_config
+        content = self.gen(debug_config(True, True))
+        self.assertIn('"127.0.0.1:5670:5678"', self.service(content, "odoo-dbg-a"))
+        self.assertIn('"127.0.0.1:5671:5678"', self.service(content, "odoo-dbg-b"))
+        # only dbg-b in debug now: keeps 5671 (does not shift to 5670)
+        content = self.gen(debug_config(False, True))
+        self.assertIn('"127.0.0.1:5671:5678"', self.service(content, "odoo-dbg-b"))
+        # dbg-a comes back: gets its old port, not a new one
+        content = self.gen(debug_config(True, True))
+        self.assertIn('"127.0.0.1:5670:5678"', self.service(content, "odoo-dbg-a"))
+
+    def test_ports_json_written_under_base_path(self):
+        from tests.debug_fixtures import debug_config
+        import json
+        self.gen(debug_config(True, True))
+        with open(os.path.join(self.base, ".debug", "ports.json")) as f:
+            self.assertEqual(json.load(f)["ports"], {"dbg-a": 5670, "dbg-b": 5671})
+
+    def test_no_debug_instances_writes_no_ports_file(self):
+        from tests.debug_fixtures import debug_config
+        self.gen(debug_config(False, False))
+        self.assertFalse(os.path.exists(os.path.join(self.base, ".debug")))
+
+
 if __name__ == "__main__":
     unittest.main()

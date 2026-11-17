@@ -6,7 +6,11 @@ Creates services for managed databases, Odoo instances, nginx, and optionally pg
 import os
 import re
 
+from .debug_ports import resolve_debug_ports
 from .config_loader import (
+    DEBUG_INTERNAL_PORT,
+    DEFAULT_ODOO_RESTART,
+    is_debug_instance,
     resolve_instance_config,
     resolve_db_config,
     get_db_host,
@@ -15,6 +19,16 @@ from .config_loader import (
     get_odoo_minor,
     is_production_instance,
 )
+
+# Remote-debug command: system python (same interpreter as /usr/bin/odoo's
+# shebang), debugpy resolved via PYTHONPATH=/opt/debugpy. NOT --dev=all: its
+# reload does execv and kills the debug session. -Xfrozen_modules=off avoids
+# debugpy skipping breakpoints in frozen stdlib modules (Python 3.11+).
+DEBUG_COMMAND = (
+    f"/usr/bin/python3 -Xfrozen_modules=off -m debugpy "
+    f"--listen 0.0.0.0:{DEBUG_INTERNAL_PORT} /usr/bin/odoo --dev=qweb,xml,werkzeug"
+)
+DEBUGPY_PYTHONPATH = "/opt/debugpy"
 
 # Internal ports used by Odoo (never exposed directly; nginx proxies them)
 ODOO_HTTP_PORT = 8069
@@ -51,6 +65,7 @@ def generate_compose(base_path, config, dockerfile_map):
     """
     lines = _header()
     project = _project_slug(base_path)
+    debug_ports = resolve_debug_ports(base_path, config)
 
     # --- Database services ---
     managed_dbs = get_managed_databases(config)
@@ -66,7 +81,8 @@ def generate_compose(base_path, config, dockerfile_map):
         odoo_version = inst_conf["odoo_version"]
         dockerfile = dockerfile_map[odoo_version]
         lines += _odoo_service(
-            inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf, project
+            inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf, project,
+            debug_port=debug_ports.get(inst_name),
         )
 
     # --- Nginx service ---
@@ -170,7 +186,8 @@ def _db_service(db_name, db_conf, project):
     return lines
 
 
-def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile, mailhog_conf, project):
+def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
+                  mailhog_conf, project, debug_port=None):
     odoo_version = inst_conf["odoo_version"]
     odoo_minor = get_odoo_minor(odoo_version)
     container_name = f"odoo-{inst_name}"
@@ -204,10 +221,21 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
     dev_mode = odoo_conf.get("dev_mode", False) and not is_production_instance(inst_conf)
     command = "odoo --dev=all" if dev_mode else "odoo"
 
+    # Remote debugging (debug: true): debugpy replaces dev mode, and Odoo
+    # must run single-process (workers=0) for the debugger to see requests.
+    debug = is_debug_instance(inst_conf) and debug_port is not None
+    workers = odoo_conf.get("workers", 2)
+    if debug:
+        command = DEBUG_COMMAND
+        workers = 0
+    # Odoo services default to restart "no" (RAM semaphore: nothing may
+    # autostart at boot). Overridable via odoo_config "restart".
+    restart = odoo_conf.get("restart", DEFAULT_ODOO_RESTART)
+
     lines = [
         f"  {container_name}:",
         f"    command: {command}",
-        "    restart: always",
+        f'    restart: "{restart}"',
         "    build:",
         "      context: .",
         f"      dockerfile: ./{dockerfile}",
@@ -225,6 +253,12 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
         lines.append("    depends_on:")
         for dep in depends:
             lines.append(f"      - {dep}")
+
+    if debug:
+        lines += [
+            "    ports:",
+            f'      - "127.0.0.1:{debug_port}:{DEBUG_INTERNAL_PORT}"',
+        ]
 
     lines += [
         "    volumes:",
@@ -260,7 +294,7 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
         f"      SMTP_PORT: {smtp_port}",
         f"      DBFILTER: {odoo_conf.get('db_filter', '')}",
         f"      SERVER_WIDE_MODULES: {odoo_conf.get('server_wide_modules', '')}",
-        f"      WORKERS: {odoo_conf.get('workers', 2)}",
+        f"      WORKERS: {workers}",
         f"      LIST_DB: {odoo_conf.get('list_db', True)}",
         f"      DB_NAME: {odoo_conf.get('db_name', 'False')}",
         f"      WITHOUT_DEMO: {odoo_conf.get('without_demo', True)}",
@@ -277,6 +311,9 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
         f"      LIMIT_TIME_CPU: {odoo_conf.get('limit_time_cpu', 60)}",
         f"      DB_MAXCONN: {odoo_conf.get('db_maxconn', 200)}",
     ]
+
+    if debug:
+        lines.append(f"      PYTHONPATH: {DEBUGPY_PYTHONPATH}")
 
     # INSTANCE_ADDONS: used by the modified 400-auto-detect-addons entrypoint
     if addons_str:
