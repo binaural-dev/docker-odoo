@@ -44,6 +44,7 @@ from odoo_cli.core.actions.access import (
     run_shell,
     show_logs,
 )
+from odoo_cli.core.actions.debug import debug_setup
 from odoo_cli.core.actions.hosts import (
     hosts_apply,
     hosts_dry_run,
@@ -247,6 +248,12 @@ def dispatch(
 
         return run_shell(
             runner, base_path, instance, shell_db, args.shell_user, shell_args
+        )
+
+    elif args.action == "debug-setup":
+        return debug_setup(
+            runner, config, base_path, args.instance,
+            dest=args.dest, editor=args.editor, prune=args.prune,
         )
 
     elif args.action == "logs":

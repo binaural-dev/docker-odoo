@@ -33,6 +33,10 @@ tus necesidades. El archivo tiene 3 secciones principales:
 
 Define configuraciones nombradas que luego se referencian desde las instancias. Equivalen a los parámetros del `odoo.conf`.
 
+**`restart` de los servicios Odoo** (clave opcional del `odoo_config`/`overwrite_odoo_config`, default `"no"`; valores: `no`, `always`, `unless-stopped`, `on-failure[:N]`). Antes era `always` fijo; ahora al encender la máquina/Docker ninguna instancia arranca sola (semáforo de RAM): se levantan a mano con `./odoo start`. Esto aplica a **todas** las instancias, también las `production: true` (ponles `"restart": "unless-stopped"` si necesitan autoarrancar). Los servicios `db`, `nginx`, `pgadmin` y `mailhog` conservan `restart: always`.
+
+**Debug remoto (`"debug": true`)**: ver [Debug remoto con debugpy](#debug-remoto-con-debugpy-debug-setup).
+
 ```json
 {
   "odoo_configs": {
@@ -238,6 +242,25 @@ Para correr `./odoo build` en un contexto no interactivo (CI, automatización), 
 }
 ```
 
+## Debug remoto con debugpy (`debug-setup`)
+
+Cada instancia puede depurarse desde el editor (hoy **Zed**, adapter `Debugpy`, request `attach`) sin tocar a las demás.
+
+1. En `instances.json`, en la instancia: `"debug": true` (opcional `"debug_port": 5690` para fijar el puerto a mano). Solo `odoo_version` 17.0 y 19.0 (sus imágenes incluyen `debugpy==1.8.14` en `/opt/debugpy`); no se permite junto a `production: true`.
+2. `./odoo build` y levantar la instancia (`./odoo start <inst>`). Con `debug: true` el generador fuerza `workers: 0`, ejecuta `/usr/bin/python3 -Xfrozen_modules=off -m debugpy --listen 0.0.0.0:5678 /usr/bin/odoo --dev=qweb,xml,werkzeug` (nunca `--dev=all`: su reload hace `execv` y mata la sesión), añade `PYTHONPATH=/opt/debugpy` y publica `127.0.0.1:<puerto>:5678`. Las imágenes ya construidas hay que rehacerlas una vez para que traigan debugpy.
+3. `./odoo debug-setup [<inst>]`: extrae el core de Odoo que **realmente corre** la instancia (lo lee de su volumen `<inst>-py` con un contenedor efímero `compose run --entrypoint sh`; no arranca Odoo; requiere imagen construida) a `src/debug/core-<ver>-<hash>/` (solo `*.py`, solo lectura; instancias con el mismo core comparten copia, es idempotente) y regenera en `.zed/debug.json` los escenarios `Odoo <inst> (attach)` (conservando los tuyos y dejando `.zed/debug.json.bak`). `--dest` cambia el directorio padre de las copias (debe estar dentro del proyecto: Zed solo enlaza breakpoints a archivos del worktree). `--prune` elimina escenarios, puertos y copias de instancias que ya no son debug. `--editor` selecciona el editor; para añadir otro (p. ej. VS Code → `.vscode/launch.json`) basta una función en el registro `EDITORS` de `odoo_cli/core/actions/debug.py`.
+4. Puertos del host: secuencia desde **5670**, persistidos en `.debug/ports.json` (activar, desactivar o reordenar instancias no mueve los ya asignados); se validan contra todos los puertos publicados (external, db, pgadmin, mailhog, 80).
+
+Por qué una copia del core: Odoo corre del `.deb` (`/usr/lib/python3/dist-packages/odoo`), que puede diferir de `src/odoo<ver>`; solo contra los archivos del contenedor las líneas coinciden. El mapeo `core → /usr/lib/python3/dist-packages/odoo` va primero y `src → /home/odoo/src` después (`src/debug` cae dentro de `src`).
+
+**Reglas de uso (importante):**
+- Para terminar la sesión usa **Detach**. Stop/Rerun de Zed manda `disconnect` con `terminateDebuggee=true`: debugpy mata Odoo y el contenedor se detiene (arrancarlo tarda ~40 s).
+- **Nunca** abras conexiones TCP vacías al puerto de debug (healthchecks, `nc -z`, `connect`+`close`): cuelgan el adaptador hasta reiniciar el contenedor.
+- El Postgres es compartido y el cron de una instancia procesa también bases de *otras*: usa breakpoints **condicionales** por base, p. ej. `self.env.cr.dbname == "mi_base"`.
+- Un breakpoint en una línea sin bytecode (`if (`, `else:`, comentarios) se mueve en silencio a otra línea.
+- Con `workers: 0` el servidor es de un solo proceso: una pausa congela esa instancia.
+- Nota: `src/debug/` cae en `src/`, así que en modo legacy (sin `INSTANCE_ADDONS`) el entrypoint lo agrega como path de addons (vacío).
+
 ## Estructura de carpetas
 
 ```
@@ -280,6 +303,7 @@ El script `./odoo` es un shim liviano (~690 LOC, sobre todo la definición de ar
 | `start [instance]` | Inicia instancia(s), DB(s) managed y nginx. |
 | `stop [instance]` | Detiene instancia(s). Si la DB no es usada por otras, también se detiene. |
 | `restart [instance]` | Reinicia instancia(s). |
+| `debug-setup [instance] [--dest R] [--editor zed] [--prune]` | Prepara el debug remoto de las instancias con `debug: true` (core del contenedor + escenarios del editor). Ver [Debug remoto](#debug-remoto-con-debugpy-debug-setup). |
 | `bash <instance>` | Abre bash (como root) en el contenedor de la instancia. |
 | `shell <instance> <subcomando> ...` | Shell operativo de Odoo contra una instancia: `search`, `read`/`browse`, `count`, `create`, `write`, `unlink`, `method` (llama métodos, incluidos privados) y REPL interactivo (`shell`). Basado en `click-odoo` (ya instalado en las imágenes). Ver `./odoo shell --help`. |
 | `logs [instance]` | Muestra logs en tiempo real. |

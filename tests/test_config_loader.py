@@ -154,5 +154,125 @@ class ResolveDbBootstrapCredsTest(unittest.TestCase):
         )
 
 
+class DebugValidationTest(unittest.TestCase):
+    def cfg(self, **kw):
+        from tests.debug_fixtures import debug_config
+        c = debug_config(True, False)
+        c["instances"]["dbg-a"].update(kw)
+        return c
+
+    def test_valid_debug(self):
+        _validate_config(self.cfg())
+        _validate_config(self.cfg(debug_port=5690))
+
+    def test_debug_must_be_bool(self):
+        with self.assertRaises(ValueError):
+            _validate_config(self.cfg(debug="si"))
+
+    def test_debug_port_requires_debug_true(self):
+        c = self.cfg(debug_port=5690)
+        c["instances"]["dbg-a"]["debug"] = False
+        with self.assertRaises(ValueError):
+            _validate_config(c)
+
+    def test_debug_port_range_and_type(self):
+        for bad in (80, 70000, "5690", True):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                _validate_config(self.cfg(debug_port=bad))
+
+    def test_debug_port_collides_with_published_ports(self):
+        for taken in (28069, 28070, 26000, 80):
+            with self.subTest(taken=taken):
+                c = self.cfg(debug_port=taken if taken >= 1024 else 5690)
+                if taken < 1024:
+                    c["instances"]["dbg-a"]["debug_port"] = taken
+                with self.assertRaises(ValueError):
+                    _validate_config(c)
+
+    def test_debug_port_collides_with_other_debug_port(self):
+        c = self.cfg(debug_port=5690)
+        c["instances"]["dbg-b"].update(debug=True, debug_port=5690)
+        with self.assertRaises(ValueError):
+            _validate_config(c)
+
+    def test_debug_rejected_on_production(self):
+        with self.assertRaises(ValueError):
+            _validate_config(self.cfg(production=True))
+
+    def test_debug_rejected_on_unsupported_version(self):
+        c = self.cfg()
+        c["instances"]["dbg-a"]["odoo_version"] = "18.0"
+        with self.assertRaises(ValueError):
+            _validate_config(c)
+
+    def test_restart_validation(self):
+        for ok in ("no", "always", "unless-stopped", "on-failure", "on-failure:3"):
+            with self.subTest(ok=ok):
+                c = self.cfg()
+                c["odoo_configs"]["base"]["restart"] = ok
+                _validate_config(c)
+        c = self.cfg()
+        c["odoo_configs"]["base"]["restart"] = "sometimes"
+        with self.assertRaises(ValueError):
+            _validate_config(c)
+
+
+class DebugPortsAllocationTest(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory(prefix="test_dbgports_")
+        self.addCleanup(self._tmp.cleanup)
+        self.base = self._tmp.name
+
+    def test_sequence_skips_occupied_ports(self):
+        from generators.debug_ports import resolve_debug_ports
+        from tests.debug_fixtures import debug_config
+        c = debug_config(True, True)
+        c["databases"]["dbgdb"]["port"] = 5670  # occupied: sequence skips it
+        self.assertEqual(
+            resolve_debug_ports(self.base, c), {"dbg-a": 5671, "dbg-b": 5672}
+        )
+
+    def test_explicit_port_wins_and_is_persisted(self):
+        from generators.debug_ports import load_debug_ports, resolve_debug_ports
+        from tests.debug_fixtures import debug_config
+        c = debug_config(True, True)
+        c["instances"]["dbg-b"]["debug_port"] = 5670
+        self.assertEqual(
+            resolve_debug_ports(self.base, c), {"dbg-a": 5671, "dbg-b": 5670}
+        )
+        self.assertEqual(load_debug_ports(self.base), {"dbg-a": 5671, "dbg-b": 5670})
+
+    def test_recorded_port_of_inactive_instance_is_reserved(self):
+        from generators.debug_ports import resolve_debug_ports
+        from tests.debug_fixtures import debug_config
+        resolve_debug_ports(self.base, debug_config(True, False))  # a=5670
+        out = resolve_debug_ports(self.base, debug_config(False, True))
+        self.assertEqual(out, {"dbg-b": 5671})  # 5670 stays reserved for dbg-a
+
+    def test_recorded_port_reassigned_if_now_occupied(self):
+        from generators.debug_ports import resolve_debug_ports
+        from tests.debug_fixtures import debug_config
+        resolve_debug_ports(self.base, debug_config(True, False))
+        c = debug_config(True, False)
+        c["instances"]["dbg-b"]["external_port"] = 5670
+        self.assertEqual(resolve_debug_ports(self.base, c), {"dbg-a": 5671})
+
+    def test_corrupt_ports_file_is_ignored(self):
+        from generators.debug_ports import ports_path, resolve_debug_ports
+        from tests.debug_fixtures import debug_config
+        os.makedirs(os.path.dirname(ports_path(self.base)))
+        with open(ports_path(self.base), "w") as f:
+            f.write("{not json")
+        self.assertEqual(resolve_debug_ports(self.base, debug_config(True, False)), {"dbg-a": 5670})
+
+    def test_prune_forgets_inactive(self):
+        from generators.debug_ports import load_debug_ports, prune_debug_ports, resolve_debug_ports
+        from tests.debug_fixtures import debug_config
+        resolve_debug_ports(self.base, debug_config(True, True))
+        self.assertEqual(prune_debug_ports(self.base, debug_config(False, True)), ["dbg-a"])
+        self.assertEqual(load_debug_ports(self.base), {"dbg-b": 5671})
+
+
 if __name__ == "__main__":
     unittest.main()

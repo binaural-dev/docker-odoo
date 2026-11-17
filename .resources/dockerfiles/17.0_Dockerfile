@@ -89,3 +89,10 @@ RUN python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==
 ARG USERNAME=odoo
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/17.0/requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Remote debugging (./odoo debug-setup): debugpy pinned, installed in its own
+# directory (NOT in /opt/venv, NOT under /usr/lib or /usr/local/lib: those are
+# shadowed by per-instance volumes). The compose service adds
+# PYTHONPATH=/opt/debugpy only when the instance has "debug": true.
+RUN /usr/bin/python3 -m pip install --no-cache-dir --target /opt/debugpy debugpy==1.8.14 \
+    && chmod -R a+rX /opt/debugpy

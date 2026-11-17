@@ -35,3 +35,7 @@ sys
 # Datos de clientes generados localmente (dashboards, métricas). Nunca versionar.
 docs/_generated/
 docs/control-repos.*
+
+# Debug remoto (./odoo debug-setup): core extraído del contenedor y puertos asignados.
+src/debug/
+.debug/
