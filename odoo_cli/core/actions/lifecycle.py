@@ -127,6 +127,59 @@ def build_odoo(
         sys.exit(returncode)
 
     runner.info("\n✅ Build completado.\n")
+    _warn_legacy_lib_volumes(runner)
+
+
+# Volumes that older checkouts mounted over /usr/local/lib and /usr/lib.
+LEGACY_LIB_VOLUME_SUFFIXES = ("-py3", "-py")
+
+
+def _legacy_lib_volumes() -> dict[str, list[str]]:
+    """Leftover ``<instance>-py3`` / ``<instance>-py`` volumes of this
+    Compose project, grouped by instance. Matched by Compose's own label,
+    never by volume name."""
+    result = subprocess.run(
+        [
+            "docker", "volume", "ls",
+            "--filter", f"label=com.docker.compose.project={_compose_project()}",
+            "--format", '{{.Name}} {{.Label "com.docker.compose.volume"}}',
+        ],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return {}
+    found: dict[str, list[str]] = {}
+    for line in result.stdout.splitlines():
+        name, _sep, declared = line.strip().partition(" ")
+        for suffix in LEGACY_LIB_VOLUME_SUFFIXES:
+            if declared.endswith(suffix):
+                found.setdefault(declared[: -len(suffix)], []).append(name)
+                break
+    return found
+
+
+def _warn_legacy_lib_volumes(runner: "Runner") -> None:
+    """After a build, point at the volumes that still freeze old code.
+
+    They are not removed here: a container created before this change still
+    mounts them, and only the user knows when an instance can be recreated.
+    """
+    legacy = _legacy_lib_volumes()
+    if not legacy:
+        return
+    lines = []
+    for instance in sorted(legacy):
+        lines.append(
+            f"  docker compose -f {COMPOSE_FILE} up -d --force-recreate odoo-{instance}"
+        )
+        lines.append(f"  docker volume rm {' '.join(sorted(legacy[instance]))}")
+    runner.warn(
+        "\n⚠️  Estas instancias todavía tienen volúmenes sobre /usr/lib y "
+        "/usr/local/lib: mientras existan, siguen corriendo el Odoo y las "
+        "librerías de la imagen con la que se crearon, no las de este build. "
+        "Recrea cada instancia y borra sus volúmenes (o usa './odoo remove "
+        "<instancia> --full', que también los borra):\n" + "\n".join(lines)
+    )
 
 
 # ============================================================
