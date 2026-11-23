@@ -44,7 +44,6 @@ from __future__ import annotations
 
 import os
 import re
-import secrets
 import subprocess
 import sys
 from collections import defaultdict
@@ -299,17 +298,6 @@ def _sql_literal(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _suggest_db_user(instance: str) -> str:
-    """``app_<instance>`` with every non-identifier char turned into ``_``,
-    same convention as ``instances.example.json``."""
-    return "app_" + re.sub(r"[^a-z0-9_]", "_", instance.lower())[:58]
-
-
-def _generate_db_password() -> str:
-    """48 hex chars: safe inside SQL, odoo.conf and compose env alike."""
-    return secrets.token_hex(24)
-
-
 def _provision_problems(config: dict, instance: str) -> tuple[list[str], bool]:
     """Everything that blocks provisioning ``instance``, reported at once.
 
@@ -317,7 +305,7 @@ def _provision_problems(config: dict, instance: str) -> tuple[list[str], bool]:
     flagged apart (not in ``errors``) because the single-instance CLI can
     generate them; the rest always needs a human decision.
     """
-    from generators.config_loader import resolve_instance_config
+    from generators.config_loader import dedicated_db_filter, resolve_instance_config
 
     inst_conf = config["instances"][instance]
     errors: list[str] = []
@@ -333,7 +321,8 @@ def _provision_problems(config: dict, instance: str) -> tuple[list[str], bool]:
     odoo_conf = resolve_instance_config(inst_conf, config)
     db_filter = odoo_conf.get("db_filter") or ""
     if not db_filter or db_filter == "*" or "%h" in db_filter or "%d" in db_filter:
-        suggested = "^" + re.escape(instance.replace("-", "_"))
+        # Escaped for JSON, so the hint can be pasted into instances.json as-is.
+        suggested = dedicated_db_filter(instance).replace("\\", "\\\\")
         errors.append(
             f"No tiene un db_filter especifico y estatico (sin %h/%d) -- no se "
             f"puede resolver de forma segura que bases le pertenecen. Definilo "
@@ -346,12 +335,14 @@ def _provision_problems(config: dict, instance: str) -> tuple[list[str], bool]:
 
 
 def _missing_credentials_message(instance: str) -> str:
+    from generators.config_loader import dedicated_role_name
+
     return (
         f"Falta 'db_user'/'db_password' a nivel raiz de la instancia (no dentro "
         f"de overwrite_odoo_config). Correr './odoo provision-role {instance} "
         f"--generate-credentials' para generarlos, o agregarlos a mano: "
-        f"\"db_user\": \"{_suggest_db_user(instance)}\", \"db_password\": "
-        f"<openssl rand -hex 24>."
+        f"\"db_user\": \"{dedicated_role_name(instance)}\", \"db_password\": "
+        f"<openssl rand -hex 12>."
     )
 
 
@@ -404,7 +395,12 @@ def _ensure_credentials(
     known to be valid, so instances.json is never left half-fixed. Writes
     the raw (unfiltered) file and mirrors the values into ``config``.
     """
-    from generators.config_loader import _strip_json_comments, load_full_config
+    from generators.config_loader import (
+        _strip_json_comments,
+        dedicated_role_name,
+        generate_db_password,
+        load_full_config,
+    )
     from odoo_cli.core.actions.instance_state import _write_instances_json
 
     inst_conf = config["instances"].get(instance)
@@ -425,17 +421,20 @@ def _ensure_credentials(
     taken = {config["databases"][db_name]["user"]} | {
         inst.get("db_user") for inst in full_config["instances"].values()
     }
-    db_user = inst_conf.get("db_user") or _suggest_db_user(instance)
-    if db_user in taken and not inst_conf.get("db_user"):
+    db_user = inst_conf.get("db_user") or dedicated_role_name(instance)
+    if not inst_conf.get("db_user") and (
+        db_user in taken or not _ROLE_NAME_RE.match(db_user)
+    ):
         _exit_with_problems(runner, instance, [
             f"El rol sugerido '{db_user}' ya lo usa otra instancia o el "
-            f"servicio '{db_name}'. Definí 'db_user'/'db_password' a mano."
+            f"servicio '{db_name}', o no es un nombre de rol valido. Definí "
+            f"'db_user'/'db_password' a mano."
         ])
-    db_password = inst_conf.get("db_password") or _generate_db_password()
+    db_password = inst_conf.get("db_password") or generate_db_password()
 
     runner.info(f"\n'{instance}' no tiene credenciales propias de Postgres.")
     runner.info(f"  db_user:     {db_user}")
-    runner.info("  db_password: (generada, 48 caracteres hex)")
+    runner.info("  db_password: (generada, 24 caracteres alfanumericos)")
 
     path = os.path.join(base_path, "instances.json")
     with open(path) as f:

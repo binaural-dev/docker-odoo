@@ -25,14 +25,13 @@ RESOURCES_PATH = os.path.join(REPO_ROOT, ".resources")
 if RESOURCES_PATH not in sys.path:
     sys.path.insert(0, RESOURCES_PATH)
 
-from generators.config_loader import load_config  # noqa: E402
+from generators.config_loader import dedicated_role_name, load_config  # noqa: E402
 from odoo_cli.core.actions import postgres  # noqa: E402
 from odoo_cli.core.actions.postgres import (  # noqa: E402
     _ensure_credentials,
     _provision_problems,
     _resolve_provision_target,
     _sql_literal,
-    _suggest_db_user,
     provision_role_sql,
 )
 
@@ -74,18 +73,12 @@ def _config(db_filter="^bufalinda_release", **instance_fields):
 
 
 class HelpersTest(unittest.TestCase):
-    def test_suggest_db_user_follows_example_convention(self):
-        self.assertEqual(_suggest_db_user(INSTANCE), "app_bufalinda_release")
-
-    def test_suggest_db_user_is_a_valid_role_name(self):
-        name = _suggest_db_user("Cliente.Con-Cosas" + "x" * 80)
-        self.assertRegex(name, postgres._ROLE_NAME_RE)
+    def test_role_name_shared_with_new_instance(self):
+        self.assertEqual(dedicated_role_name(INSTANCE), "app_bufalinda_release")
+        self.assertRegex(dedicated_role_name(INSTANCE), postgres._ROLE_NAME_RE)
 
     def test_sql_literal_doubles_quotes(self):
         self.assertEqual(_sql_literal("a'b"), "'a''b'")
-
-    def test_generated_password_is_hex(self):
-        self.assertRegex(postgres._generate_db_password(), r"^[0-9a-f]{48}$")
 
 
 class ProvisionProblemsTest(unittest.TestCase):
@@ -108,7 +101,8 @@ class ProvisionProblemsTest(unittest.TestCase):
         config = _config(db_filter=None, db_user="app_x", db_password="secret")
         errors, _ = _provision_problems(config, INSTANCE)
         self.assertEqual(len(errors), 1)
-        self.assertIn('"^bufalinda_release"', errors[0])
+        # Same convention as './odoo new', JSON-escaped to paste as-is.
+        self.assertIn(r'"^bufalinda\\-release"', errors[0])
 
     def test_dynamic_db_filter_is_rejected(self):
         config = _config(db_filter="^%d$", db_user="app_x", db_password="secret")
@@ -158,7 +152,7 @@ class EnsureCredentialsTest(unittest.TestCase):
         loaded = self._ensure(_config(), generate=True)
         saved = self._read()["instances"]
         self.assertEqual(saved[INSTANCE]["db_user"], "app_bufalinda_release")
-        self.assertRegex(saved[INSTANCE]["db_password"], r"^[0-9a-f]{48}$")
+        self.assertRegex(saved[INSTANCE]["db_password"], r"^[A-Za-z0-9]{24}$")
         # Mirrored into the in-memory config the rest of the run uses.
         self.assertEqual(loaded["instances"][INSTANCE]["db_password"],
                          saved[INSTANCE]["db_password"])
@@ -194,7 +188,7 @@ class EnsureCredentialsTest(unittest.TestCase):
         self._ensure(_config(db_user="app_propio"), generate=True)
         saved = self._read()["instances"][INSTANCE]
         self.assertEqual(saved["db_user"], "app_propio")
-        self.assertRegex(saved["db_password"], r"^[0-9a-f]{48}$")
+        self.assertRegex(saved["db_password"], r"^[A-Za-z0-9]{24}$")
 
     def test_suggested_role_taken_by_another_instance_aborts(self):
         config = _config()

@@ -9,6 +9,15 @@ import subprocess
 from pathlib import Path
 
 BASE_PATH = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE_PATH / ".resources"))
+
+# Shared with './odoo provision-role' so both name roles the same way.
+from generators.config_loader import (  # noqa: E402
+    dedicated_db_filter,
+    dedicated_role_name,
+    generate_db_password,
+)
+
 INSTANCES_FILE = BASE_PATH / "instances.json"
 CUSTOM_DIR = BASE_PATH / "src" / "custom"
 
@@ -34,17 +43,6 @@ def shares_database_service(data, database_name):
         inst.get("database") == database_name
         for inst in data.get("instances", {}).values()
     )
-
-
-def dedicated_role_name(name):
-    """Postgres role for the instance. provision-role interpolates it into SQL
-    unquoted, so it must be a plain identifier: lowercase alnum + underscores."""
-    return "app_" + re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
-
-
-def generate_db_password(length=24):
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def build_instance_entry(
@@ -78,7 +76,7 @@ def build_instance_entry(
                 f"El rol '{role}' ya lo usa otra instancia o el servicio "
                 f"'{database_name}'. Elegí otro nombre de instancia."
             )
-        overwrite["db_filter"] = f"^{re.escape(name)}"
+        overwrite["db_filter"] = dedicated_db_filter(name)
         entry["db_user"] = role
         entry["db_password"] = generate_db_password()
 
