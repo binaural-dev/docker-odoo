@@ -64,7 +64,7 @@ class PrecommitSetup:
         if _precommit_available():
             return
         print("Instalando pre-commit...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "pre-commit"], check=True)
+        subprocess.run([sys.executable, "-m", "pip", "install", "--break-system-packages", "pre-commit"], check=True)
         if not _precommit_available():
             raise RuntimeError(
                 "pre-commit se instaló pero no está disponible para este intérprete Python."

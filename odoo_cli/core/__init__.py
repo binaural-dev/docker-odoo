@@ -1,0 +1,59 @@
+"""Runner protocol, concrete runners, and shared instance/db helpers.
+
+A :class:`Runner` is the user-I/O surface that every action in
+:mod:`odoo_cli.core.actions` consumes. The intent is to keep the
+business logic free of ``print``, ``input`` and ``subprocess`` calls so
+that the same action modules can be reused by:
+
+  * :class:`odoo_cli.core.cli_runner.CliRunner` — the existing terminal
+    experience, backed by ``print``/``input``/``subprocess.run``.
+  * A future :class:`TextualRunner` (NOT in this batch) — the Textual
+    TUI reuses the same action modules and routes their I/O through
+    Textual widgets instead of stdout/stdin/subprocess.
+
+The contract is intentionally small: a handful of log/confirm/select
+methods plus two subprocess wrappers (``run_streamed`` and
+``run_interactive``). New I/O needs should be added here and
+implemented in BOTH runners; do not let actions reach for ``print`` or
+``subprocess`` directly.
+"""
+
+from odoo_cli.core.cli_runner import CliRunner
+from odoo_cli.core.instance import (
+    find_instances_with_db,
+    get_custom_modules,
+    get_custom_repos,
+    get_databases,
+    get_db_services,
+    get_instance_services,
+    get_users,
+)
+from odoo_cli.core.prompts import (
+    prompt_for_branch,
+    prompt_for_database,
+    prompt_for_instance,
+    prompt_for_modules,
+    prompt_for_repos,
+    prompt_for_user,
+    prompt_selection,
+)
+from odoo_cli.core.runner import Runner
+
+__all__ = [
+    "CliRunner",
+    "Runner",
+    "find_instances_with_db",
+    "get_custom_modules",
+    "get_custom_repos",
+    "get_databases",
+    "get_db_services",
+    "get_instance_services",
+    "get_users",
+    "prompt_for_branch",
+    "prompt_for_database",
+    "prompt_for_instance",
+    "prompt_for_modules",
+    "prompt_for_repos",
+    "prompt_for_user",
+    "prompt_selection",
+]

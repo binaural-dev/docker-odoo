@@ -1,0 +1,170 @@
+#!/bin/bash
+set -euo pipefail
+
+# ── Coverage status scanner (sin Docker) ────────────────────────────────────
+# Usage:
+#   ./scripts/coverage-status [--pull] [--json] [--only-with-tests]
+#
+# Recorre cada repo cliente en src/custom/ y reporta, por proyecto:
+#   - cuántos módulos Odoo custom tiene (excluyendo submódulos compartidos:
+#     integra-addons, third-party-addons, odoo-venezuela/homo-addons)
+#   - cuántos de esos módulos tienen carpeta tests/ (la única señal de
+#     cobertura que se puede sacar SIN levantar Docker)
+#   - el comando exacto de `scripts/coverage` para medir % real en los que
+#     sí tienen tests
+#
+# Esto NO corre coverage.py — es un escaneo rápido y gratis (sin Docker) para
+# ver de entrada qué clientes tienen algo que medir. Para el % real, correr
+# el comando `scripts/coverage` que este script te imprime.
+#
+# Options:
+#   --pull              Antes de escanear, hace `git pull --ff-only` en cada
+#                        repo (si está limpio; si tiene cambios sin commitear,
+#                        lo salta y lo marca como "dirty").
+#   --json              Salida en JSON en vez de tabla.
+#   --only-with-tests   Sólo muestra proyectos con al menos un módulo testeado.
+#   --help              Muestra esta ayuda.
+# ────────────────────────────────────────────────────────────────────────────
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_PATH="$(dirname "$SCRIPT_DIR")"
+CUSTOM_DIR="$BASE_PATH/src/custom"
+EXCLUDE_PATTERN='integra-addons|third-party-addons|odoo-venezuela|homo-addons'
+
+JSON_OUT=false
+DO_PULL=false
+ONLY_TESTS=false
+
+show_help() {
+  sed -n '4,27p' "$0" | sed 's/^# \{0,1\}//'
+  exit 0
+}
+
+for arg in "$@"; do
+  case $arg in
+    --json)             JSON_OUT=true ;;
+    --pull)             DO_PULL=true ;;
+    --only-with-tests)  ONLY_TESTS=true ;;
+    --help)              show_help ;;
+    *)
+      echo "❌ Argumento desconocido: $arg"
+      echo "   Usá --help para ver las opciones."
+      exit 1
+      ;;
+  esac
+done
+
+if [[ ! -d "$CUSTOM_DIR" ]]; then
+  echo "❌ No existe $CUSTOM_DIR"
+  exit 1
+fi
+
+ROWS=()
+TOTAL_PROJECTS=0
+TOTAL_WITH_TESTS=0
+TOTAL_MODULES=0
+TOTAL_MODULES_TESTED=0
+
+for dir in "$CUSTOM_DIR"/*/; do
+  name=$(basename "$dir")
+  [[ -e "$dir/.git" ]] || continue   # sólo repos reales (submódulos incluidos)
+
+  pull_status="-"
+  if $DO_PULL; then
+    branch=$(git -C "$dir" symbolic-ref --short HEAD 2>/dev/null || echo "?")
+    if [[ -n "$(git -C "$dir" status --porcelain 2>/dev/null)" ]]; then
+      pull_status="dirty(no-pull)"
+    else
+      if git -C "$dir" pull --ff-only >/dev/null 2>&1; then
+        pull_status="ok($branch)"
+      else
+        pull_status="fail($branch)"
+      fi
+    fi
+  fi
+
+  mods=$(find "$dir" -maxdepth 3 -name "__manifest__.py" 2>/dev/null \
+    | grep -Ev "$EXCLUDE_PATTERN" \
+    | sed "s|^$dir||;s|/__manifest__.py\$||" || true)
+  mod_count=0
+  [[ -n "$mods" ]] && mod_count=$(echo -n "$mods" | grep -c .)
+
+  tested_mods=""
+  tested_count=0
+  if [[ -n "$mods" ]]; then
+    while IFS= read -r m; do
+      [[ -z "$m" ]] && continue
+      if [[ -d "${dir}${m}/tests" ]]; then
+        tested_mods+="${m},"
+        tested_count=$((tested_count + 1))
+      fi
+    done <<< "$mods"
+  fi
+  tested_mods=${tested_mods%,}
+
+  TOTAL_PROJECTS=$((TOTAL_PROJECTS + 1))
+  TOTAL_MODULES=$((TOTAL_MODULES + mod_count))
+  TOTAL_MODULES_TESTED=$((TOTAL_MODULES_TESTED + tested_count))
+  if [[ $tested_count -gt 0 ]]; then
+    TOTAL_WITH_TESTS=$((TOTAL_WITH_TESTS + 1))
+  elif $ONLY_TESTS; then
+    continue
+  fi
+
+  ROWS+=("${name}|${mod_count}|${tested_count}|${tested_mods}|${pull_status}")
+done
+
+if $JSON_OUT; then
+  echo "["
+  first=true
+  for row in "${ROWS[@]}"; do
+    IFS='|' read -r name mod_count tested_count tested_mods pull_status <<< "$row"
+    $first || echo ","
+    first=false
+    tested_json=$(echo -n "$tested_mods" | awk -F',' '{for(i=1;i<=NF;i++){printf "%s\"%s\"", (i>1?",":""), $i}}')
+    printf '  {"project": "%s", "modules": %s, "modules_with_tests": %s, "tested_modules": [%s], "pull_status": "%s"}' \
+      "$name" "$mod_count" "$tested_count" "$tested_json" "$pull_status"
+  done
+  echo ""
+  echo "]"
+  exit 0
+fi
+
+printf "\n%-28s %8s %8s %-14s %s\n" "PROYECTO" "MODULOS" "C/TESTS" "PULL" "MODULOS CON tests/"
+printf '%.0s─' {1..100}; echo ""
+for row in "${ROWS[@]}"; do
+  IFS='|' read -r name mod_count tested_count tested_mods pull_status <<< "$row"
+  flag=""
+  [[ $tested_count -gt 0 ]] && flag="✅"
+  printf "%-28s %8s %8s %-14s %s %s\n" "$name" "$mod_count" "$tested_count" "$pull_status" "$flag" "$tested_mods"
+done
+
+echo ""
+echo "── Resumen ──────────────────────────────────────────────────────────"
+echo "Proyectos escaneados : $TOTAL_PROJECTS"
+echo "Módulos custom total : $TOTAL_MODULES"
+echo "Proyectos con tests  : $TOTAL_WITH_TESTS"
+echo "Módulos con tests/   : $TOTAL_MODULES_TESTED"
+echo ""
+
+if [[ $TOTAL_WITH_TESTS -gt 0 ]]; then
+  echo "── Comandos sugeridos para cobertura real (requiere Docker levantado) ─"
+  for row in "${ROWS[@]}"; do
+    IFS='|' read -r name mod_count tested_count tested_mods pull_status <<< "$row"
+    [[ $tested_count -eq 0 ]] && continue
+    modules_arg=""
+    tags_arg=""
+    IFS=',' read -ra tm <<< "$tested_mods"
+    for m in "${tm[@]}"; do
+      modules_arg+="custom/${name}/${m},"
+      tags_arg+="/$(basename "$m"),"
+    done
+    modules_arg=${modules_arg%,}
+    tags_arg=${tags_arg%,}
+    echo ""
+    echo "# $name"
+    echo "./scripts/coverage --odoo_container=odoo-${name} --modules=${modules_arg} --test_tags=${tags_arg} --threshold=70"
+    echo "  (verificá el nombre exacto de instancia en instances.json si 'odoo-${name}' no coincide)"
+  done
+  echo ""
+fi

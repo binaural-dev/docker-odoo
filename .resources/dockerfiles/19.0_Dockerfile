@@ -1,5 +1,5 @@
 FROM ubuntu:noble
-ENV LANG C.UTF-8 
+ENV LANG=C.UTF-8 
 USER root
 
 # Enable Odoo user and filestore
@@ -25,7 +25,7 @@ RUN if [ "$(uname -m)" = "x86_64" ]; then \
         echo "Installing package for AMD64"; \
         curl -sSL https://nightly.odoo.com/deb/jammy/wkhtmltox_0.12.5-2.jammy_amd64.deb -o /tmp/wkhtml.deb; \
         apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
-    elif [ "$(uname -m)" = "arm64" ]; then \
+    elif [ "$(uname -m)" = "arm64" ] || [ "$(uname -m)" = "aarch64" ]; then \
         echo "Installing package for ARM64"; \
         curl -sSL https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-2/wkhtmltox_0.12.6.1-2.jammy_arm64.deb -o /tmp/wkhtml.deb; \
         apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y install --no-install-recommends --fix-missing -qq /tmp/wkhtml.deb; \
@@ -53,7 +53,7 @@ RUN curl -sSL https://www.postgresql.org/media/keys/ACCC4CF8.asc -o /etc/apt/tru
 
 ARG ODOO_VERSION
 ARG ODOO_RELEASE
-RUN curl -o odoo.deb -sSL http://nightly.odoo.com/19.0/nightly/deb/odoo_19.0.latest_all.deb \
+RUN curl --fail --retry 5 --retry-delay 10 --retry-connrefused -C - -o odoo.deb -sSL http://nightly.odoo.com/19.0/nightly/deb/odoo_19.0.latest_all.deb \
     && apt-get update \
     && apt-get -y install --no-install-recommends python3-lxml \
     && apt-get -y install --no-install-recommends ./odoo.deb \
@@ -84,8 +84,9 @@ RUN ARCH=$(dpkg --print-architecture) && \
         && chown -R odoo:odoo /opt/venv
     ENV PATH="/opt/venv/bin:$PATH"
 
+ARG USERNAME=odoo
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/19.0/requirements.txt /tmp/requirements.txt
-RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
 
 RUN apt-get update && apt-get install -y \
     python3-pip \

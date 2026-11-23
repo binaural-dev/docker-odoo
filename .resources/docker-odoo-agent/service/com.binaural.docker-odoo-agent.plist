@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Template used by install.sh on macOS, which fills in @AGENT_ROOT@, @PATH@
+  and @LOG@ and installs it as
+  ~/Library/LaunchAgents/com.binaural.docker-odoo-agent.plist (a per-user
+  service: starts at login, no sudo needed). Port and docker-odoo path come
+  from var/agent.env. Don't copy it by hand.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.binaural.docker-odoo-agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@AGENT_ROOT@/.venv/bin/python</string>
+        <string>-m</string>
+        <string>agent</string>
+        <string>serve</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>@AGENT_ROOT@</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd starts services with a minimal PATH: docker and git must be reachable -->
+        <key>PATH</key>
+        <string>@PATH@</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>StandardOutPath</key>
+    <string>@LOG@</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG@</string>
+</dict>
+</plist>

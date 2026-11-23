@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import subprocess
 import sys
 import click
 from pathlib import Path
@@ -13,18 +14,31 @@ from generators.config_loader import load_config
 @click.command()
 @click.argument("instance")
 @click.option("-d", required=True, help="Database name")
+@click.option("--load-language", default=None, help="Language module to load")
 @click.argument("modules", nargs=-1)
-def run_command(instance, d, modules):
+def run_command(instance, d, load_language, modules):
     config = load_config(BASE_PATH)
     if instance not in config["instances"]:
         click.echo(f"Error: instancia '{instance}' no existe")
         sys.exit(1)
 
-    container = f"odoo-{instance}"
+    service = f"odoo-{instance}"
+    compose_file = os.path.join(BASE_PATH, "docker-compose.generated.yml")
     modules_str = ','.join(modules) if modules else 'all'
-    os.system(
-        f"docker exec -it {container} odoo -d {d} -u {modules_str} --load-language=es_VE --stop-after-init"
-    )
+    cmd = [
+        "docker", "compose", "-f", compose_file, "exec", "-T",
+        service,
+        "odoo",
+        "-d", d,
+        "-u", modules_str,
+        "--http-port=0",
+        "--workers=0",
+    ]
+    if load_language:
+        cmd.append(f"--load-language={load_language}")
+    cmd.append("--stop-after-init")
+    result = subprocess.run(cmd)
+    sys.exit(result.returncode)
 
 
 if __name__ == "__main__":

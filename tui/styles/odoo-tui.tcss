@@ -1,0 +1,252 @@
+/* ============================================================
+   docker-odoo TUI - Stylesheet
+   Layout: Header / [Instances | Actions] / Progress* / Output / Footer
+   ============================================================ */
+
+Screen {
+    background: $surface;
+}
+
+/* ----- Header / Footer ----- */
+Header {
+    dock: top;
+}
+Footer {
+    dock: bottom;
+}
+
+/* ----- Main split: instances | actions ----- */
+#main {
+    height: 55%;
+    margin: 1 1 1 1;
+}
+#left, #right {
+    width: 1fr;
+    border: round $primary;
+    padding: 0 1;
+    margin: 0;
+}
+#left {
+    /* Ligeramente mas ancho para que entren nombres largos como
+       'demo-integration-core' sin truncar. */
+    width: 55%;
+    margin-right: 1;
+}
+#right {
+    border: round $secondary;
+}
+
+/* ----- Subtitles (encabezado de cada panel) ----- */
+Static#subtitle {
+    color: $secondary;
+    text-style: bold;
+    padding: 0 2;
+    height: 1;
+    background: $boost;
+}
+Static#subtitle_meta {
+    color: $text-muted;
+    padding: 0 2;
+    height: 1;
+}
+
+/* ----- ListViews ----- */
+ListView {
+    height: 1fr;
+    padding: 0 0;
+}
+ListView > ListItem {
+    padding: 0 1;
+}
+ListView > ListItem.--highlight {
+    background: $accent;
+    text-style: bold;
+}
+OptionList > Option.--highlight {
+    background: $accent;
+    text-style: bold;
+}
+
+/* ----- Category headers en la lista de acciones -----
+   padding: 0 1 ya viene de la regla base "ListView > ListItem" de
+   arriba; solo se agrega lo que la distingue visualmente. */
+ListView > ListItem.category_header {
+    color: $secondary;
+    text-style: bold;
+    background: $boost;
+}
+ListView > ListItem.category_header.--highlight {
+    background: $accent;
+    color: $text;
+}
+
+/* ----- Output log (RichLog) ----- */
+RichLog {
+    height: 1fr;
+    min-height: 5;
+    border: round $primary;
+    background: $surface-darken-1;
+    margin: 0 1;
+    padding: 0 1;
+}
+
+/* ----- Modal box -----
+   width en % (no un valor fijo de columnas) para que se achique en
+   terminales angostas en vez de desbordar; min-width sigue poniendo
+   un piso legible y max-width evita que se estire de mas en pantallas
+   anchas. */
+#modal_box {
+    background: $panel;
+    border: thick $accent;
+    padding: 1 4;
+    width: 90%;
+    min-width: 50;
+    max-width: 100;
+    height: auto;
+    align: center middle;
+}
+#modal_box Label {
+    width: 100%;
+    content-align: center middle;
+}
+#modal_title {
+    text-style: bold;
+    color: $accent;
+    padding-bottom: 1;
+    height: 1;
+}
+#modal_subtitle {
+    color: $text-muted;
+    text-style: italic;
+    padding-bottom: 1;
+    height: auto;
+}
+#modal_message {
+    padding: 1 0;
+    color: $text;
+    text-align: center;
+}
+#modal_fields {
+    height: auto;
+    padding: 1 0;
+}
+#modal_fields Input {
+    margin-bottom: 1;
+}
+.field_label {
+    color: $secondary;
+    text-style: bold;
+    padding: 0 1;
+    height: 1;
+}
+.field_hint {
+    color: $text-muted;
+    text-style: italic;
+    padding: 0 1;
+    margin-bottom: 1;
+    height: 1;
+}
+.field_required {
+    color: $error;
+    text-style: bold;
+}
+#modal_buttons {
+    align-horizontal: center;
+    height: 3;
+    padding-top: 1;
+}
+#modal_buttons Button {
+    /* Sin min-width: los labels reales ("✕ Cancelar  (Esc)", ~17 chars)
+       ya exceden cualquier piso razonable de 14, asi que ese valor no
+       tenia ningun efecto — el ancho lo determina el contenido. */
+    margin: 0 2;
+}
+
+/* ----- Picker modal (fzf-style) ----- */
+#picker_panes {
+    height: 1fr;
+    margin: 1 0;
+}
+#picker_left, #picker_right {
+    width: 1fr;
+    min-width: 20;
+    border: round $primary;
+    padding: 0 1;
+    margin: 0 1;
+}
+#picker_left OptionList, #picker_right OptionList {
+    height: 1fr;
+    border: none;
+}
+#picker_hints {
+    color: $secondary;
+    padding: 0 1;
+}
+#picker_hints_row {
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+/* ============================================================
+   UpdateProgress widget
+   ============================================================ */
+#update_progress {
+    display: none;
+    border: round $success;
+    background: $surface-darken-1;
+    padding: 0 2;
+    height: auto;
+    /* Contenido real: title + progressbar + 2 labels + filtros + hints
+       = 6 filas + 2 de borde = 8. min-height:11 dejaba 3 filas de aire
+       de mas, que en una terminal baja le restaban espacio al RichLog
+       (min-height:5) y al panel principal. 9 = contenido + borde + 1
+       fila de respiro, sin comprimir nada visible. */
+    min-height: 9;
+    margin: 0 1 1 1;
+}
+
+#update_progress #up_title {
+    text-style: bold;
+    color: $success;
+    padding: 0 1;
+    height: 1;
+}
+
+#update_progress ProgressBar {
+    width: 100%;
+    margin: 0 1;
+}
+
+#update_progress #up_progress_label,
+#update_progress #up_remaining {
+    color: $text;
+    padding: 0 1;
+    height: 1;
+}
+
+#update_progress #up_progress_label {
+    text-style: bold;
+}
+
+#update_progress #up_filters_row {
+    height: 1;
+    padding: 0 1;
+    align: left middle;
+}
+#update_progress #up_filters_row Static {
+    margin-right: 2;
+}
+/* No hay reglas .active/.inactive: UpdateProgress._filter_chip() ya
+   colorea cada chip inline via markup (verde si esta activo, gris si
+   no), asi que esas clases nunca se asignan — declararlas ademas por
+   CSS seria estado duplicado y potencialmente inconsistente. */
+
+#update_progress #up_hints_row {
+    height: 1;
+    padding: 0 1;
+    color: $text-muted;
+}
+#update_progress #up_hints_row Static {
+    margin-right: 2;
+}

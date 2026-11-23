@@ -1,0 +1,23 @@
+# Template used by install.sh, which fills in @USER@ and @AGENT_ROOT@ and
+# installs it as /etc/systemd/system/docker-odoo-agent.service.
+# Port and docker-odoo path come from var/agent.env.
+# Don't copy it by hand: run ./install.sh instead.
+[Unit]
+Description=docker-odoo agent (API for micro_saas)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Must be a user in the 'docker' group that owns the docker-odoo checkout
+User=@USER@
+WorkingDirectory=@AGENT_ROOT@
+ExecStart=@AGENT_ROOT@/.venv/bin/python -m agent serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
