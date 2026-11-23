@@ -9,13 +9,16 @@ path doesn't pull in Textual just to flip a boolean.
 
 Unlike ``build_odoo``, this never runs ``docker compose build`` — it
 only regenerates the compose/nginx files so they match the new state.
-Building images and starting/stopping containers stays the caller's
-job (see the hint printed at the end).
+Building images and starting containers stays the caller's job (see the
+hint printed at the end). Disabling does stop the instance's containers
+first: once the compose file is regenerated without them, no ``./odoo``
+command can reach them anymore.
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from typing import TYPE_CHECKING
 
@@ -66,6 +69,64 @@ def _regenerate_configs(full_config: dict) -> None:
     generate_nginx_config(base_path, filtered)
 
 
+def _stop_disabled_containers(
+    runner: "Runner", full_config: dict, disabled: list[str]
+) -> None:
+    """Stop the containers of ``disabled`` while the compose file still has them.
+
+    Must run BEFORE ``_regenerate_configs``. Stops each instance's Odoo
+    service plus any DB container no remaining enabled instance uses.
+    Services missing from the current compose file (never built, stale
+    file) are skipped, so one of them can't make ``compose stop`` fail
+    for the whole batch.
+    """
+    import os
+
+    from generators.config_loader import is_instance_enabled
+    from odoo_cli.core.actions.lifecycle import COMPOSE_FILE, _docker_compose
+
+    if not os.path.exists(COMPOSE_FILE):
+        return
+
+    instances = full_config.get("instances", {})
+    databases = full_config.get("databases", {})
+    dbs_still_used = {
+        inst["database"] for name, inst in instances.items()
+        if is_instance_enabled(inst) and name not in disabled
+    }
+    wanted = [f"odoo-{name}" for name in disabled]
+    for name in disabled:
+        db_name = instances[name]["database"]
+        db_conf = databases.get(db_name, {})
+        if db_name not in dbs_still_used and db_conf.get("create_container", True):
+            service = f"db-{db_name}"
+            if service not in wanted:
+                wanted.append(service)
+
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "-f", COMPOSE_FILE, "config", "--services"],
+            capture_output=True, text=True, cwd=".",
+        )
+    except FileNotFoundError:
+        runner.warn("⚠ docker no está disponible: no se detuvo ningún contenedor.\n")
+        return
+    if result.returncode != 0:
+        runner.warn(
+            "⚠ No se pudo leer el compose actual: no se detuvo ningún contenedor.\n"
+        )
+        return
+
+    known = set(result.stdout.split())
+    services = [service for service in wanted if service in known]
+    if not services:
+        return
+
+    runner.info("→ Deteniendo contenedores de las instancias deshabilitadas...")
+    if _docker_compose(runner, "stop", *services) != 0:
+        runner.warn("⚠ docker compose stop falló; revisá con 'docker ps'.\n")
+
+
 def set_instances_enabled(
     runner: "Runner", base_path: str, instances: list[str], enabled: bool
 ) -> None:
@@ -110,6 +171,9 @@ def set_instances_enabled(
 
     runner.info(f"\n✅ {estado.capitalize()}(s): {', '.join(changed)}\n")
 
+    if not enabled:
+        _stop_disabled_containers(runner, full_config, changed)
+
     runner.info("→ Regenerando docker-compose.generated.yml y nginx...")
     _regenerate_configs(full_config)
     runner.info("✅ Configs regenerados.\n")
@@ -123,12 +187,6 @@ def set_instances_enabled(
                 f"{changed[0]} (repetí ./odoo start por cada una: "
                 f"{', '.join(changed)})\n"
             )
-    else:
-        runner.info(
-            "Nota: si algún contenedor seguía corriendo, esto no lo detiene "
-            f"— corré './odoo stop <instancia>' por cada una si hace falta: "
-            f"{', '.join(changed)}\n"
-        )
 
 
 __all__ = ["set_instances_enabled"]
