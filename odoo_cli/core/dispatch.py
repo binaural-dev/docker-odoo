@@ -298,7 +298,10 @@ def dispatch(
         # ownership and revokes CONNECT, so "no instance given" must be
         # an argparse error, never an interactive menu that a mistyped
         # command could walk into.
-        provision_instance_role(runner, config, args.instance)
+        provision_instance_role(
+            runner, config, args.instance, base_path,
+            generate_credentials=getattr(args, "generate_credentials", False),
+        )
 
     elif args.action == "update":
         if args.instance is None:

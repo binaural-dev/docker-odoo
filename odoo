@@ -322,8 +322,9 @@ def _build_parser() -> argparse.ArgumentParser:
             "PUBLIC. Es la forma de evitar que el cron de una instancia corra "
             "sobre las bases de otra cuando comparten servicio de Postgres "
             "(ir.cron no respeta dbfilter).\n\n"
-            "Requiere db_user/db_password a nivel raíz de la instancia en "
-            "instances.json. Si el rol bootstrap del servicio está en NOLOGIN "
+            "Usa db_user/db_password a nivel raíz de la instancia en "
+            "instances.json; si faltan, ofrece generarlos y guardarlos "
+            "(o lo hace directo con --generate-credentials). Si el rol bootstrap del servicio está en NOLOGIN "
             "(lo normal), aplica un break-glass temporal: eso implica una "
             "ventana breve de mantenimiento de TODO el servicio de Postgres, "
             "no sólo de esta instancia. Pide confirmación antes de tocar nada."
@@ -336,8 +337,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "instance",
         help=(
-            "Nombre de instancia (requiere db_user/db_password en "
-            "instances.json)"
+            "Nombre de instancia (si no tiene db_user/db_password en "
+            "instances.json, se ofrecen generados)"
+        ),
+    )
+    p.add_argument(
+        "--generate-credentials", action="store_true", default=False,
+        help=(
+            "Si faltan db_user/db_password, generarlos y guardarlos en "
+            "instances.json sin preguntar (db_user = app_<instancia>)"
         ),
     )
 
