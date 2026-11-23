@@ -29,15 +29,23 @@ sys.path.insert(0, os.path.join(BASE_PATH, ".resources"))
 from generators.config_loader import load_config
 
 ODOO_CONF = "/home/odoo/.config/odoo.conf"
+COMPOSE_FILE = os.path.join(BASE_PATH, "docker-compose.generated.yml")
 
 
-def _resolve_container(instance):
-    """Validate the instance exists and return its container name."""
+def _resolve_service(instance):
+    """Validate the instance exists and return its Compose service name.
+
+    Always address the container through ``docker compose`` by service name:
+    the real container name is namespaced by the Compose project."""
     config = load_config(BASE_PATH)
     if instance not in config["instances"]:
         click.echo(f"Error: instancia '{instance}' no existe")
         sys.exit(1)
     return f"odoo-{instance}"
+
+
+def _compose(*args):
+    return ["docker", "compose", "-f", COMPOSE_FILE, *args]
 
 
 def _find_module_po_dir(module):
@@ -67,7 +75,7 @@ def cli():
 )
 def export(instance, d, module, lang, output):
     """Export MODULE terms from the DB to a .po file on the host."""
-    container = _resolve_container(instance)
+    service = _resolve_service(instance)
     remote = f"/tmp/{module}.{lang}.po"
 
     if output is None:
@@ -77,8 +85,8 @@ def export(instance, d, module, lang, output):
         else:
             output = os.path.join(os.getcwd(), f"{module}.{lang}.po")
 
-    export_cmd = [
-        "docker", "exec", "-u", "odoo", container, "odoo",
+    export_cmd = _compose(
+        "exec", "-T", "-u", "odoo", service, "odoo",
         "-c", ODOO_CONF,
         "-d", d,
         f"--i18n-export={remote}",
@@ -87,13 +95,13 @@ def export(instance, d, module, lang, output):
         "--http-port=0",
         "--workers=0",
         "--stop-after-init",
-    ]
+    )
     rc = subprocess.run(export_cmd).returncode
     if rc != 0:
         sys.exit(rc)
 
     Path(output).parent.mkdir(parents=True, exist_ok=True)
-    rc = subprocess.run(["docker", "cp", f"{container}:{remote}", output]).returncode
+    rc = subprocess.run(_compose("cp", f"{service}:{remote}", output)).returncode
     if rc == 0:
         click.echo(f"OK: translations exported to {output}")
     sys.exit(rc)
@@ -106,9 +114,9 @@ def export(instance, d, module, lang, output):
 @click.argument("modules", nargs=-1, required=True)
 def reload(instance, d, lang, modules):
     """Upgrade MODULES and OVERWRITE their translations from i18n/*.po."""
-    container = _resolve_container(instance)
-    reload_cmd = [
-        "docker", "exec", "-u", "odoo", container, "odoo",
+    service = _resolve_service(instance)
+    reload_cmd = _compose(
+        "exec", "-T", "-u", "odoo", service, "odoo",
         "-c", ODOO_CONF,
         "-d", d,
         "-u", ",".join(modules),
@@ -117,7 +125,7 @@ def reload(instance, d, lang, modules):
         "--http-port=0",
         "--workers=0",
         "--stop-after-init",
-    ]
+    )
     sys.exit(subprocess.run(reload_cmd).returncode)
 
 
