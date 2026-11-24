@@ -32,6 +32,7 @@ from odoo_cli.core.actions.postgres import (  # noqa: E402
     _provision_problems,
     _resolve_provision_target,
     _sql_literal,
+    provision_instances,
     provision_role_sql,
 )
 
@@ -145,7 +146,7 @@ class EnsureCredentialsTest(unittest.TestCase):
     def _ensure(self, config, runner=None, generate=False):
         self._write(config)
         loaded = load_config(self.tmpdir)
-        _ensure_credentials(runner or FakeRunner(), loaded, self.tmpdir, INSTANCE, generate)
+        _ensure_credentials(runner or FakeRunner(), loaded, self.tmpdir, [INSTANCE], generate)
         return loaded
 
     def test_generate_flag_persists_credentials(self):
@@ -181,8 +182,20 @@ class EnsureCredentialsTest(unittest.TestCase):
             self._ensure(_config(db_filter=None), runner=runner, generate=True)
         self.assertNotIn("db_user", self._read()["instances"][INSTANCE])
         message = runner.messages[-1][1]
-        self.assertIn("db_user", message)
-        self.assertIn("db_filter", message)
+        # The real blocker comes first; credentials are only a pending note,
+        # never "run --generate-credentials" (that's what just failed).
+        self.assertLess(message.index("db_filter"), message.index("db_user"))
+        self.assertIn("no bloquea", message)
+        self.assertIn("sin preguntar (--generate-credentials)", message)
+        self.assertNotIn("Correr './odoo provision-role", message)
+
+    def test_other_problems_without_flag_mention_confirmation(self):
+        runner = FakeRunner()
+        with self.assertRaises(SystemExit):
+            self._ensure(_config(db_filter=None), runner=runner)
+        message = runner.messages[-1][1]
+        self.assertIn("pidiendo confirmacion", message)
+        self.assertNotIn("Correr './odoo provision-role", message)
 
     def test_keeps_existing_db_user_and_only_generates_password(self):
         self._ensure(_config(db_user="app_propio"), generate=True)
@@ -203,9 +216,93 @@ class EnsureCredentialsTest(unittest.TestCase):
         self._write(config)
         before = os.path.getmtime(os.path.join(self.tmpdir, "instances.json"))
         _ensure_credentials(FakeRunner(), load_config(self.tmpdir), self.tmpdir,
-                            INSTANCE, False)
+                            [INSTANCE], False)
         after = os.path.getmtime(os.path.join(self.tmpdir, "instances.json"))
         self.assertEqual(before, after)
+
+    def test_several_instances_one_confirmation_one_write(self):
+        config = _config()
+        config["instances"]["otra"]["enabled"] = True
+        config["instances"]["otra"]["overwrite_odoo_config"] = {"db_filter": "^otra"}
+        self._write(config)
+        runner = FakeRunner(confirm_answers=[True])
+        _ensure_credentials(runner, load_config(self.tmpdir), self.tmpdir,
+                            [INSTANCE, "otra"], False)
+        saved = self._read()["instances"]
+        self.assertEqual(saved[INSTANCE]["db_user"], "app_bufalinda_release")
+        self.assertEqual(saved["otra"]["db_user"], "app_otra")
+        self.assertEqual(runner._confirm_q, [])  # exactly one question asked
+
+    def test_problems_of_every_instance_reported_together(self):
+        config = _config(db_filter=None)
+        config["instances"]["otra"]["enabled"] = True
+        self._write(config)
+        runner = FakeRunner()
+        with self.assertRaises(SystemExit):
+            _ensure_credentials(runner, load_config(self.tmpdir), self.tmpdir,
+                                [INSTANCE, "otra"], True)
+        message = runner.messages[-1][1]
+        self.assertIn(f"'{INSTANCE}'", message)
+        self.assertIn("'otra'", message)
+        self.assertNotIn("db_user", self._read()["instances"]["otra"])
+
+
+def _shared_config():
+    """Two cron-enabled instances on 'v17', already isolated (valid config)."""
+    config = _config(db_user="app_a", db_password="a")
+    config["instances"]["beta"] = {
+        "odoo_version": "17.0",
+        "external_port": 8071,
+        "database": "v17",
+        "odoo_config": "base",
+        "db_user": "app_b",
+        "db_password": "b",
+        "overwrite_odoo_config": {"db_filter": "^beta"},
+    }
+    return config
+
+
+class ProvisionInstancesTest(unittest.TestCase):
+    def _run(self, config, names, runner=None, force=False):
+        runner = runner or FakeRunner(confirm_answers=[True])
+        with patch.object(postgres, "provision_instances_grouped") as grouped, \
+                patch.object(postgres, "_ensure_credentials") as ensure:
+            provision_instances(runner, config, names, ".", force=force)
+        return runner, grouped, ensure
+
+    def test_instance_alone_in_its_service_is_skipped(self):
+        runner, grouped, ensure = self._run(_config(), [INSTANCE])
+        grouped.assert_not_called()
+        ensure.assert_not_called()
+        self.assertIn("--force", runner.messages[-1][1])
+
+    def test_force_provisions_a_lone_instance(self):
+        config = _config(db_user="app_a", db_password="a")
+        _, grouped, _ = self._run(config, [INSTANCE], force=True)
+        grouped.assert_called_once()
+        self.assertEqual(grouped.call_args.args[2], [INSTANCE])
+
+    def test_shared_service_provisions_all_with_one_confirmation(self):
+        runner = FakeRunner(confirm_answers=[True])
+        _, grouped, _ = self._run(_shared_config(), [INSTANCE, "beta"], runner=runner)
+        grouped.assert_called_once()
+        self.assertEqual(grouped.call_args.args[2], [INSTANCE, "beta"])
+        self.assertEqual(runner._confirm_q, [])
+
+    def test_lone_ones_skipped_and_shared_ones_kept(self):
+        config = _shared_config()
+        config["instances"]["otra"]["enabled"] = True
+        _, grouped, _ = self._run(config, ["otra", INSTANCE, "beta"])
+        self.assertEqual(grouped.call_args.args[2], [INSTANCE, "beta"])
+
+    def test_declining_touches_nothing(self):
+        runner = FakeRunner(confirm_answers=[False])
+        _, grouped, _ = self._run(_shared_config(), [INSTANCE, "beta"], runner=runner)
+        grouped.assert_not_called()
+
+    def test_unknown_instance_exits_before_anything(self):
+        with self.assertRaises(SystemExit):
+            self._run(_shared_config(), [INSTANCE, "no-existe"])
 
 
 class ProvisionRoleSqlQuotingTest(unittest.TestCase):
@@ -238,7 +335,7 @@ class ProvisionRoleSqlQuotingTest(unittest.TestCase):
 
 
 class LauncherFlagTest(unittest.TestCase):
-    """``--generate-credentials`` must reach the action from the real CLI."""
+    """Instances and flags must reach the action from the real CLI."""
 
     def setUp(self):
         import importlib.machinery
@@ -262,19 +359,33 @@ class LauncherFlagTest(unittest.TestCase):
     def _main(self, *argv):
         with patch.object(self.launcher, "BASE_PATH", self.tmpdir), \
                 patch.object(sys, "argv", ["odoo", *argv]), \
-                patch("odoo_cli.core.dispatch.provision_instance_role") as action:
+                patch("odoo_cli.core.dispatch.prompt_for_bulk_instances",
+                      return_value=["elegida"]), \
+                patch("odoo_cli.core.dispatch.provision_instances") as action:
             self.launcher.main()
         return action
 
-    def test_flag_is_passed(self):
-        action = self._main("provision-role", INSTANCE, "--generate-credentials")
-        self.assertEqual(action.call_args.args[2], INSTANCE)
+    def test_flags_are_passed(self):
+        action = self._main(
+            "provision-role", INSTANCE, "--generate-credentials", "--force"
+        )
+        self.assertEqual(action.call_args.args[2], [INSTANCE])
         self.assertEqual(action.call_args.args[3], self.tmpdir)
         self.assertTrue(action.call_args.kwargs["generate_credentials"])
+        self.assertTrue(action.call_args.kwargs["force"])
 
-    def test_flag_defaults_to_false(self):
+    def test_flags_default_to_false(self):
         action = self._main("provision-role", INSTANCE)
         self.assertFalse(action.call_args.kwargs["generate_credentials"])
+        self.assertFalse(action.call_args.kwargs["force"])
+
+    def test_comma_separated_instances(self):
+        action = self._main("provision-role", f"{INSTANCE}, otra")
+        self.assertEqual(action.call_args.args[2], [INSTANCE, "otra"])
+
+    def test_without_instance_prompts(self):
+        action = self._main("provision-role")
+        self.assertEqual(action.call_args.args[2], ["elegida"])
 
 
 if __name__ == "__main__":

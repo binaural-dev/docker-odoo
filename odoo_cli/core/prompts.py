@@ -357,11 +357,12 @@ def prompt_for_instance(
 def prompt_for_bulk_instances(
     runner: "Runner", full_config: dict, action: str
 ) -> list[str]:
-    """Ask which instances to enable/disable, with multi-select.
+    """Ask which instances to act on, with multi-select.
 
-    ``full_config`` must be the UNFILTERED config (``load_full_config``),
-    not the ``enabled``-filtered one — otherwise a disabled instance
-    could never be picked for ``./odoo enable``.
+    For enable/disable, ``full_config`` must be the UNFILTERED config
+    (``load_full_config``) — otherwise a disabled instance could never be
+    picked for ``./odoo enable``. ``provision-role`` passes the filtered one
+    on purpose: only enabled instances can be provisioned.
     """
     instances = list(full_config.get("instances", {}).keys())
     if not instances:

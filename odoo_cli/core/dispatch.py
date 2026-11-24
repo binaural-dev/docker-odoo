@@ -68,7 +68,7 @@ from odoo_cli.core.actions.maintenance import (
 from odoo_cli.core.actions.instance_state import set_instances_enabled
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.actions.postgres import (
-    provision_instance_role,
+    provision_instances,
     psql_connect_all,
     psql_remove_database,
 )
@@ -293,14 +293,18 @@ def dispatch(
         )
 
     elif args.action == "provision-role":
-        # Deliberately NOT in _INSTANCE_AWARE_ACTIONS: the instance is a
-        # required positional here. Provisioning rewrites database
-        # ownership and revokes CONNECT, so "no instance given" must be
-        # an argparse error, never an interactive menu that a mistyped
-        # command could walk into.
-        provision_instance_role(
-            runner, config, args.instance, base_path,
+        # Not in _INSTANCE_AWARE_ACTIONS: it takes several instances. Without
+        # one, a multi-select over the enabled instances; provision_instances
+        # still asks before touching Postgres, so the menu alone can't
+        # rewrite ownership by accident.
+        if args.instance:
+            names = [n.strip() for n in args.instance.split(",") if n.strip()]
+        else:
+            names = prompt_for_bulk_instances(runner, config, "aprovisionar")
+        provision_instances(
+            runner, config, names, base_path,
             generate_credentials=getattr(args, "generate_credentials", False),
+            force=getattr(args, "force", False),
         )
 
     elif args.action == "update":

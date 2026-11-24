@@ -20,8 +20,8 @@ also covers the threaded mode (that one never even calls
 
 Two entry points
 ----------------
-* :func:`provision_instance_role` — ``./odoo provision-role <instance>``,
-  one instance end to end (own break-glass window).
+* :func:`provision_instances` — ``./odoo provision-role [instance[,...]]``,
+  one or several instances end to end (one break-glass window per service).
 * :func:`audit_db_filter_drift` / :func:`print_db_filter_audit` /
   :func:`maybe_fix_drift` — read-only audit run on every
   ``./odoo build``, because editing ``db_filter`` in ``instances.json``
@@ -346,11 +346,42 @@ def _missing_credentials_message(instance: str) -> str:
     )
 
 
-def _exit_with_problems(runner: "Runner", instance: str, errors: list[str]) -> None:
-    lines = [f"Error: no se puede aprovisionar '{instance}':"]
-    lines += [f"  - {error}" for error in errors]
+def _pending_credentials_note(instance: str, generate: bool) -> str:
+    """Missing credentials next to a real blocker: say they will be handled,
+    instead of pointing to the very command that just failed."""
+    from generators.config_loader import dedicated_role_name
+
+    how = "sin preguntar (--generate-credentials)" if generate else "pidiendo confirmacion"
+    return (
+        f"Faltan tambien 'db_user'/'db_password', pero eso no bloquea: se "
+        f"generan ('{dedicated_role_name(instance)}') {how} apenas se resuelva "
+        f"lo anterior."
+    )
+
+
+def _exit_with_problems(runner: "Runner", problems: dict[str, list[str]]) -> None:
+    """Report every blocking problem of every instance, then exit."""
+    lines = []
+    for instance, errors in problems.items():
+        lines.append(f"Error: no se puede aprovisionar '{instance}':")
+        lines += [f"  - {error}" for error in errors]
     runner.error("\n".join(lines))
     sys.exit(1)
+
+
+def _alone_in_service(config: dict, instance: str) -> bool:
+    """Whether no other enabled instance uses ``instance``'s Postgres service.
+
+    Same grouping as ``_validate_cron_dbfilter_isolation``: a lone instance
+    has no neighbour whose cron could reach its databases, so a dedicated
+    role isolates nothing.
+    """
+    db_name = config["instances"][instance]["database"]
+    return not any(
+        inst["database"] == db_name
+        for name, inst in config["instances"].items()
+        if name != instance
+    )
 
 
 def _resolve_provision_target(runner: "Runner", config: dict, instance: str) -> dict:
@@ -367,7 +398,7 @@ def _resolve_provision_target(runner: "Runner", config: dict, instance: str) -> 
     if missing_credentials:
         errors.insert(0, _missing_credentials_message(instance))
     if errors:
-        _exit_with_problems(runner, instance, errors)
+        _exit_with_problems(runner, {instance: errors})
 
     db_name = inst_conf["database"]
     db_conf = config["databases"][db_name]
@@ -387,13 +418,14 @@ def _resolve_provision_target(runner: "Runner", config: dict, instance: str) -> 
 
 
 def _ensure_credentials(
-    runner: "Runner", config: dict, base_path: str, instance: str, generate: bool
+    runner: "Runner", config: dict, base_path: str, instances: list[str], generate: bool
 ) -> None:
     """Offer to generate and persist ``db_user``/``db_password`` when missing.
 
-    Runs before any Postgres work, and only once the rest of the target is
-    known to be valid, so instances.json is never left half-fixed. Writes
-    the raw (unfiltered) file and mirrors the values into ``config``.
+    Runs before any Postgres work, and only once every target is known to be
+    otherwise valid, so instances.json is never left half-fixed. One
+    confirmation and one write for all of ``instances``; the values are
+    mirrored into ``config``.
     """
     from generators.config_loader import (
         _strip_json_comments,
@@ -403,41 +435,49 @@ def _ensure_credentials(
     )
     from odoo_cli.core.actions.instance_state import _write_instances_json
 
-    inst_conf = config["instances"].get(instance)
-    if inst_conf is None:
-        runner.error(f"Error: instancia '{instance}' no existe.")
-        sys.exit(1)
-
-    errors, missing_credentials = _provision_problems(config, instance)
-    if errors:
-        if missing_credentials:
-            errors.insert(0, _missing_credentials_message(instance))
-        _exit_with_problems(runner, instance, errors)
-    if not missing_credentials:
+    problems: dict[str, list[str]] = {}
+    missing: list[str] = []
+    for instance in instances:
+        errors, missing_credentials = _provision_problems(config, instance)
+        if errors:
+            if missing_credentials:
+                errors.append(_pending_credentials_note(instance, generate))
+            problems[instance] = errors
+        elif missing_credentials:
+            missing.append(instance)
+    if problems:
+        _exit_with_problems(runner, problems)
+    if not missing:
         return
 
     full_config = load_full_config(base_path)
-    db_name = inst_conf["database"]
-    taken = {config["databases"][db_name]["user"]} | {
+    taken = {db["user"] for db in config["databases"].values()} | {
         inst.get("db_user") for inst in full_config["instances"].values()
     }
-    db_user = inst_conf.get("db_user") or dedicated_role_name(instance)
-    if not inst_conf.get("db_user") and (
-        db_user in taken or not _ROLE_NAME_RE.match(db_user)
-    ):
-        _exit_with_problems(runner, instance, [
-            f"El rol sugerido '{db_user}' ya lo usa otra instancia o el "
-            f"servicio '{db_name}', o no es un nombre de rol valido. Definí "
-            f"'db_user'/'db_password' a mano."
-        ])
-    db_password = inst_conf.get("db_password") or generate_db_password()
+    proposed: dict[str, tuple[str, str]] = {}
+    for instance in missing:
+        inst_conf = config["instances"][instance]
+        db_user = inst_conf.get("db_user") or dedicated_role_name(instance)
+        if not inst_conf.get("db_user"):
+            if db_user in taken or not _ROLE_NAME_RE.match(db_user):
+                problems[instance] = [
+                    f"El rol sugerido '{db_user}' ya lo usa otra instancia o un "
+                    f"servicio, o no es un nombre de rol valido. Definí "
+                    f"'db_user'/'db_password' a mano."
+                ]
+                continue
+            taken.add(db_user)
+        proposed[instance] = (
+            db_user, inst_conf.get("db_password") or generate_db_password()
+        )
+    if problems:
+        _exit_with_problems(runner, problems)
 
-    runner.info(f"\n'{instance}' no tiene credenciales propias de Postgres.")
-    runner.info(f"  db_user:     {db_user}")
-    runner.info("  db_password: (generada, 24 caracteres alfanumericos)")
+    runner.info("\nSin credenciales propias de Postgres (se generan):")
+    for instance, (db_user, _password) in proposed.items():
+        runner.info(f"  - {instance}: db_user '{db_user}', db_password de 24 caracteres")
 
-    path = os.path.join(base_path, "instances.json")
-    with open(path) as f:
+    with open(os.path.join(base_path, "instances.json")) as f:
         raw = f.read()
     if _strip_json_comments(raw) != raw:
         runner.warn(
@@ -450,14 +490,14 @@ def _ensure_credentials(
         runner.info("Cancelado.")
         sys.exit(1)
 
-    full_config["instances"][instance]["db_user"] = db_user
-    full_config["instances"][instance]["db_password"] = db_password
+    for instance, (db_user, db_password) in proposed.items():
+        for target in (full_config["instances"][instance], config["instances"][instance]):
+            target["db_user"] = db_user
+            target["db_password"] = db_password
     success, error_message = _write_instances_json(base_path, full_config)
     if not success:
         runner.error(f"\n❌ No se pudo guardar instances.json: {error_message}")
         sys.exit(1)
-    inst_conf["db_user"] = db_user
-    inst_conf["db_password"] = db_password
     runner.info("✅ Credenciales guardadas en instances.json.")
 
 
@@ -481,10 +521,10 @@ def _bootstrap_breakglass_enable(
 def provision_role_sql(runner: "Runner", target: dict) -> list[str]:
     """Do the actual role/ownership/ACL work for one instance, assuming the
     bootstrap role can already log in (caller's responsibility to
-    enable/disable around this — see :func:`provision_instance_role` for the
-    single-instance CLI entry point, or :func:`provision_instances_grouped`
-    to batch multiple targets of the same service under one enable/disable
-    pair and avoid repeated maintenance windows).
+    enable/disable around this — see :func:`provision_instances` for the
+    CLI entry point, or :func:`provision_instances_grouped` to batch multiple
+    targets of the same service under one enable/disable pair and avoid
+    repeated maintenance windows).
 
     IMPORTANT: never uses ``REASSIGN OWNED`` — run once, connected to one
     database, it reassigns ALL databases cluster-wide still owned by the
@@ -536,65 +576,71 @@ def provision_role_sql(runner: "Runner", target: dict) -> list[str]:
     return matching
 
 
-def provision_instance_role(
+def provision_instances(
     runner: "Runner",
     config: dict,
-    instance: str,
+    instances: list[str],
     base_path: str = ".",
     generate_credentials: bool = False,
+    force: bool = False,
 ) -> None:
-    """CLI entry point: provision a single instance end to end, including its
-    own dedicated break-glass window. See :func:`provision_role_sql` for what
-    "provision" means, and the module docstring for why this exists
-    (Postgres-level fix for cron crossing instances that share a database
-    service, instead of patching Odoo's own code).
+    """CLI entry point: provision one or several instances end to end, with
+    one break-glass window per Postgres service. See
+    :func:`provision_role_sql` for what "provision" means, and the module
+    docstring for why this exists (Postgres-level fix for cron crossing
+    instances that share a database service, instead of patching Odoo's own
+    code).
 
-    Missing ``db_user``/``db_password`` are generated and saved after a
-    confirmation (or straight away with ``generate_credentials``)."""
-    _ensure_credentials(runner, config, base_path, instance, generate_credentials)
-    target = _resolve_provision_target(runner, config, instance)
-    db_container = target["db_container"]
-    bootstrap_user = target["bootstrap_user"]
-    bootstrap_password = target["bootstrap_password"]
+    An instance alone in its service is skipped unless ``force``: there is
+    no neighbour to isolate it from, and provisioning still costs a restart
+    of the whole service. Missing ``db_user``/``db_password`` are generated
+    and saved after a confirmation (or straight away with
+    ``generate_credentials``)."""
+    unknown = [name for name in instances if name not in config["instances"]]
+    if unknown:
+        runner.error(
+            f"Error: instancia(s) inexistente(s) o deshabilitada(s): "
+            f"{', '.join(unknown)}"
+        )
+        sys.exit(1)
 
-    runner.info(f"\n=== 🔐 APROVISIONANDO ROL DEDICADO: {instance.upper()} ===\n")
-    runner.info(
-        f"Servicio de Postgres: {target['db_name']}  (contenedor: {db_container})"
-    )
-    runner.info(f"Rol: {target['db_user']}")
-    runner.info(f"db_filter usado para resolver bases: {target['db_filter']}")
+    if not force:
+        alone = [name for name in instances if _alone_in_service(config, name)]
+        for name in alone:
+            runner.info(
+                f"\nℹ '{name}' es la unica instancia habilitada del servicio "
+                f"'{config['instances'][name]['database']}': no hay con quien "
+                f"aislarla, no hace falta aprovisionarla (--force para hacerlo igual)."
+            )
+        instances = [name for name in instances if name not in alone]
+        if not instances:
+            return
+
+    _ensure_credentials(runner, config, base_path, instances, generate_credentials)
+    groups = _provision_targets_grouped(runner, config, instances)
+
+    runner.info("\n=== 🔐 APROVISIONANDO ROLES DEDICADOS ===")
+    for db_container, group in groups.items():
+        runner.info(f"\nServicio de Postgres: {group[0]['db_name']}  (contenedor: {db_container})")
+        for t in group:
+            runner.info(f"  - {t['instance']}: rol '{t['db_user']}', db_filter '{t['db_filter']}'")
     runner.warn(
-        f"\n⚠️  Si el rol bootstrap de '{target['db_name']}' esta en NOLOGIN (lo "
-        f"normal), esto va a requerir una ventana breve de mantenimiento de "
-        f"TODO ese servicio (se reinicia {db_container}), no solo de esta "
-        f"instancia.\n"
+        "\n⚠️  Si el rol bootstrap de un servicio esta en NOLOGIN (lo normal), "
+        "esto requiere una ventana breve de mantenimiento de TODO ese servicio "
+        "(se reinicia su contenedor de Postgres), no solo de estas instancias.\n"
     )
-
     if not _confirm_or_skip(runner, "¿Continuar?"):
         runner.info("Cancelado.")
         return
 
-    if _bootstrap_needs_breakglass(db_container, bootstrap_user, bootstrap_password):
-        _bootstrap_breakglass_enable(
-            runner, db_container, bootstrap_user, target["db_conf"], target["db_name"]
-        )
-    else:
-        runner.info(
-            f"\n→ Rol bootstrap '{bootstrap_user}' ya puede loguear "
-            f"(sesion previa sin cerrar), sigo sin break-glass."
-        )
+    provision_instances_grouped(runner, config, instances)
 
-    matching = provision_role_sql(runner, target)
-
-    _pg_exec(runner, db_container, bootstrap_user, bootstrap_password, "postgres",
-             f"ALTER ROLE {bootstrap_user} NOLOGIN;")
-
+    services = " ".join(f"odoo-{name}" for name in instances)
     runner.info(
-        f"\n✅ '{instance}' aprovisionada: rol '{target['db_user']}', dueño de "
-        f"{len(matching)} base(s), CONNECT restringido a ese rol.\n"
-        f"   Falta: regenerar el compose y recrear el contenedor de esta "
-        f"instancia (./odoo build && docker compose up -d --no-deps "
-        f"odoo-{instance}) para que use las credenciales nuevas.\n"
+        f"\n✅ Aprovisionada(s): {', '.join(instances)}.\n"
+        f"   Falta: regenerar el compose y recrear sus contenedores para que "
+        f"usen las credenciales nuevas (./odoo build && docker compose -f "
+        f"{COMPOSE_FILE} up -d --no-deps {services}).\n"
     )
 
 
@@ -713,7 +759,7 @@ __all__ = [
     "audit_db_filter_drift",
     "maybe_fix_drift",
     "print_db_filter_audit",
-    "provision_instance_role",
+    "provision_instances",
     "provision_instances_grouped",
     "provision_role_sql",
 ]
