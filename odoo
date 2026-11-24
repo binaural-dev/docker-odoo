@@ -59,6 +59,16 @@ from odoo_cli.core.dispatch import dispatch
 # ============================================================
 
 
+def _size_arg(value: str) -> int:
+    """argparse ``type`` for memory limits: ``4G``/``512M``/bytes → bytes."""
+    from odoo_cli.core.actions.instance_config import parse_size
+
+    try:
+        return parse_size(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Return the full argparse parser with every subcommand wired in.
 
@@ -84,7 +94,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "submodule-status\n"
             "  Cobertura de tests  coverage-status, coverage\n"
             "  Postgres / roles    provision-role, psql remove, restore\n"
-            "  Config / infra      new, hosts, enable, disable, "
+            "  Config / infra      new, config, hosts, enable, disable, "
             "validate-instances, tui, apk, agent\n"
             "\n"
             "Ejemplos:\n"
@@ -593,6 +603,54 @@ def _build_parser() -> argparse.ArgumentParser:
             "coma (ej: release,staging). Sin esto, muestra lo que está "
             "físicamente checkeado ahora mismo."
         ),
+    )
+
+    # config
+    p = subparsers.add_parser(
+        "config",
+        help="Muestra o cambia la configuración de una instancia (producción, list_db, workers...)",
+        description=(
+            "Sin opciones muestra la configuración efectiva de la instancia "
+            "(sin secretos). Con opciones la cambia SOLO para esa instancia "
+            "(raíz u overwrite_odoo_config; nunca el odoo_configs compartido), "
+            "valida, guarda instances.json y regenera compose/nginx.\n\n"
+            "--production marca la instancia como productiva: bloquea "
+            "'./odoo remove', prohíbe dev_mode, apaga list_db y hace que "
+            "nginx rechace /web/database/ (administrador de bases)."
+        ),
+    )
+    p.add_argument(
+        "instance", nargs="?", default=None,
+        help="Nombre de instancia (opcional: sin esto se elige de un menú)",
+    )
+    p.add_argument(
+        "--production", dest="production", action="store_const", const=True,
+        default=None, help="Marcarla como instancia de producción",
+    )
+    p.add_argument(
+        "--no-production", dest="production", action="store_const", const=False,
+        help="Marcarla como instancia de pruebas/desarrollo",
+    )
+    p.add_argument(
+        "--list-db", dest="list_db", action="store_const", const=True,
+        default=None, help="Habilitar el administrador de bases de Odoo",
+    )
+    p.add_argument(
+        "--no-list-db", dest="list_db", action="store_const", const=False,
+        help="Deshabilitar el administrador de bases de Odoo",
+    )
+    p.add_argument("--db-filter", default=None, help="db_filter de la instancia (ej: '^cliente')")
+    p.add_argument("--workers", type=int, default=None, help="Cantidad de workers")
+    p.add_argument(
+        "--max-cron-threads", type=int, default=None, help="Hilos de cron (0 = sin cron)",
+    )
+    p.add_argument(
+        "--limit-memory-soft", type=_size_arg, default=None,
+        help="Límite blando de memoria POR WORKER (ej: 2G, 2048M)",
+    )
+    p.add_argument(
+        "--limit-memory-hard", type=_size_arg, default=None,
+        help="Límite duro de memoria POR WORKER (ej: 3G)",
     )
 
     # enable / disable

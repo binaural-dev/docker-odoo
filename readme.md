@@ -110,7 +110,7 @@ Existe una **tercera** identidad opcional, a nivel de instancia (no de `database
 
 Cada instancia define su versión de Odoo, puerto externo, base de datos y configuración. Puede sobreescribir valores del `odoo_config` base usando `overwrite_odoo_config`. El flag opcional `"enabled"` (default `true`) controla si la instancia aparece en `./odoo build/start/stop/...` y en la TUI; podés togglerlo desde la TUI con `Space` y el cambio se persiste en `instances.json`.
 
-El flag opcional `"production"` (default `false`) marca una instancia como productiva. Hoy lo único que hace es **bloquear duro `./odoo remove`** contra esa instancia (y contra `./odoo remove` sin argumento, si *alguna* instancia de la config es productiva) — no hay confirmación que lo salve ni override por flag: para borrarla de verdad hay que sacar `"production": true` a mano en `instances.json` primero. Pensado para hosts on-premise donde conviven una instancia de prueba y una de producción en el mismo Docker.
+El flag opcional `"production"` (default `false`) marca una instancia como productiva; se cambia con `./odoo config <instancia> --production` / `--no-production`. Hace que nginx rechace `/web/database/` (el administrador de bases de Odoo: backup, borrado, restauración) para esa instancia, y `./odoo config --production` además le apaga `list_db`. También **bloquea duro `./odoo remove`** contra esa instancia (y contra `./odoo remove` sin argumento, si *alguna* instancia de la config es productiva) — no hay confirmación que lo salve ni override por flag: para borrarla de verdad hay que sacar `"production": true` a mano en `instances.json` primero. Pensado para hosts on-premise donde conviven una instancia de prueba y una de producción en el mismo Docker.
 
 El flag `"dev_mode"` (default `false`, dentro de `overwrite_odoo_config` o del `odoo_config` base, igual que `workers`/`without_demo`) agrega `--dev=all` al comando de arranque de Odoo (autoreload de código/assets — útil en desarrollo). **No se puede combinar con `"production": true`**: `instances.json` se rechaza al cargar (`ValueError`) si una instancia productiva tiene `dev_mode` activo — en producción corresponde `./odoo update`, no dev mode.
 
@@ -273,6 +273,7 @@ El script `./odoo` es un shim liviano (~690 LOC, sobre todo la definición de ar
 | `odoo_cli/core/actions/modules.py` | `update`, `reset_password`, `bash_update_modules` |
 | `odoo_cli/core/actions/maintenance.py` | `init_addons`, `sync`, `update_tags`, `update_tags_bulk`, `submodule_status` |
 | `odoo_cli/core/actions/hosts.py` | `hosts_status`, `hosts_apply`, `hosts_show` |
+| `odoo_cli/core/actions/instance_config.py` | `configure_instance`, `show_instance_config` |
 
 | Comando | Descripción |
 |---------|-------------|
@@ -292,6 +293,7 @@ El script `./odoo` es un shim liviano (~690 LOC, sobre todo la definición de ar
 | `update <instance> [-d <db\|all>] [-m modules] [-f]` | Actualiza módulos de Odoo (una base o todas). Sin `-m`, actualiza todos los módulos usando `click-odoo-update` (solo los que cambiaron desde la última actualización); con `-f`/`--force` fuerza un upgrade completo de todos, sin importar qué cambió. Un módulo puntual (`-m modulo`) siempre se actualiza directo, sin pasar por ninguno de los dos caminos anteriores. |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `new [nombre] [repo] [branch] [version]` | Wizard: clona el repo del cliente y da de alta la instancia en `instances.json`. |
+| `config [instance] [opciones]` | Sin opciones muestra la configuración efectiva de la instancia (sin secretos). Con `--production`/`--no-production`, `--list-db`/`--no-list-db`, `--db-filter`, `--workers`, `--max-cron-threads`, `--limit-memory-soft`/`--limit-memory-hard` (por worker, ej. `3G`) la cambia **solo para esa instancia** (raíz u `overwrite_odoo_config`, nunca el `odoo_configs` compartido), valida, guarda y regenera compose/nginx. `--production` apaga `list_db`. |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
 | `update-tags [proyecto] [branch_origin] [submodulo] [tag] [--v]` | Bumpea uno o más submódulos a un tag específico, en una rama nueva para PR. Todo argumento faltante se pregunta interactivamente (proyecto, rama base, submódulo, tag — con menú de tags filtrable, ej: `19, alpha`). Push y `gh pr create` se ofrecen al final, cada uno con su propia confirmación. |
@@ -301,7 +303,7 @@ El script `./odoo` es un shim liviano (~690 LOC, sobre todo la definición de ar
 | `hosts [status\|show\|apply\|dry-run]` | Sincroniza `/etc/hosts` con los subdominios de las instances. Ver [Subdominios locales por instance](#subdominios-locales-por-instance). |
 | `coverage-status [--json] [--pull] [--only-with-tests]` | Escaneo rápido (sin Docker) de qué clientes tienen módulos con `tests/`. |
 | `coverage [proyecto...] [opciones]` | Corre `coverage.py` real (build scoped + start + coverage + stop + limpieza, automatizado) para uno, varios o todos los clientes con tests. |
-| `provision-role <instance>` | Aprovisiona el rol de Postgres dedicado de una instancia: crea el rol si no existe, transfiere el ownership de toda base que matchee su `db_filter`, y revoca `CONNECT` de `PUBLIC` sobre ellas. Requiere `db_user`/`db_password` y un `db_filter` específico ya definidos en `instances.json`. Puede pedir una ventana breve de mantenimiento de todo el servicio de Postgres (pide confirmación antes). Ver "Instancias que comparten un mismo servicio de Postgres" arriba. |
+| `provision-role [instance[,instance...]] [--generate-credentials] [--force]` | Aprovisiona el rol de Postgres dedicado de una o varias instancias (sin argumento, menú de selección múltiple): crea el rol si no existe, transfiere el ownership de toda base que matchee su `db_filter`, y revoca `CONNECT` de `PUBLIC` sobre ellas. Una instancia sola en su servicio de Postgres se saltea (no hay con quién aislarla) salvo con `--force`. Requiere un `db_filter` específico; si faltan `db_user`/`db_password` los genera (con confirmación, o directo con `--generate-credentials`). Puede pedir una ventana breve de mantenimiento de todo el servicio de Postgres (pide confirmación antes). Ver "Instancias que comparten un mismo servicio de Postgres" arriba. |
 | `tui` | Lanza la TUI interactiva (equivalente a `./odoo-tui`). |
 | `agent [install\|on\|off\|status\|token\|logs]` | Agente HTTP para `micro_saas` (vive en `.resources/docker-odoo-agent`, desactivado hasta instalarlo). Sin subcomando lo activa o lo desactiva según su estado. Ver "`./odoo agent`" más abajo. |
 
