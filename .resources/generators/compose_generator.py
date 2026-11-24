@@ -232,8 +232,9 @@ def _odoo_service(inst_name, inst_conf, odoo_conf, db_name, db_conf, dockerfile,
         "      - ./src:/home/odoo/src",
         "      - ./.resources/.coveragerc:/home/odoo/.coveragerc",
         f"      - {inst_name}-data:/home/odoo/data",
-        f"      - {inst_name}-py3:/usr/local/lib/",
-        f"      - {inst_name}-py:/usr/lib/",
+        # No volumes over /usr/lib or /usr/local/lib: Odoo and the system
+        # Python libraries live there, and a named volume is only filled
+        # from the image the first time, so it froze every later build.
         "    environment:",
     ]
 
@@ -393,8 +394,6 @@ def _volumes(config):
     for inst_name in config["instances"]:
         lines.append(f"  {inst_name}-web:")
         lines.append(f"  {inst_name}-data:")
-        lines.append(f"  {inst_name}-py3:")
-        lines.append(f"  {inst_name}-py:")
 
     # pgAdmin volume
     pgadmin_conf = config.get("pgadmin", {})

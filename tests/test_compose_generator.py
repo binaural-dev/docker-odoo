@@ -70,6 +70,18 @@ class ComposeGeneratorIsolationTest(unittest.TestCase):
         with open(path) as f:
             return f.read()
 
+    def test_no_volumes_over_system_libraries(self):
+        """/usr/lib holds Odoo itself: a named volume there is filled from
+        the image only once and then hides every later build."""
+        content = self._generate()
+
+        self.assertNotIn("/usr/lib", content)
+        self.assertNotIn("/usr/local/lib", content)
+        self.assertNotIn("acme-py3:", content)
+        self.assertNotIn("acme-py:", content)
+        self.assertIn("acme-web:/var/lib/odoo", content)
+        self.assertIn("acme-data:/home/odoo/data", content)
+
     def test_no_fixed_container_name(self):
         content = self._generate()
         self.assertNotIn(
