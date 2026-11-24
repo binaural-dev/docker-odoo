@@ -6,6 +6,9 @@ Resolves odoo_config references and applies overwrite_odoo_config merges.
 import json
 import os
 import sys
+import re
+import secrets
+import string
 
 
 def _strip_json_comments(text: str) -> str:
@@ -416,6 +419,22 @@ def resolve_db_config(inst_conf, config):
             "password": inst_conf.get("db_password", db_conf["password"]),
         }
     return db_conf
+
+
+def dedicated_role_name(name):
+    """Postgres role for the instance. provision-role interpolates it into SQL
+    unquoted, so it must be a plain identifier: lowercase alnum + underscores."""
+    return "app_" + re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def dedicated_db_filter(name):
+    """Default db_filter for an instance with its own role: its name as prefix."""
+    return f"^{re.escape(name)}"
+
+
+def generate_db_password(length=24):
+    alphabet = string.ascii_letters + string.digits
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def resolve_instance_db_creds(inst_conf, db_conf):
