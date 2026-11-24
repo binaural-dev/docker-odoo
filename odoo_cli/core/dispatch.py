@@ -65,6 +65,11 @@ from odoo_cli.core.actions.maintenance import (
     update_tags,
     update_tags_bulk,
 )
+from odoo_cli.core.actions.instance_config import (
+    OVERWRITE_KEYS,
+    ROOT_KEYS,
+    configure_instance,
+)
 from odoo_cli.core.actions.instance_state import set_instances_enabled
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.actions.postgres import (
@@ -387,6 +392,22 @@ def dispatch(
             args.branch_origin,
             show=args.v,
         )
+
+    elif args.action == "config":
+        # Over the FULL config: a disabled instance can be configured too
+        # (e.g. marked as production before enabling it).
+        from generators.config_loader import load_full_config
+
+        if getattr(args, "instance", None) is None:
+            args.instance = prompt_for_instance(
+                runner, load_full_config(base_path), "config"
+            )
+        changes = {
+            key: getattr(args, key)
+            for key in ROOT_KEYS + OVERWRITE_KEYS
+            if getattr(args, key, None) is not None
+        }
+        configure_instance(runner, base_path, args.instance, changes)
 
     elif args.action in ("enable", "disable"):
         # Not in _INSTANCE_AWARE_ACTIONS: that resolution path prompts

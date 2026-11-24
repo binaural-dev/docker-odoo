@@ -15,6 +15,8 @@ not bleed across instances.
 
 import os
 
+from .config_loader import is_production_instance
+
 
 ODOO_HTTP_PORT = 8069
 ODOO_GEVENT_PORT = 8071
@@ -35,7 +37,10 @@ def generate_nginx_config(base_path, config):
         external_port = inst_conf["external_port"]
         container_name = f"odoo-{inst_name}"
         blocks.append(
-            _odoo_server_block(inst_name, external_port, container_name, is_first)
+            _odoo_server_block(
+                inst_name, external_port, container_name, is_first,
+                production=is_production_instance(inst_conf),
+            )
         )
         is_first = False
 
@@ -83,9 +88,21 @@ def _listen_lines(port_a, port_b, is_default_server):
     ]
 
 
-def _odoo_server_block(inst_name, external_port, container_name, is_first):
+# Production instances never expose Odoo's database manager (backup, drop,
+# restore): second layer on top of list_db = False, in case it gets turned on.
+_DATABASE_MANAGER_BLOCK = """
+    location ^~ /web/database/ {
+        return 403;
+    }
+"""
+
+
+def _odoo_server_block(
+    inst_name, external_port, container_name, is_first, production=False
+):
     listen_lines = _listen_lines(external_port, NGINX_HTTP_PORT, is_first)
     listen_block = "\n".join(listen_lines)
+    database_manager_block = _DATABASE_MANAGER_BLOCK if production else ""
     return f"""# Instance: {inst_name} (port {external_port} | {inst_name}.local)
 server {{
 {listen_block}
@@ -100,7 +117,7 @@ server {{
     proxy_send_timeout 7200s;
     proxy_connect_timeout 7200s;
     send_timeout 7200s;
-
+{database_manager_block}
     location / {{
         set $proxy_upstream_{ODOO_HTTP_PORT} http://{container_name}:{ODOO_HTTP_PORT};
         proxy_pass $proxy_upstream_{ODOO_HTTP_PORT};
