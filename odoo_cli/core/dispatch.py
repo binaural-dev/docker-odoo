@@ -65,11 +65,7 @@ from odoo_cli.core.actions.maintenance import (
     update_tags,
     update_tags_bulk,
 )
-from odoo_cli.core.actions.instance_config import (
-    OVERWRITE_KEYS,
-    ROOT_KEYS,
-    configure_instance,
-)
+from odoo_cli.core.actions.instance_config import configure_instance
 from odoo_cli.core.actions.instance_state import set_instances_enabled
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.actions.postgres import (
@@ -402,12 +398,11 @@ def dispatch(
             args.instance = prompt_for_instance(
                 runner, load_full_config(base_path), "config"
             )
-        changes = {
-            key: getattr(args, key)
-            for key in ROOT_KEYS + OVERWRITE_KEYS
-            if getattr(args, key, None) is not None
-        }
-        configure_instance(runner, base_path, args.instance, changes)
+        configure_instance(
+            runner, base_path, args.instance,
+            mode=getattr(args, "mode", None),
+            profile=getattr(args, "profile", None),
+        )
 
     elif args.action in ("enable", "disable"):
         # Not in _INSTANCE_AWARE_ACTIONS: that resolution path prompts
