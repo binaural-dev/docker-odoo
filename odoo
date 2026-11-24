@@ -313,32 +313,32 @@ def _build_parser() -> argparse.ArgumentParser:
     p = subparsers.add_parser(
         "provision-role",
         help=(
-            "Crea/actualiza el rol dedicado de Postgres de una instancia y "
-            "aisla sus bases (owner + REVOKE CONNECT)"
+            "Crea/actualiza el rol dedicado de Postgres de una o varias "
+            "instancias y aisla sus bases (owner + REVOKE CONNECT)"
         ),
         description=(
-            "Le da a la instancia su propio rol de Postgres, dueño únicamente "
+            "Le da a cada instancia su propio rol de Postgres, dueño únicamente "
             "de las bases que matchean su db_filter, y le revoca CONNECT a "
             "PUBLIC. Es la forma de evitar que el cron de una instancia corra "
             "sobre las bases de otra cuando comparten servicio de Postgres "
-            "(ir.cron no respeta dbfilter).\n\n"
+            "(ir.cron no respeta dbfilter). Una instancia sola en su servicio "
+            "se saltea (no hay con quién aislarla), salvo con --force.\n\n"
             "Usa db_user/db_password a nivel raíz de la instancia en "
             "instances.json; si faltan, ofrece generarlos y guardarlos "
-            "(o lo hace directo con --generate-credentials). Si el rol bootstrap del servicio está en NOLOGIN "
-            "(lo normal), aplica un break-glass temporal: eso implica una "
-            "ventana breve de mantenimiento de TODO el servicio de Postgres, "
-            "no sólo de esta instancia. Pide confirmación antes de tocar nada."
+            "(o lo hace directo con --generate-credentials). Si el rol "
+            "bootstrap del servicio está en NOLOGIN (lo normal), aplica un "
+            "break-glass temporal: eso implica una ventana breve de "
+            "mantenimiento de TODO el servicio de Postgres, una sola vez por "
+            "servicio. Pide confirmación antes de tocar nada."
         ),
     )
-    # Posicional obligatorio a propósito (sin nargs="?"): esto reescribe
-    # ownership de bases y revoca CONNECT. Si falta la instancia tiene
-    # que ser un error de argparse, no un menú interactivo en el que se
-    # pueda caer por un comando mal tipeado.
+    # Sin instancia abre una selección múltiple; igual se pide confirmación
+    # antes de reescribir ownership o revocar CONNECT.
     p.add_argument(
-        "instance",
+        "instance", nargs="?", default=None,
         help=(
-            "Nombre de instancia (si no tiene db_user/db_password en "
-            "instances.json, se ofrecen generados)"
+            "Instancia o lista separada por comas (opcional: sin ella se "
+            "elige de un menú, una o varias)"
         ),
     )
     p.add_argument(
@@ -346,6 +346,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Si faltan db_user/db_password, generarlos y guardarlos en "
             "instances.json sin preguntar (db_user = app_<instancia>)"
+        ),
+    )
+    p.add_argument(
+        "--force", action="store_true", default=False,
+        help=(
+            "Aprovisionar también instancias que son las únicas de su "
+            "servicio de Postgres (por defecto se saltean)"
         ),
     )
 
