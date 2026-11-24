@@ -346,6 +346,19 @@ def _missing_credentials_message(instance: str) -> str:
     )
 
 
+def _pending_credentials_note(instance: str, generate: bool) -> str:
+    """Missing credentials next to a real blocker: say they will be handled,
+    instead of pointing to the very command that just failed."""
+    from generators.config_loader import dedicated_role_name
+
+    how = "sin preguntar (--generate-credentials)" if generate else "pidiendo confirmacion"
+    return (
+        f"Faltan tambien 'db_user'/'db_password', pero eso no bloquea: se "
+        f"generan ('{dedicated_role_name(instance)}') {how} apenas se resuelva "
+        f"lo anterior."
+    )
+
+
 def _exit_with_problems(runner: "Runner", instance: str, errors: list[str]) -> None:
     lines = [f"Error: no se puede aprovisionar '{instance}':"]
     lines += [f"  - {error}" for error in errors]
@@ -411,7 +424,7 @@ def _ensure_credentials(
     errors, missing_credentials = _provision_problems(config, instance)
     if errors:
         if missing_credentials:
-            errors.insert(0, _missing_credentials_message(instance))
+            errors.append(_pending_credentials_note(instance, generate))
         _exit_with_problems(runner, instance, errors)
     if not missing_credentials:
         return

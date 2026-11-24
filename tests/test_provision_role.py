@@ -181,8 +181,20 @@ class EnsureCredentialsTest(unittest.TestCase):
             self._ensure(_config(db_filter=None), runner=runner, generate=True)
         self.assertNotIn("db_user", self._read()["instances"][INSTANCE])
         message = runner.messages[-1][1]
-        self.assertIn("db_user", message)
-        self.assertIn("db_filter", message)
+        # The real blocker comes first; credentials are only a pending note,
+        # never "run --generate-credentials" (that's what just failed).
+        self.assertLess(message.index("db_filter"), message.index("db_user"))
+        self.assertIn("no bloquea", message)
+        self.assertIn("sin preguntar (--generate-credentials)", message)
+        self.assertNotIn("Correr './odoo provision-role", message)
+
+    def test_other_problems_without_flag_mention_confirmation(self):
+        runner = FakeRunner()
+        with self.assertRaises(SystemExit):
+            self._ensure(_config(db_filter=None), runner=runner)
+        message = runner.messages[-1][1]
+        self.assertIn("pidiendo confirmacion", message)
+        self.assertNotIn("Correr './odoo provision-role", message)
 
     def test_keeps_existing_db_user_and_only_generates_password(self):
         self._ensure(_config(db_user="app_propio"), generate=True)
