@@ -81,6 +81,12 @@ def load_config(base_path):
         raw = f.read()
     config = json.loads(_strip_json_comments(raw))
 
+    # "At least one instance" applies to the file, not to the enabled
+    # subset: with every instance disabled the CLI must still load, or
+    # './odoo enable' could never undo it.
+    if "instances" in config and not config["instances"]:
+        raise ValueError("Debe haber al menos una instancia definida")
+
     # Filter instances: keep only those with "enabled": true (or without the flag)
     if "instances" in config:
         config["instances"] = {
@@ -89,7 +95,7 @@ def load_config(base_path):
             if inst.get("enabled", True)
         }
 
-    _validate_config(config)
+    _validate_config(config, require_instances=False)
     return config
 
 
@@ -136,14 +142,18 @@ def is_production_instance(inst_conf) -> bool:
     return bool(inst_conf.get("production", False))
 
 
-def _validate_config(config):
-    """Validate the configuration structure."""
+def _validate_config(config, require_instances=True):
+    """Validate the configuration structure.
+
+    ``require_instances=False`` is for an already ``enabled``-filtered
+    config, where an empty set just means every instance is disabled.
+    """
     required_sections = ["odoo_configs", "databases", "instances"]
     for section in required_sections:
         if section not in config:
             raise ValueError(f"Sección '{section}' requerida en instances.json")
 
-    if not config["instances"]:
+    if require_instances and not config["instances"]:
         raise ValueError("Debe haber al menos una instancia definida")
 
     # Validate each database

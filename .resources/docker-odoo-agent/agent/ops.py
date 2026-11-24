@@ -157,7 +157,9 @@ def _write_config(config):
         if inst.get("enabled", True)
     }
     try:
-        _validate_config(to_validate)
+        if not config.get("instances"):
+            raise ValueError("Debe haber al menos una instancia definida")
+        _validate_config(to_validate, require_instances=False)
     except (ValueError, KeyError) as e:
         raise AgentError(f"instances.json quedaría inválido: {e}")
 
