@@ -1,22 +1,25 @@
-"""``./odoo config``: show or edit one instance's settings in instances.json.
+"""``./odoo config``: set an instance's type (production/test) and profile.
 
-Edits only touch that instance — root keys (``production``) or its own
-``overwrite_odoo_config`` — never the shared ``odoo_configs`` block, which
-other instances may inherit from. The result goes through the same
-validation as ``load_config`` before anything is written, and the
-compose/nginx files are regenerated so they match.
+Deliberately small: an instance is either production or test, and runs on
+one of the ``odoo_configs`` profiles defined in instances.json (workers,
+memory limits and the rest live there). Anything finer is edited in the
+JSON by hand.
 
-``production: true`` is the "this is a client's live instance" switch: it
-blocks ``./odoo remove``, forbids ``dev_mode`` and makes nginx refuse
-``/web/database/``. Marking an instance as production also turns
-``list_db`` off: with it on, the database manager (backup, drop, restore)
-is one master password away from anyone who can reach the site.
+Production (``production: true``) blocks ``./odoo remove``, forbids
+``dev_mode`` and makes nginx refuse ``/web/database/``; it also turns
+``list_db`` off for the instance, since with it on the database manager
+(backup, drop, restore) is one master password away from anyone who can
+reach the site. Test turns ``list_db`` back on.
+
+Only the instance entry is touched (root keys, ``odoo_config`` and its own
+``overwrite_odoo_config``), never the shared profiles. The result goes
+through the same validation as ``load_config`` before anything is written,
+and compose/nginx are regenerated to match.
 """
 
 from __future__ import annotations
 
 import copy
-import re
 import sys
 from typing import TYPE_CHECKING
 
@@ -24,64 +27,57 @@ if TYPE_CHECKING:
     from odoo_cli.core.runner import Runner
 
 
-# Settings ``config`` can change, and where they live in the instance entry.
-ROOT_KEYS = ("production",)
-OVERWRITE_KEYS = (
-    "list_db",
-    "db_filter",
-    "workers",
-    "max_cron_threads",
-    "limit_memory_soft",
-    "limit_memory_hard",
-)
-_SECRET_KEYS = ("admin_password", "db_password")
-_MEMORY_KEYS = ("limit_memory_soft", "limit_memory_hard")
-_SIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([KMG]?)B?$", re.IGNORECASE)
-_SIZE_FACTORS = {"": 1, "K": 1024, "M": 1024 ** 2, "G": 1024 ** 3}
+MODES = {
+    "prod": {
+        "label": "Producción",
+        # Told once, after applying: menus only show the label.
+        "effect": (
+            "no se puede borrar con ./odoo remove y el administrador de bases "
+            "(/web/database) queda cerrado"
+        ),
+        "production": True,
+        "list_db": False,
+    },
+    "test": {
+        "label": "Pruebas",
+        "effect": "se puede borrar y el administrador de bases queda abierto",
+        "production": False,
+        "list_db": True,
+    },
+}
+# What the CLI accepts as the mode argument.
+MODE_ALIASES = {
+    "prod": "prod",
+    "produccion": "prod",
+    "test": "test",
+    "pruebas": "test",
+}
 
 
-def parse_size(value: str) -> int:
-    """``"4G"``/``"512M"``/``"2147483648"`` → bytes (what Odoo expects)."""
-    match = _SIZE_RE.match(value.strip())
-    if not match:
-        raise ValueError(
-            f"Tamaño invalido: '{value}' (ejemplos: 4G, 512M, 2147483648)"
-        )
-    number, unit = match.groups()
-    return int(float(number) * _SIZE_FACTORS[unit.upper()])
+def _current_mode(inst_conf: dict) -> str:
+    from generators.config_loader import is_production_instance
+
+    return "prod" if is_production_instance(inst_conf) else "test"
 
 
-def _human_size(value) -> str:
-    if not isinstance(value, int):
-        return str(value)
-    gigabyte = _SIZE_FACTORS["G"]
-    if value >= gigabyte and value % gigabyte:
-        return f"{value / gigabyte:.1f}G ({value} bytes)"
-    for unit in ("G", "M", "K"):
-        factor = _SIZE_FACTORS[unit]
-        if value >= factor and value % factor == 0:
-            return f"{value // factor}{unit}"
-    return str(value)
+def _ask_mode(runner: "Runner", instance: str, current: str) -> str | None:
+    options = [(mode["label"], key) for key, mode in MODES.items()]
+    return runner.select_one(
+        f"¿{instance} es de producción o de pruebas? (hoy: {MODES[current]['label']})",
+        options,
+    )
 
 
-def _apply_changes(inst_conf: dict, changes: dict) -> list[str]:
-    """Write ``changes`` into ``inst_conf`` and return what was adjusted
-    on top of them (for the user to see)."""
-    notes = []
-    overwrite = inst_conf.setdefault("overwrite_odoo_config", {})
-    for key, value in changes.items():
-        if key in ROOT_KEYS:
-            inst_conf[key] = value
-        else:
-            overwrite[key] = value
-
-    if changes.get("production") and "list_db" not in changes:
-        if overwrite.get("list_db") is not False:
-            overwrite["list_db"] = False
-            notes.append(
-                "list_db: false (produccion no expone el administrador de bases)"
-            )
-    return notes
+def _ask_profile(
+    runner: "Runner", full_config: dict, instance: str, current: str
+) -> str | None:
+    profiles = full_config["odoo_configs"]
+    if len(profiles) == 1:
+        return current
+    return runner.select_one(
+        f"Perfil de configuración de {instance} (hoy: {current})",
+        [(name, name) for name in profiles],
+    )
 
 
 def _validate(full_config: dict) -> None:
@@ -97,70 +93,77 @@ def _validate(full_config: dict) -> None:
     _validate_config(enabled, require_instances=False)
 
 
-def show_instance_config(runner: "Runner", full_config: dict, instance: str) -> None:
-    """Print the settings ``config`` manages, resolved and with secrets hidden."""
-    from generators.config_loader import is_production_instance, resolve_instance_config
-
-    inst_conf = full_config["instances"][instance]
-    resolved = resolve_instance_config(inst_conf, full_config)
-    overwrite = inst_conf.get("overwrite_odoo_config", {})
-
-    runner.info(f"\n=== ⚙️  {instance} (odoo_config '{inst_conf['odoo_config']}') ===\n")
-    runner.info(f"  {'production':<18} {is_production_instance(inst_conf)}")
-    for key in OVERWRITE_KEYS:
-        if key not in resolved:
-            runner.info(f"  {key:<18} (default de Odoo)")
-            continue
-        value = resolved[key]
-        if key in _MEMORY_KEYS:
-            value = _human_size(value)
-        origin = "instancia" if key in overwrite else "odoo_config"
-        runner.info(f"  {key:<18} {value}   [{origin}]")
-    for key in _SECRET_KEYS:
-        present = bool(resolved.get(key) or inst_conf.get(key))
-        runner.info(f"  {key:<18} {'(definida)' if present else '(no definida)'}")
-    runner.info(
-        "\nPara cambiar algo: ./odoo config "
-        f"{instance} --help muestra las opciones.\n"
-    )
-
-
 def configure_instance(
-    runner: "Runner", base_path: str, instance: str, changes: dict
+    runner: "Runner",
+    base_path: str,
+    instance: str,
+    mode: str | None = None,
+    profile: str | None = None,
 ) -> None:
-    """Apply ``changes`` to ``instance``, validate, save once, regenerate.
-
-    Nothing is written if the result doesn't validate (e.g. ``dev_mode``
-    on a production instance).
-    """
+    """Set ``instance`` to ``mode`` (prod/test) on ``profile``, asking for
+    whatever wasn't given. Validates, saves once and regenerates."""
     from generators.config_loader import load_full_config
     from odoo_cli.core.actions.instance_state import (
         _regenerate_configs,
         _write_instances_json,
     )
+    from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
+    from odoo_cli.core.actions.postgres import _confirm_or_skip
 
     full_config = load_full_config(base_path)
     if instance not in full_config["instances"]:
         runner.error(f"Error: instancia '{instance}' no existe en instances.json.")
         sys.exit(1)
-
-    if not changes:
-        show_instance_config(runner, full_config, instance)
-        return
-
-    if changes.get("production") and changes.get("list_db"):
+    if profile is not None and profile not in full_config["odoo_configs"]:
         runner.error(
-            "Error: una instancia de produccion no puede tener list_db activo "
-            "(deja el administrador de bases expuesto). Quitá --list-db."
+            f"Error: perfil '{profile}' no existe. Disponibles: "
+            f"{', '.join(full_config['odoo_configs'])}"
         )
         sys.exit(1)
 
+    inst_conf = full_config["instances"][instance]
+    current_mode = _current_mode(inst_conf)
+    current_profile = inst_conf["odoo_config"]
+
+    if mode is None:
+        mode = _ask_mode(runner, instance, current_mode)
+    else:
+        mode = MODE_ALIASES[mode]
+    if profile is None and mode is not None:
+        profile = _ask_profile(runner, full_config, instance, current_profile)
+    if mode is None or profile is None:
+        runner.info("Cancelado.")
+        return
+
+    preset = MODES[mode]
+    overwrite = inst_conf.get("overwrite_odoo_config", {})
+    if (
+        mode == current_mode
+        and profile == current_profile
+        and overwrite.get("list_db") is preset["list_db"]
+    ):
+        runner.info(
+            f"\nSin cambios: {instance} ya es de {preset['label']} con el perfil {profile}.\n"
+        )
+        return
+
+    if current_mode == "prod" and mode == "test" and not _confirm_or_skip(
+        runner,
+        f"{instance} deja de ser de producción: se va a poder borrar y el "
+        f"administrador de bases queda abierto. ¿Continuar?",
+    ):
+        runner.info("Cancelado.")
+        return
+
     updated = copy.deepcopy(full_config)
-    notes = _apply_changes(updated["instances"][instance], changes)
+    target = updated["instances"][instance]
+    target["production"] = preset["production"]
+    target["odoo_config"] = profile
+    target.setdefault("overwrite_odoo_config", {})["list_db"] = preset["list_db"]
     try:
         _validate(updated)
     except ValueError as exc:
-        runner.error(f"\n❌ No se guardó nada, la configuracion quedaria invalida:\n{exc}")
+        runner.error(f"\n❌ No se guardó nada, la configuración quedaría inválida:\n{exc}")
         sys.exit(1)
 
     success, error_message = _write_instances_json(base_path, updated)
@@ -168,26 +171,20 @@ def configure_instance(
         runner.error(f"\n❌ No se pudo guardar instances.json: {error_message}")
         sys.exit(1)
 
-    runner.info(f"\n✅ '{instance}' actualizada:")
-    for key, value in changes.items():
-        shown = _human_size(value) if key in _MEMORY_KEYS else value
-        runner.info(f"  {key} = {shown}")
-    for note in notes:
-        runner.info(f"  {note}")
-
-    runner.info("\n→ Regenerando docker-compose.generated.yml y nginx...")
+    runner.info(
+        f"\n✅ {instance} ahora es de {preset['label']} (perfil {profile}): "
+        f"{preset['effect']}."
+    )
+    runner.info("→ Regenerando docker-compose.generated.yml y nginx...")
     _regenerate_configs(updated)
-    runner.info("✅ Configs regenerados.\n")
-
-    from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
 
     services = f"odoo-{instance}"
-    if "production" in changes:
+    if mode != current_mode:
         services += " nginx"
     runner.info(
-        "Para aplicarlo, recreá los contenedores: docker compose -f "
+        "\nPara aplicarlo, recreá los contenedores: docker compose -f "
         f"{COMPOSE_FILE} up -d --no-deps {services}\n"
     )
 
 
-__all__ = ["configure_instance", "parse_size", "show_instance_config"]
+__all__ = ["MODES", "MODE_ALIASES", "configure_instance"]

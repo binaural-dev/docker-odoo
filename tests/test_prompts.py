@@ -70,5 +70,27 @@ class PromptForTagTest(unittest.TestCase):
         self.assertEqual(len(no_match_msgs), 2)
 
 
+class FitMenuItemTest(unittest.TestCase):
+    """Menu rows must never wrap: the redraw counts one line per row."""
+
+    def test_single_column_is_not_padded(self):
+        from odoo_cli.core.prompts import _fit_menu_item
+
+        self.assertEqual(_fit_menu_item("❯  1. Producción", 1, 90, 60), "❯  1. Producción")
+
+    def test_long_item_is_clipped_to_the_terminal(self):
+        from odoo_cli.core.prompts import _fit_menu_item
+
+        fitted = _fit_menu_item("x" * 200, 1, 210, 60)
+        self.assertEqual(len(fitted), 59)
+        self.assertTrue(fitted.endswith("…"))
+
+    def test_grid_columns_are_padded_within_the_terminal(self):
+        from odoo_cli.core.prompts import _fit_menu_item
+
+        fitted = _fit_menu_item("  1. acme", 3, 20, 80)
+        self.assertEqual(len(fitted), 20)
+
+
 if __name__ == "__main__":
     unittest.main()
