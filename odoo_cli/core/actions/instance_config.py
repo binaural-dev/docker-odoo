@@ -30,13 +30,17 @@ if TYPE_CHECKING:
 MODES = {
     "prod": {
         "label": "Producción",
-        "summary": "bloquea ./odoo remove, sin dev_mode, sin administrador de bases",
+        # Told once, after applying: menus only show the label.
+        "effect": (
+            "no se puede borrar con ./odoo remove y el administrador de bases "
+            "(/web/database) queda cerrado"
+        ),
         "production": True,
         "list_db": False,
     },
     "test": {
         "label": "Pruebas",
-        "summary": "administrador de bases habilitado, se puede borrar",
+        "effect": "se puede borrar y el administrador de bases queda abierto",
         "production": False,
         "list_db": True,
     },
@@ -56,44 +60,24 @@ def _current_mode(inst_conf: dict) -> str:
     return "prod" if is_production_instance(inst_conf) else "test"
 
 
-def _profile_summary(profile: dict) -> str:
-    workers = profile.get("workers", "?")
-    return f"workers {workers}"
-
-
-def _show(runner: "Runner", full_config: dict, instance: str) -> None:
-    inst_conf = full_config["instances"][instance]
-    profile = inst_conf["odoo_config"]
-    runner.info(f"\n=== ⚙️  {instance} ===")
-    runner.info(f"  Tipo:   {MODES[_current_mode(inst_conf)]['label']}")
-    runner.info(
-        f"  Perfil: {profile} "
-        f"({_profile_summary(full_config['odoo_configs'][profile])})\n"
+def _ask_mode(runner: "Runner", instance: str, current: str) -> str | None:
+    options = [(mode["label"], key) for key, mode in MODES.items()]
+    return runner.select_one(
+        f"¿{instance} es de producción o de pruebas? (hoy: {MODES[current]['label']})",
+        options,
     )
 
 
-def _ask_mode(runner: "Runner", current: str) -> str | None:
-    options = []
-    for key, mode in MODES.items():
-        mark = " (actual)" if key == current else ""
-        options.append((f"{mode['label']}{mark} — {mode['summary']}", key))
-    return runner.select_one("Tipo de instancia", options)
-
-
-def _ask_profile(runner: "Runner", full_config: dict, current: str) -> str | None:
+def _ask_profile(
+    runner: "Runner", full_config: dict, instance: str, current: str
+) -> str | None:
     profiles = full_config["odoo_configs"]
     if len(profiles) == 1:
         return current
-    ordered = [current] + [name for name in profiles if name != current]
-    options = [
-        (
-            f"{name}{' (actual)' if name == current else ''} — "
-            f"{_profile_summary(profiles[name])}",
-            name,
-        )
-        for name in ordered
-    ]
-    return runner.select_one("Perfil de configuración", options)
+    return runner.select_one(
+        f"Perfil de configuración de {instance} (hoy: {current})",
+        [(name, name) for name in profiles],
+    )
 
 
 def _validate(full_config: dict) -> None:
@@ -140,14 +124,13 @@ def configure_instance(
     inst_conf = full_config["instances"][instance]
     current_mode = _current_mode(inst_conf)
     current_profile = inst_conf["odoo_config"]
-    _show(runner, full_config, instance)
 
     if mode is None:
-        mode = _ask_mode(runner, current_mode)
+        mode = _ask_mode(runner, instance, current_mode)
     else:
         mode = MODE_ALIASES[mode]
     if profile is None and mode is not None:
-        profile = _ask_profile(runner, full_config, current_profile)
+        profile = _ask_profile(runner, full_config, instance, current_profile)
     if mode is None or profile is None:
         runner.info("Cancelado.")
         return
@@ -159,13 +142,15 @@ def configure_instance(
         and profile == current_profile
         and overwrite.get("list_db") is preset["list_db"]
     ):
-        runner.info("Sin cambios.\n")
+        runner.info(
+            f"\nSin cambios: {instance} ya es de {preset['label']} con el perfil {profile}.\n"
+        )
         return
 
     if current_mode == "prod" and mode == "test" and not _confirm_or_skip(
         runner,
-        f"'{instance}' deja de ser de producción: se va a poder borrar y "
-        f"vuelve el administrador de bases. ¿Continuar?",
+        f"{instance} deja de ser de producción: se va a poder borrar y el "
+        f"administrador de bases queda abierto. ¿Continuar?",
     ):
         runner.info("Cancelado.")
         return
@@ -187,7 +172,8 @@ def configure_instance(
         sys.exit(1)
 
     runner.info(
-        f"✅ '{instance}': {preset['label']} ({preset['summary']}), perfil {profile}."
+        f"\n✅ {instance} ahora es de {preset['label']} (perfil {profile}): "
+        f"{preset['effect']}."
     )
     runner.info("→ Regenerando docker-compose.generated.yml y nginx...")
     _regenerate_configs(updated)

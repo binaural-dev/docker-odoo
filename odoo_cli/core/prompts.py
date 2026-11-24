@@ -45,6 +45,22 @@ from odoo_cli.core.instance import (
 # ============================================================
 
 
+def _fit_menu_item(item: str, num_cols: int, item_width: int, term_width: int) -> str:
+    """Pad ``item`` to its grid column, never past the terminal width.
+
+    The redraw moves the cursor up one line per menu row; a row wider than
+    the terminal wraps into two and every arrow key leaves a stale copy of
+    the menu behind. So a single column gets no padding, and any row is
+    clipped to ``term_width - 1``.
+    """
+    limit = max(1, term_width - 1)
+    if len(item) > limit:
+        item = item[: limit - 1] + "…"
+    if num_cols == 1:
+        return item
+    return item + " " * max(0, min(item_width, limit) - len(item))
+
+
 def prompt_selection(
     runner: "Runner",
     options: list[tuple[str, str]],
@@ -153,7 +169,8 @@ def prompt_selection(
 
     max_text_len = max(len(text) for text, _ in options)
     item_width = max_text_len + 10  # prefix + num + text + spacing
-    num_cols = max(1, term_width // item_width)
+    # term_width - 1: a row exactly as wide as the terminal can still wrap.
+    num_cols = max(1, (term_width - 1) // item_width)
     num_rows = (len(options) + num_cols - 1) // num_cols
     lines_to_clear = num_rows + 1
 
@@ -184,13 +201,14 @@ def prompt_selection(
                         prefix += mark
 
                     item = f"{prefix}{num}{text}"
-                    # Padding to maintain columns
-                    padding = " " * (item_width - len(item))
+                    fitted = _fit_menu_item(item, num_cols, item_width, term_width)
+                    visible = fitted.rstrip(" ")
+                    padding = fitted[len(visible):]
 
                     if idx == current_idx:
-                        line_content += f"\033[92m{item}\033[0m{padding}"
+                        line_content += f"\033[92m{visible}\033[0m{padding}"
                     else:
-                        line_content += f"{item}{padding}"
+                        line_content += f"{visible}{padding}"
 
             sys.stdout.write(f"{line_content}\033[K\n")
 
@@ -279,8 +297,11 @@ def prompt_selection(
                 except ValueError:
                     pass
 
-            # Regresar cursor arriba
-            sys.stdout.write(f"\033[{lines_to_clear}F")
+            # Back to the first row. The cursor sits on the status line
+            # (no trailing newline), so that's num_rows up, not
+            # lines_to_clear: one more lands on the title and every key
+            # press leaves a stale copy of the menu behind.
+            sys.stdout.write(f"\033[{num_rows}F")
             render_menu()
 
         # Al salir, limpiar el menú de la pantalla para no ensuciar el log
