@@ -213,14 +213,22 @@ class LauncherConfigTest(unittest.TestCase):
         return action
 
     def test_everything_given(self):
+        from odoo_cli.core.actions.instance_config import _SENTINEL
         action = self._main("config", "acme", "prod", "grande")
         self.assertEqual(action.call_args.args[2], "acme")
-        self.assertEqual(action.call_args.kwargs, {"mode": "prod", "profile": "grande"})
+        kwargs = action.call_args.kwargs
+        self.assertEqual(kwargs["mode"], "prod")
+        self.assertEqual(kwargs["profile"], "grande")
+        self.assertIs(kwargs["db_filter"], _SENTINEL)
 
     def test_nothing_given_prompts(self):
+        from odoo_cli.core.actions.instance_config import _SENTINEL
         action = self._main("config")
         self.assertEqual(action.call_args.args[2], "elegida")
-        self.assertEqual(action.call_args.kwargs, {"mode": None, "profile": None})
+        kwargs = action.call_args.kwargs
+        self.assertIsNone(kwargs["mode"])
+        self.assertIsNone(kwargs["profile"])
+        self.assertIs(kwargs["db_filter"], _SENTINEL)
 
     def test_unknown_mode_is_an_argparse_error(self):
         with self.assertRaises(SystemExit), patch("sys.stderr"):

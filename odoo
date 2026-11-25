@@ -84,7 +84,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "submodule-status\n"
             "  Cobertura de tests  coverage-status, coverage\n"
             "  Postgres / roles    provision-role, psql remove, restore\n"
-            "  Config / infra      new, config, hosts, enable, disable, "
+            "  Config / infra      new, config, db-config, hosts, enable, disable, "
             "validate-instances, tui, apk, agent\n"
             "\n"
             "Ejemplos:\n"
@@ -621,6 +621,47 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "profile", nargs="?", default=None,
         help="Perfil de configuración, un odoo_config de instances.json (opcional)",
+    )
+    from odoo_cli.core.actions.instance_config import _SENTINEL as _DB_FILTER_SENTINEL
+    p.add_argument(
+        "--db-filter", dest="db_filter",
+        nargs="?",         # --db-filter with no value → None (ask); absent → SENTINEL
+        default=_DB_FILTER_SENTINEL,
+        const=None,
+        metavar="REGEX",
+        help=(
+            "Fija overwrite_odoo_config.db_filter para la instancia. "
+            "Sin valor (--db-filter solo) pregunta interactivamente. "
+            "Cadena vacía ('') elimina el filtro. "
+            "Ej: --db-filter '^mi-base$'"
+        ),
+    )
+
+    # db-config
+    p = subparsers.add_parser(
+        "db-config",
+        help="Cambia el postgresql.*.conf de un servicio de base de datos",
+        description=(
+            "Cambia el 'config' (postgresql.*.conf) de un servicio de "
+            "Postgres definido en instances.json.databases.\n\n"
+            "Sin argumentos presenta un menú para elegir el servicio y "
+            "luego el perfil de configuración (small/medium/large/xlarge).\n\n"
+            "Regenera docker-compose.generated.yml pero NO reinicia Postgres: "
+            "usá 'docker compose -f docker-compose.generated.yml up -d "
+            "--force-recreate db-<servicio>' para aplicarlo.\n\n"
+            "Ejemplo: ./odoo db-config v19 postgresql.xlarge.conf"
+        ),
+    )
+    p.add_argument(
+        "db_service", nargs="?", default=None,
+        help="Nombre del servicio de BD en instances.json (ej: v19). "
+             "Opcional: sin esto se elige de un menú.",
+    )
+    p.add_argument(
+        "db_config", nargs="?", default=None,
+        choices=["postgresql.small.conf", "postgresql.medium.conf",
+                 "postgresql.large.conf", "postgresql.xlarge.conf"],
+        help="Archivo de config de Postgres (opcional: sin esto se elige de un menú).",
     )
 
     # enable / disable
