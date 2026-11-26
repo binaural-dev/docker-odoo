@@ -65,7 +65,8 @@ from odoo_cli.core.actions.maintenance import (
     update_tags,
     update_tags_bulk,
 )
-from odoo_cli.core.actions.instance_config import configure_instance
+from odoo_cli.core.actions.db_config import configure_db
+from odoo_cli.core.actions.instance_config import KEEP, configure_instance
 from odoo_cli.core.actions.instance_state import set_instances_enabled
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.actions.postgres import (
@@ -402,6 +403,15 @@ def dispatch(
             runner, base_path, args.instance,
             mode=getattr(args, "mode", None),
             profile=getattr(args, "profile", None),
+            # Absent from args when --db-filter wasn't passed (SUPPRESS).
+            db_filter=getattr(args, "db_filter", KEEP),
+        )
+
+    elif args.action == "db-config":
+        configure_db(
+            runner, base_path,
+            db_service=getattr(args, "db_service", None),
+            db_config=getattr(args, "db_config", None),
         )
 
     elif args.action in ("enable", "disable"):

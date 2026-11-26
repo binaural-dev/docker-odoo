@@ -2,8 +2,10 @@
 
 Deliberately small: an instance is either production or test, and runs on
 one of the ``odoo_configs`` profiles defined in instances.json (workers,
-memory limits and the rest live there). Anything finer is edited in the
-JSON by hand.
+memory limits and the rest live there). ``--db-filter`` optionally sets
+the instance's ``db_filter`` in the same run. Anything finer is edited in
+the JSON by hand. The Postgres side (postgresql.*.conf of a service) is
+``./odoo db-config``, see :mod:`odoo_cli.core.actions.db_config`.
 
 Production (``production: true``) blocks ``./odoo remove``, forbids
 ``dev_mode`` and makes nginx refuse ``/web/database/``; it also turns
@@ -93,15 +95,29 @@ def _validate(full_config: dict) -> None:
     _validate_config(enabled, require_instances=False)
 
 
+# ``db_filter`` value meaning "not passed: keep the current one, don't ask".
+KEEP = object()
+
+
 def configure_instance(
     runner: "Runner",
     base_path: str,
     instance: str,
     mode: str | None = None,
     profile: str | None = None,
+    db_filter=KEEP,
 ) -> None:
     """Set ``instance`` to ``mode`` (prod/test) on ``profile``, asking for
-    whatever wasn't given. Validates, saves once and regenerates."""
+    whatever wasn't given.
+
+    ``db_filter``:
+        * ``KEEP`` (default)      → keep whatever is already set, don't ask.
+        * ``None``                → ask interactively.
+        * ``""``                  → remove the db_filter from overwrite_odoo_config.
+        * any string              → set that exact regex.
+
+    Validates, saves once and regenerates.
+    """
     from generators.config_loader import load_full_config
     from odoo_cli.core.actions.instance_state import (
         _regenerate_configs,
@@ -124,6 +140,7 @@ def configure_instance(
     inst_conf = full_config["instances"][instance]
     current_mode = _current_mode(inst_conf)
     current_profile = inst_conf["odoo_config"]
+    current_filter = inst_conf.get("overwrite_odoo_config", {}).get("db_filter", "")
 
     if mode is None:
         mode = _ask_mode(runner, instance, current_mode)
@@ -135,12 +152,24 @@ def configure_instance(
         runner.info("Cancelado.")
         return
 
+    # --- db_filter resolution ---
+    if db_filter is KEEP:
+        resolved_filter = KEEP
+    elif db_filter is None:
+        # asked to prompt interactively
+        resolved_filter = _ask_db_filter(runner, instance, current_filter)
+    else:
+        resolved_filter = db_filter
+
     preset = MODES[mode]
     overwrite = inst_conf.get("overwrite_odoo_config", {})
+
+    filter_unchanged = resolved_filter is KEEP or resolved_filter == current_filter
     if (
         mode == current_mode
         and profile == current_profile
         and overwrite.get("list_db") is preset["list_db"]
+        and filter_unchanged
     ):
         runner.info(
             f"\nSin cambios: {instance} ya es de {preset['label']} con el perfil {profile}.\n"
@@ -159,7 +188,16 @@ def configure_instance(
     target = updated["instances"][instance]
     target["production"] = preset["production"]
     target["odoo_config"] = profile
-    target.setdefault("overwrite_odoo_config", {})["list_db"] = preset["list_db"]
+    ow = target.setdefault("overwrite_odoo_config", {})
+    ow["list_db"] = preset["list_db"]
+
+    if resolved_filter is not KEEP:
+        if resolved_filter:
+            ow["db_filter"] = resolved_filter
+        else:
+            # empty string → remove the key
+            ow.pop("db_filter", None)
+
     try:
         _validate(updated)
     except ValueError as exc:
@@ -175,6 +213,9 @@ def configure_instance(
         f"\n✅ {instance} ahora es de {preset['label']} (perfil {profile}): "
         f"{preset['effect']}."
     )
+    if resolved_filter is not KEEP:
+        shown = resolved_filter or "(sin filtro)"
+        runner.info(f"   db_filter → {shown}")
     runner.info("→ Regenerando docker-compose.generated.yml y nginx...")
     _regenerate_configs(updated)
 
@@ -187,4 +228,18 @@ def configure_instance(
     )
 
 
-__all__ = ["MODES", "MODE_ALIASES", "configure_instance"]
+def _ask_db_filter(runner: "Runner", instance: str, current: str) -> str:
+    """Ask for a db_filter regex. Enter keeps ``current``; ``-`` removes it."""
+    runner.info(
+        f"\nFiltro de base de datos de {instance} (hoy: {current or 'ninguno'}).\n"
+        f"  Ej.: ^{instance}   ·   Enter = dejarlo como está   ·   - = quitarlo"
+    )
+    value = runner.prompt_text("db_filter").strip()
+    if value == "":
+        return current
+    if value == "-":
+        return ""
+    return value
+
+
+__all__ = ["KEEP", "MODES", "MODE_ALIASES", "configure_instance"]
