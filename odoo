@@ -622,18 +622,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "profile", nargs="?", default=None,
         help="Perfil de configuración, un odoo_config de instances.json (opcional)",
     )
-    from odoo_cli.core.actions.instance_config import _SENTINEL as _DB_FILTER_SENTINEL
     p.add_argument(
-        "--db-filter", dest="db_filter",
-        nargs="?",         # --db-filter with no value → None (ask); absent → SENTINEL
-        default=_DB_FILTER_SENTINEL,
-        const=None,
-        metavar="REGEX",
+        "--db-filter", dest="db_filter", nargs="?", const=None,
+        default=argparse.SUPPRESS, metavar="REGEX",
         help=(
-            "Fija overwrite_odoo_config.db_filter para la instancia. "
-            "Sin valor (--db-filter solo) pregunta interactivamente. "
-            "Cadena vacía ('') elimina el filtro. "
-            "Ej: --db-filter '^mi-base$'"
+            "Fija el db_filter de la instancia (ej: --db-filter '^mi-cliente'). "
+            "Solo, sin valor, lo pregunta; '' lo quita. Sin esta opción no se toca."
         ),
     )
 
@@ -645,7 +639,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "Cambia el 'config' (postgresql.*.conf) de un servicio de "
             "Postgres definido en instances.json.databases.\n\n"
             "Sin argumentos presenta un menú para elegir el servicio y "
-            "luego el perfil de configuración (small/medium/large/xlarge).\n\n"
+            "luego el archivo de configuración (los postgresql*.conf de "
+            ".resources/dbconfigs).\n\n"
             "Regenera docker-compose.generated.yml pero NO reinicia Postgres: "
             "usá 'docker compose -f docker-compose.generated.yml up -d "
             "--force-recreate db-<servicio>' para aplicarlo.\n\n"
@@ -659,9 +654,10 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "db_config", nargs="?", default=None,
-        choices=["postgresql.small.conf", "postgresql.medium.conf",
-                 "postgresql.large.conf", "postgresql.xlarge.conf"],
-        help="Archivo de config de Postgres (opcional: sin esto se elige de un menú).",
+        help=(
+            "Archivo de .resources/dbconfigs (ej: postgresql.xlarge.conf). "
+            "Opcional: sin esto se elige de un menú."
+        ),
     )
 
     # enable / disable

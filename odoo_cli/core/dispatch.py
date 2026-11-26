@@ -65,7 +65,8 @@ from odoo_cli.core.actions.maintenance import (
     update_tags,
     update_tags_bulk,
 )
-from odoo_cli.core.actions.instance_config import configure_instance, configure_db
+from odoo_cli.core.actions.db_config import configure_db
+from odoo_cli.core.actions.instance_config import KEEP, configure_instance
 from odoo_cli.core.actions.instance_state import set_instances_enabled
 from odoo_cli.core.actions.modules import reset_password, update
 from odoo_cli.core.actions.postgres import (
@@ -398,18 +399,12 @@ def dispatch(
             args.instance = prompt_for_instance(
                 runner, load_full_config(base_path), "config"
             )
-        from odoo_cli.core.actions.instance_config import _SENTINEL
-        db_filter = getattr(args, "db_filter", _SENTINEL)
-        # argparse sets db_filter to None when --db-filter was not passed
-        # (nargs="?", default=_SENTINEL). But we distinguish:
-        #   not passed at all  → _SENTINEL  → keep existing, don't ask
-        #   --db-filter        → None const → ask interactively
-        #   --db-filter VALUE  → str         → set that value
         configure_instance(
             runner, base_path, args.instance,
             mode=getattr(args, "mode", None),
             profile=getattr(args, "profile", None),
-            db_filter=db_filter,
+            # Absent from args when --db-filter wasn't passed (SUPPRESS).
+            db_filter=getattr(args, "db_filter", KEEP),
         )
 
     elif args.action == "db-config":

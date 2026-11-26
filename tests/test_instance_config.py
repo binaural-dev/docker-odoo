@@ -23,7 +23,7 @@ if RESOURCES_PATH not in sys.path:
     sys.path.insert(0, RESOURCES_PATH)
 
 from generators.nginx_generator import generate_nginx_config  # noqa: E402
-from odoo_cli.core.actions.instance_config import configure_instance  # noqa: E402
+from odoo_cli.core.actions.instance_config import KEEP, configure_instance  # noqa: E402
 
 from tests.test_actions import FakeRunner  # noqa: E402
 from tests.test_compose_generator import _sample_config  # noqa: E402
@@ -213,22 +213,20 @@ class LauncherConfigTest(unittest.TestCase):
         return action
 
     def test_everything_given(self):
-        from odoo_cli.core.actions.instance_config import _SENTINEL
         action = self._main("config", "acme", "prod", "grande")
         self.assertEqual(action.call_args.args[2], "acme")
         kwargs = action.call_args.kwargs
         self.assertEqual(kwargs["mode"], "prod")
         self.assertEqual(kwargs["profile"], "grande")
-        self.assertIs(kwargs["db_filter"], _SENTINEL)
+        self.assertIs(kwargs["db_filter"], KEEP)
 
     def test_nothing_given_prompts(self):
-        from odoo_cli.core.actions.instance_config import _SENTINEL
         action = self._main("config")
         self.assertEqual(action.call_args.args[2], "elegida")
         kwargs = action.call_args.kwargs
         self.assertIsNone(kwargs["mode"])
         self.assertIsNone(kwargs["profile"])
-        self.assertIs(kwargs["db_filter"], _SENTINEL)
+        self.assertIs(kwargs["db_filter"], KEEP)
 
     def test_unknown_mode_is_an_argparse_error(self):
         with self.assertRaises(SystemExit), patch("sys.stderr"):

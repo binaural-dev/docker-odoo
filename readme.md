@@ -274,6 +274,7 @@ El script `./odoo` es un shim liviano (~690 LOC, sobre todo la definición de ar
 | `odoo_cli/core/actions/maintenance.py` | `init_addons`, `sync`, `update_tags`, `update_tags_bulk`, `submodule_status` |
 | `odoo_cli/core/actions/hosts.py` | `hosts_status`, `hosts_apply`, `hosts_show` |
 | `odoo_cli/core/actions/instance_config.py` | `configure_instance` |
+| `odoo_cli/core/actions/db_config.py` | `configure_db`, `available_db_configs` |
 
 | Comando | Descripción |
 |---------|-------------|
@@ -293,7 +294,8 @@ El script `./odoo` es un shim liviano (~690 LOC, sobre todo la definición de ar
 | `update <instance> [-d <db\|all>] [-m modules] [-f]` | Actualiza módulos de Odoo (una base o todas). Sin `-m`, actualiza todos los módulos usando `click-odoo-update` (solo los que cambiaron desde la última actualización); con `-f`/`--force` fuerza un upgrade completo de todos, sin importar qué cambió. Un módulo puntual (`-m modulo`) siempre se actualiza directo, sin pasar por ninguno de los dos caminos anteriores. |
 | `init [instance]` | Verifica que los addons referenciados existen. |
 | `new [nombre] [repo] [branch] [version]` | Wizard: clona el repo del cliente y da de alta la instancia en `instances.json`. |
-| `config [instance] [prod\|test] [perfil]` | Define si la instancia es de **producción** o de **pruebas** y con qué **perfil** (`odoo_configs`) corre; lo que falte se pregunta en un menú. Producción: bloquea `remove`, prohíbe `dev_mode`, apaga `list_db` y nginx rechaza `/web/database/`. Pruebas: vuelve a habilitar el administrador de bases. Solo toca la entrada de la instancia, valida antes de guardar y regenera compose/nginx. Ej.: `./odoo config mi-cliente prod 19.0_full`. |
+| `config [instance] [prod\|test] [perfil] [--db-filter REGEX]` | Define si la instancia es de **producción** o de **pruebas** y con qué **perfil** (`odoo_configs`) corre; lo que falte se pregunta en un menú. Producción: bloquea `remove`, prohíbe `dev_mode`, apaga `list_db` y nginx rechaza `/web/database/`. Pruebas: vuelve a habilitar el administrador de bases. `--db-filter` además fija el `db_filter` de la instancia (solo, sin valor, lo pregunta; `''` lo quita). Solo toca la entrada de la instancia, valida antes de guardar y regenera compose/nginx. Ej.: `./odoo config mi-cliente prod 19.0_full`. |
+| `db-config [servicio] [archivo]` | Elige el `postgresql*.conf` (de `.resources/dbconfigs`, incluido uno propio del servidor) de un servicio de Postgres gestionado; lo que falte se pregunta en un menú. Regenera el compose pero **no** reinicia Postgres: indica el `docker compose ... up -d --force-recreate db-<servicio>` para aplicarlo. Ver [Perfiles de PostgreSQL](#perfiles-de-postgresql). |
 | `sync <repo> <branch> [--v]` | Sincroniza submódulos de un repositorio custom. |
 | `test <instance> <module[,module2,...]> [opciones]` | Ejecuta tests con cobertura (uno o varios módulos, opcionalmente su árbol de dependencias con `--recursive`). Ver `./odoo test -h`. |
 | `update-tags [proyecto] [branch_origin] [submodulo] [tag] [--v]` | Bumpea uno o más submódulos a un tag específico, en una rama nueva para PR. Todo argumento faltante se pregunta interactivamente (proyecto, rama base, submódulo, tag — con menú de tags filtrable, ej: `19, alpha`). Push y `gh pr create` se ofrecen al final, cada uno con su propia confirmación. |

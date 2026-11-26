@@ -1,4 +1,4 @@
-"""Tests for the new ``./odoo config --db-filter`` and ``./odoo db-config`` features.
+"""Tests for ``./odoo config --db-filter`` and ``./odoo db-config``.
 
 Run with::
 
@@ -23,12 +23,11 @@ RESOURCES_PATH = os.path.join(REPO_ROOT, ".resources")
 if RESOURCES_PATH not in sys.path:
     sys.path.insert(0, RESOURCES_PATH)
 
-from odoo_cli.core.actions.instance_config import (  # noqa: E402
-    _SENTINEL,
-    _DB_CONFIGS,
+from odoo_cli.core.actions.db_config import (  # noqa: E402
+    available_db_configs,
     configure_db,
-    configure_instance,
 )
+from odoo_cli.core.actions.instance_config import KEEP, configure_instance  # noqa: E402
 from tests.test_actions import FakeRunner  # noqa: E402
 from tests.test_compose_generator import _sample_config  # noqa: E402
 
@@ -46,9 +45,24 @@ def _config():
     return cfg
 
 
+# Shipped profiles plus a server's own tuned file, which must stay selectable.
+DB_CONFIG_FILES = [
+    "postgresql.small.conf", "postgresql.medium.conf",
+    "postgresql.large.conf", "postgresql.xlarge.conf", "postgresql.conf",
+]
+
+
+def _make_dbconfigs(base_path):
+    folder = os.path.join(base_path, ".resources", "dbconfigs")
+    os.makedirs(folder, exist_ok=True)
+    for name in DB_CONFIG_FILES + ["pg_hba.conf"]:
+        open(os.path.join(folder, name), "w").close()
+
+
 class _Base(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp(prefix="test_db_config_")
+        _make_dbconfigs(self.tmpdir)
         self.regenerated = []
         patcher = patch(
             "odoo_cli.core.actions.instance_state._regenerate_configs",
@@ -80,7 +94,7 @@ class _Base(unittest.TestCase):
 class ConfigureInstanceDbFilterTest(_Base):
     """Tests for the new db_filter parameter of configure_instance."""
 
-    def _run(self, db_filter=_SENTINEL, runner=None, config=None):
+    def _run(self, db_filter=KEEP, runner=None, config=None):
         cfg = config or _config()
         self._write(cfg)
         r = runner or FakeRunner()
@@ -93,12 +107,12 @@ class ConfigureInstanceDbFilterTest(_Base):
     def test_sentinel_does_not_touch_existing_filter(self):
         cfg = _config()
         cfg["instances"]["acme"].setdefault("overwrite_odoo_config", {})["db_filter"] = "^old$"
-        self._run(db_filter=_SENTINEL, config=cfg)
+        self._run(db_filter=KEEP, config=cfg)
         saved = self._read_instance()
         self.assertEqual(saved["overwrite_odoo_config"]["db_filter"], "^old$")
 
     def test_sentinel_does_not_add_filter_when_absent(self):
-        self._run(db_filter=_SENTINEL)
+        self._run(db_filter=KEEP)
         saved = self._read_instance()
         self.assertNotIn("db_filter", saved.get("overwrite_odoo_config", {}))
 
@@ -134,6 +148,12 @@ class ConfigureInstanceDbFilterTest(_Base):
         self._run(db_filter=None, runner=r, config=cfg)
         saved = self._read_instance()
         self.assertEqual(saved["overwrite_odoo_config"]["db_filter"], "^keep$")
+
+    def test_none_dash_removes_filter(self):
+        cfg = _config()
+        cfg["instances"]["acme"].setdefault("overwrite_odoo_config", {})["db_filter"] = "^old$"
+        self._run(db_filter=None, runner=FakeRunner(text_answers=["-"]), config=cfg)
+        self.assertNotIn("db_filter", self._read_instance()["overwrite_odoo_config"])
 
     # --- no-op detection ---
 
@@ -211,16 +231,25 @@ class ConfigureDbTest(_Base):
         saved = self._read_database()
         self.assertEqual(saved["config"], "postgresql.xlarge.conf")
 
-    def test_all_valid_configs_accepted(self):
-        for conf in _DB_CONFIGS:
-            cfg = _config()
-            self._write(cfg)
-            self.regenerated.clear()
-            configure_db(FakeRunner(), self.tmpdir, db_service="v17", db_config=conf)
-            if conf != "postgresql.small.conf":  # small.conf is the initial value
-                self.assertEqual(len(self.regenerated), 1)
-            # restore
-            cfg["databases"]["v17"]["config"] = "postgresql.small.conf"
+    def test_profiles_are_read_from_disk_in_size_order(self):
+        self.assertEqual(available_db_configs(self.tmpdir), [
+            "postgresql.small.conf", "postgresql.medium.conf",
+            "postgresql.large.conf", "postgresql.xlarge.conf", "postgresql.conf",
+        ])
+
+    def test_custom_server_config_is_selectable(self):
+        self._run(db_service="v17", db_config="postgresql.conf")
+        self.assertEqual(self._read_database()["config"], "postgresql.conf")
+
+    def test_external_service_is_rejected(self):
+        cfg = _config()
+        cfg["databases"]["v17"].update({"create_container": False, "host": "pg.example"})
+        r = FakeRunner()
+        with self.assertRaises(SystemExit):
+            self._run(db_service="v17", db_config="postgresql.large.conf",
+                      runner=r, config=cfg)
+        self.assertIn("externo", " ".join(t for _, t in r.messages))
+        self.assertEqual(self._read_database()["config"], "postgresql.small.conf")
 
 
 # ===========================================================================
@@ -261,9 +290,10 @@ class LauncherDbConfigTest(unittest.TestCase):
         self.assertIsNone(action.call_args.kwargs.get("db_service"))
         self.assertIsNone(action.call_args.kwargs.get("db_config"))
 
-    def test_db_config_invalid_choice_argparse_error(self):
-        with self.assertRaises(SystemExit), patch("sys.stderr"):
-            self._main("db-config", "v17", "postgresql.huge.conf")
+    def test_db_config_name_is_validated_by_the_action_not_argparse(self):
+        # Valid names depend on the files on disk, so argparse lets any through.
+        action = self._main("db-config", "v17", "postgresql.conf")
+        self.assertEqual(action.call_args.kwargs.get("db_config"), "postgresql.conf")
 
 
 class LauncherConfigDbFilterTest(unittest.TestCase):
@@ -299,9 +329,9 @@ class LauncherConfigDbFilterTest(unittest.TestCase):
         self.assertIsNone(action.call_args.kwargs.get("db_filter"))
 
     def test_no_db_filter_passes_sentinel(self):
-        from odoo_cli.core.actions.instance_config import _SENTINEL
+        from odoo_cli.core.actions.instance_config import KEEP
         action = self._main("config", "acme", "prod", "base")
-        self.assertIs(action.call_args.kwargs.get("db_filter"), _SENTINEL)
+        self.assertIs(action.call_args.kwargs.get("db_filter"), KEEP)
 
 
 if __name__ == "__main__":

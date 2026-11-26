@@ -1,14 +1,11 @@
-"""``./odoo config``: set an instance's type, profile, db_filter and db-config.
+"""``./odoo config``: set an instance's type (production/test) and profile.
 
-``./odoo config`` sets the production/test mode and the odoo_config profile.
-Optionally it also sets two extra knobs in the same run:
-
-  --db-filter REGEX   Set (or clear) overwrite_odoo_config.db_filter for the
-                      instance.  Pass an empty string to remove the filter.
-                      If omitted, the current value is kept (not asked).
-
-``./odoo db-config`` is a separate, focused command for changing the
-postgresql.*.conf of a database service defined in instances.json.databases.
+Deliberately small: an instance is either production or test, and runs on
+one of the ``odoo_configs`` profiles defined in instances.json (workers,
+memory limits and the rest live there). ``--db-filter`` optionally sets
+the instance's ``db_filter`` in the same run. Anything finer is edited in
+the JSON by hand. The Postgres side (postgresql.*.conf of a service) is
+``./odoo db-config``, see :mod:`odoo_cli.core.actions.db_config`.
 
 Production (``production: true``) blocks ``./odoo remove``, forbids
 ``dev_mode`` and makes nginx refuse ``/web/database/``; it also turns
@@ -98,12 +95,8 @@ def _validate(full_config: dict) -> None:
     _validate_config(enabled, require_instances=False)
 
 
-_SENTINEL = object()  # marks "not provided" (distinct from None / "")
-
-# Available postgresql configs shipped with docker-odoo.
-# Used by both configure_instance (--db-filter asks) and configure_db.
-_DB_CONFIGS = ["postgresql.small.conf", "postgresql.medium.conf",
-               "postgresql.large.conf", "postgresql.xlarge.conf"]
+# ``db_filter`` value meaning "not passed: keep the current one, don't ask".
+KEEP = object()
 
 
 def configure_instance(
@@ -112,13 +105,13 @@ def configure_instance(
     instance: str,
     mode: str | None = None,
     profile: str | None = None,
-    db_filter=_SENTINEL,
+    db_filter=KEEP,
 ) -> None:
     """Set ``instance`` to ``mode`` (prod/test) on ``profile``, asking for
     whatever wasn't given.
 
     ``db_filter``:
-        * ``_SENTINEL`` (default) → keep whatever is already set, don't ask.
+        * ``KEEP`` (default)      → keep whatever is already set, don't ask.
         * ``None``                → ask interactively.
         * ``""``                  → remove the db_filter from overwrite_odoo_config.
         * any string              → set that exact regex.
@@ -160,9 +153,8 @@ def configure_instance(
         return
 
     # --- db_filter resolution ---
-    if db_filter is _SENTINEL:
-        # not passed at all: keep existing, don't touch
-        resolved_filter = _SENTINEL
+    if db_filter is KEEP:
+        resolved_filter = KEEP
     elif db_filter is None:
         # asked to prompt interactively
         resolved_filter = _ask_db_filter(runner, instance, current_filter)
@@ -172,11 +164,7 @@ def configure_instance(
     preset = MODES[mode]
     overwrite = inst_conf.get("overwrite_odoo_config", {})
 
-    # Detect no changes (only when db_filter wasn't passed)
-    filter_unchanged = (
-        resolved_filter is _SENTINEL
-        or resolved_filter == current_filter
-    )
+    filter_unchanged = resolved_filter is KEEP or resolved_filter == current_filter
     if (
         mode == current_mode
         and profile == current_profile
@@ -203,7 +191,7 @@ def configure_instance(
     ow = target.setdefault("overwrite_odoo_config", {})
     ow["list_db"] = preset["list_db"]
 
-    if resolved_filter is not _SENTINEL:
+    if resolved_filter is not KEEP:
         if resolved_filter:
             ow["db_filter"] = resolved_filter
         else:
@@ -225,7 +213,7 @@ def configure_instance(
         f"\n✅ {instance} ahora es de {preset['label']} (perfil {profile}): "
         f"{preset['effect']}."
     )
-    if resolved_filter is not _SENTINEL:
+    if resolved_filter is not KEEP:
         shown = resolved_filter or "(sin filtro)"
         runner.info(f"   db_filter → {shown}")
     runner.info("→ Regenerando docker-compose.generated.yml y nginx...")
@@ -241,119 +229,17 @@ def configure_instance(
 
 
 def _ask_db_filter(runner: "Runner", instance: str, current: str) -> str:
-    """Prompt for a db_filter regex; return the entered value (may be empty)."""
-    shown_current = current or "(ninguno)"
+    """Ask for a db_filter regex. Enter keeps ``current``; ``-`` removes it."""
     runner.info(
-        f"\nFiltro de base de datos para {instance} (hoy: {shown_current}).\n"
-        f"  Ejemplos: ^mi-base$   ^release-{instance}$   (vacío = sin filtro)"
+        f"\nFiltro de base de datos de {instance} (hoy: {current or 'ninguno'}).\n"
+        f"  Ej.: ^{instance}   ·   Enter = dejarlo como está   ·   - = quitarlo"
     )
-    value = runner.prompt_text("db_filter (Enter = sin cambios)").strip()
+    value = runner.prompt_text("db_filter").strip()
     if value == "":
-        # Empty input at prompt → keep existing (return current as-is)
         return current
+    if value == "-":
+        return ""
     return value
 
 
-def configure_db(
-    runner: "Runner",
-    base_path: str,
-    db_service: str | None = None,
-    db_config: str | None = None,
-) -> None:
-    """Change the ``config`` (postgresql.*.conf) for a database service.
-
-    ``db_service`` is a key in ``instances.json.databases`` (e.g. ``v19``).
-    ``db_config`` is a filename like ``postgresql.xlarge.conf``.
-
-    Both are asked interactively when omitted.
-    """
-    from generators.config_loader import load_full_config
-    from odoo_cli.core.actions.instance_state import (
-        _regenerate_configs,
-        _write_instances_json,
-    )
-    from odoo_cli.core.actions.lifecycle import COMPOSE_FILE
-
-    full_config = load_full_config(base_path)
-    databases = full_config.get("databases", {})
-
-    if not databases:
-        runner.error("No hay servicios de base de datos definidos en instances.json.")
-        sys.exit(1)
-
-    # --- resolve db_service ---
-    if db_service is None:
-        if len(databases) == 1:
-            db_service = next(iter(databases))
-            runner.info(f"\nServicio de base de datos: {db_service}")
-        else:
-            options = [(name, name) for name in databases]
-            db_service = runner.select_one(
-                "Selecciona servicio de base de datos",
-                options,
-            )
-        if db_service is None:
-            runner.info("Cancelado.")
-            return
-
-    if db_service not in databases:
-        runner.error(
-            f"Error: servicio '{db_service}' no existe. "
-            f"Disponibles: {', '.join(databases)}"
-        )
-        sys.exit(1)
-
-    db_conf = databases[db_service]
-    current_config = db_conf.get("config", "(sin definir)")
-
-    # --- resolve db_config ---
-    if db_config is None:
-        options = [
-            (f"{name}  {'← actual' if name == current_config else ''}", name)
-            for name in _DB_CONFIGS
-        ]
-        db_config = runner.select_one(
-            f"Config de Postgres para '{db_service}' (actual: {current_config})",
-            options,
-        )
-        if db_config is None:
-            runner.info("Cancelado.")
-            return
-
-    if db_config not in _DB_CONFIGS:
-        runner.error(
-            f"Error: '{db_config}' no es válido. "
-            f"Opciones: {', '.join(_DB_CONFIGS)}"
-        )
-        sys.exit(1)
-
-    if db_config == current_config:
-        runner.info(
-            f"\nSin cambios: '{db_service}' ya usa {current_config}.\n"
-        )
-        return
-
-    updated = copy.deepcopy(full_config)
-    updated["databases"][db_service]["config"] = db_config
-
-    success, error_message = _write_instances_json(base_path, updated)
-    if not success:
-        runner.error(f"\n❌ No se pudo guardar instances.json: {error_message}")
-        sys.exit(1)
-
-    runner.info(f"\n✅ '{db_service}' ahora usa {db_config}.")
-    runner.info("→ Regenerando docker-compose.generated.yml y nginx...")
-    _regenerate_configs(updated)
-
-    db_service_name = f"db-{db_service}"
-    runner.info(
-        f"\nPara aplicarlo, recreá el contenedor de base de datos:\n"
-        f"  docker compose -f {COMPOSE_FILE} up -d --force-recreate {db_service_name}\n"
-        f"\n⚠️  Esto reinicia Postgres. Los contenedores Odoo que dependen de\n"
-        f"   '{db_service}' se reconectarán solos, pero habrá unos segundos de\n"
-        f"   indisponibilidad. Verificá con: docker compose -f {COMPOSE_FILE} ps\n"
-    )
-
-
-__all__ = ["MODES", "MODE_ALIASES", "configure_instance", "configure_db",
-           "_SENTINEL", "_DB_CONFIGS"]
+__all__ = ["KEEP", "MODES", "MODE_ALIASES", "configure_instance"]
