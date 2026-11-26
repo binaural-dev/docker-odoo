@@ -112,12 +112,14 @@ def update(
     :func:`bash_update_modules`.
     """
     if dbname.strip().lower() == "all":
-        from odoo_cli.core.instance import get_databases
+        from odoo_cli.core.instance import list_instance_databases_with_error
 
-        databases = get_databases(config, instance)
+        databases, error = list_instance_databases_with_error(config, instance)
         if not databases:
+            reason = f": {error}" if databases is None else " (no tiene ninguna)"
             runner.error(
-                "No se encontraron bases de datos para actualizar."
+                f"No se encontraron bases de datos de '{instance}' para "
+                f"actualizar{reason}"
             )
             sys.exit(1)
 

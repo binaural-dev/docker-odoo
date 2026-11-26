@@ -104,6 +104,18 @@ def has_own_db_filter(db_filter: str | None) -> bool:
     return bool(db_filter) and db_filter != "*"
 
 
+def shares_db_service(config: dict, instance: str) -> bool:
+    """Whether another instance in ``config`` uses ``instance``'s Postgres
+    service. Only then can a missing ``db_filter`` mix in somebody else's
+    databases -- a lone instance owns everything on its service."""
+    db_name = config["instances"][instance]["database"]
+    return any(
+        inst["database"] == db_name
+        for name, inst in config["instances"].items()
+        if name != instance
+    )
+
+
 def _db_filter_where(db_filter: str | None) -> str:
     """WHERE clause over ``pg_database`` for the databases of an instance:
     real databases only, narrowed by its ``db_filter`` when it has one."""
@@ -116,7 +128,9 @@ def _db_filter_where(db_filter: str | None) -> str:
     return where_clause
 
 
-def list_instance_databases(config: dict, instance: str) -> list[str] | None:
+def list_instance_databases_with_error(
+    config: dict, instance: str
+) -> tuple[list[str] | None, str]:
     """Databases of an instance, asked to its Postgres service directly.
 
     Unlike :func:`get_databases`, this does not go through the Odoo
@@ -125,8 +139,10 @@ def list_instance_databases(config: dict, instance: str) -> list[str] | None:
     databases. Uses the instance's own credentials and its ``db_filter``.
 
     An external Postgres (``create_container: false``) has no service to
-    exec into, so it falls back to :func:`get_databases`. Returns ``None``
-    when the listing itself fails, ``[]`` when there is nothing to list.
+    exec into, so it falls back to :func:`get_databases`. Returns
+    ``(databases, "")``, or ``(None, reason)`` when the listing itself
+    fails -- ``reason`` is the last line psql/docker printed, so callers can
+    say WHY instead of a bare "could not list".
     """
     from generators.config_loader import (
         get_db_host,
@@ -138,7 +154,7 @@ def list_instance_databases(config: dict, instance: str) -> list[str] | None:
     inst_conf = config["instances"][instance]
     db_conf = resolve_db_config(inst_conf, config)
     if not db_conf.get("create_container", True):
-        return get_databases(config, instance)
+        return get_databases(config, instance), ""
 
     db_user, db_password = resolve_instance_db_creds(inst_conf, db_conf)
     db_filter = resolve_instance_config(inst_conf, config).get("db_filter")
@@ -156,8 +172,15 @@ def list_instance_databases(config: dict, instance: str) -> list[str] | None:
         stdin=subprocess.DEVNULL, capture_output=True, text=True,
     )
     if result.returncode != 0:
-        return None
-    return [name.strip() for name in result.stdout.splitlines() if name.strip()]
+        lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+        return None, lines[-1] if lines else f"exit code {result.returncode}"
+    return [name.strip() for name in result.stdout.splitlines() if name.strip()], ""
+
+
+def list_instance_databases(config: dict, instance: str) -> list[str] | None:
+    """Same as :func:`list_instance_databases_with_error`, without the
+    reason: ``None`` when the listing fails, ``[]`` when there's nothing."""
+    return list_instance_databases_with_error(config, instance)[0]
 
 
 def get_databases(config: dict, instance: str) -> list[str]:
@@ -198,13 +221,6 @@ def get_databases(config: dict, instance: str) -> list[str]:
         db_filter = odoo_conf.get("db_filter")
 
         where_clause = _db_filter_where(db_filter)
-        if not has_own_db_filter(db_filter):
-            print(
-                f"\n⚠️  La instancia '{instance}' no tiene un db_filter "
-                f"especifico (o es '*') -- se listaran TODAS las bases del "
-                f"servicio de Postgres '{inst_conf['database']}', incluyendo "
-                f"las de otras instancias que lo compartan.\n"
-            )
 
         cmd = (
             f"docker compose -f {_COMPOSE_FILE} exec -T "

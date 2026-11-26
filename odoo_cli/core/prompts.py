@@ -35,8 +35,10 @@ if TYPE_CHECKING:
 from odoo_cli.core.instance import (
     get_custom_modules,
     get_custom_repos,
-    get_databases,
     get_users,
+    has_own_db_filter,
+    list_instance_databases_with_error,
+    shares_db_service,
 )
 
 
@@ -409,21 +411,53 @@ def prompt_for_bulk_instances(
 
 
 def prompt_for_database(
-    runner: "Runner", config: dict, instance: str, allow_all: bool = False
+    runner: "Runner",
+    config: dict,
+    instance: str,
+    allow_all: bool = False,
+    auto_single: bool = True,
 ) -> str:
     """Ask the user which database to act on for ``instance``.
 
-    With ``allow_all=True`` the menu also offers a special
-    ``"all"`` option that the ``update`` action uses to fan out
-    over every database.
+    The list comes from the instance's Postgres service, so it works with
+    Odoo stopped. With ``allow_all=True`` the menu also offers ``"all"``
+    (``update`` fans out over every database). With ``auto_single`` an
+    instance with exactly one database gets it without a menu -- the name
+    is still printed; destructive callers pass ``False``.
+
+    When the listing fails, the reason is shown before falling back to
+    typing the name, never swallowed.
     """
-    databases = get_databases(config, instance)
-    if not databases:
-        all_hint = " (o 'all')" if allow_all else ""
+    from generators.config_loader import resolve_instance_config
+
+    inst_conf = config["instances"][instance]
+    db_filter = resolve_instance_config(inst_conf, config).get("db_filter")
+    if not has_own_db_filter(db_filter) and shares_db_service(config, instance):
+        runner.warn(
+            f"\n⚠️  '{instance}' comparte el Postgres '{inst_conf['database']}' "
+            f"con otras instancias y no tiene db_filter: la lista incluye "
+            f"también sus bases. Definilo con: ./odoo config {instance} --db-filter"
+        )
+
+    databases, error = list_instance_databases_with_error(config, instance)
+    all_hint = " (o 'all')" if allow_all else ""
+    if databases is None:
+        runner.warn(
+            f"\n⚠️  No se pudieron listar las bases de '{instance}': {error}\n"
+            f"   Revisá que su Postgres esté levantado: ./odoo start {instance}"
+        )
         return runner.prompt_text(
-            f"\nNo se pudieron auto-detectar bases de datos. "
             f"Ingresa el nombre de la base de datos para '{instance}'{all_hint}"
         ).strip()
+    if not databases:
+        runner.info(f"\n'{instance}' todavía no tiene bases de datos.")
+        return runner.prompt_text(
+            f"Ingresa el nombre de la base de datos para '{instance}'{all_hint}"
+        ).strip()
+
+    if auto_single and len(databases) == 1:
+        runner.info(f"\nBase de datos: {databases[0]} (la única de '{instance}')")
+        return databases[0]
 
     options: list[tuple[str, str]] = []
     if allow_all:

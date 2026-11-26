@@ -369,21 +369,6 @@ def _exit_with_problems(runner: "Runner", problems: dict[str, list[str]]) -> Non
     sys.exit(1)
 
 
-def _alone_in_service(config: dict, instance: str) -> bool:
-    """Whether no other enabled instance uses ``instance``'s Postgres service.
-
-    Same grouping as ``_validate_cron_dbfilter_isolation``: a lone instance
-    has no neighbour whose cron could reach its databases, so a dedicated
-    role isolates nothing.
-    """
-    db_name = config["instances"][instance]["database"]
-    return not any(
-        inst["database"] == db_name
-        for name, inst in config["instances"].items()
-        if name != instance
-    )
-
-
 def _resolve_provision_target(runner: "Runner", config: dict, instance: str) -> dict:
     """Validate and resolve everything :func:`provision_role_sql` and the
     bootstrap helpers need for one instance. Exits on bad config."""
@@ -605,7 +590,9 @@ def provision_instances(
         sys.exit(1)
 
     if not force:
-        alone = [name for name in instances if _alone_in_service(config, name)]
+        from odoo_cli.core.instance import shares_db_service
+
+        alone = [name for name in instances if not shares_db_service(config, name)]
         for name in alone:
             runner.info(
                 f"\nℹ '{name}' es la unica instancia habilitada del servicio "
@@ -1069,7 +1056,8 @@ def psql_remove_database(
                 [(db, db) for db in databases],
             )
         else:
-            single = prompt_for_database(runner, config, instance)
+            # Never auto-picked: this database is about to be dropped.
+            single = prompt_for_database(runner, config, instance, auto_single=False)
             target_dbs = [single] if single else []
     if not target_dbs:
         runner.info("No se seleccionó ninguna base de datos.")
