@@ -345,3 +345,7 @@ de versión de manifest son **scripts independientes** en `scripts/`, no
 subcomandos de `./odoo` — cada uno toma el nombre de instancia como primer
 argumento y resuelve el resto desde `instances.json`. Referencia completa
 en [`scripts/README.md`](../scripts/README.md).
+
+Para medir la cobertura de staging y release de varios repos de un cliente
+de una vez (`./odoo sync` + `./odoo coverage`), ver
+[`cobertura-staging-release.md`](cobertura-staging-release.md).
