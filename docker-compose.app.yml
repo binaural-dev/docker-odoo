@@ -19,8 +19,9 @@ services:
       - ./src:/home/odoo/src
       - ./.resources/.coveragerc:/home/odoo/.coveragerc
       - odoo_data:/home/odoo/data
-      - py3:/usr/local/lib/
-      - py:/usr/lib/
+      # Sin volumenes sobre /usr/lib ni /usr/local/lib: ahi viven Odoo y las
+      # librerias de Python, y un volumen con nombre solo se llena desde la
+      # imagen la primera vez, asi que congelaba el codigo de cada build nuevo.
     environment:
       CUSTOM_CONFIG: |-
         [options]
@@ -80,8 +81,6 @@ services:
 volumes:
   odoo-web:
   odoo_data:
-  py3:
-  py:
 
 networks:
   binaural:
