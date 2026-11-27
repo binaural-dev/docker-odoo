@@ -80,3 +80,12 @@ RUN python3 -m pip install --no-cache-dir ebaysdk==2.1.5 pdf417gen==0.7.1 ruff==
 
 ADD --chown=${USERNAME} https://raw.githubusercontent.com/odoo/odoo/18.0/requirements.txt /tmp/requirements.txt
 RUN python3 -m pip install --no-cache-dir -r /tmp/requirements.txt
+
+# Dependencias de addons de terceros que antes solo existian en los volumenes
+# sobre /usr/local/lib (py3) y /usr/lib (py). Sin esos volumenes tienen que
+# venir en la imagen: mcp_server (Authlib>=1.6.12,<1.7.0) y
+# tk_security_master (httpagentparser). Van en una capa propia, despues de
+# requirements.txt, para que un build con cache no vuelva a bajar Odoo.
+RUN python3 -m pip install --no-cache-dir \
+    Authlib==1.6.12 \
+    httpagentparser==1.9.5
